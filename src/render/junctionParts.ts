@@ -1,6 +1,6 @@
-import { ShapeUtils, Vector2, type BufferGeometry } from "three";
-import type { Vec2 } from "../core/geometry";
-import { convexGeometry } from "./flat";
+import type { BufferGeometry } from "three";
+import { segmentCrossing, type Vec2 } from "../core/geometry";
+import { convexGeometry, fill } from "./flat";
 
 /** One road as it leaves a junction. */
 export interface JunctionArm {
@@ -156,14 +156,6 @@ function fillet(
   };
 }
 
-/** Triangles exactly covering the polygon `outline` (closed back to its start). */
-function fill(outline: Polyline): Vec2[][] {
-  const points = outline.filter((p, i) => i === 0 || Math.hypot(p.x - outline[i - 1].x, p.y - outline[i - 1].y) > 1e-3);
-  if (points.length < 3) return [];
-  const contour = points.map((p) => new Vector2(p.x, p.y));
-  return ShapeUtils.triangulateShape(contour, []).map(([i, j, k]) => [points[i], points[j], points[k]]);
-}
-
 /** Distance from the junction (along the road) of `point`, which lies on traced segment `index`. */
 function alongAt(edge: Polyline, index: number, point: Vec2): number {
   // Traced points sit EDGE_STEP apart along the road (the last leg may be shorter).
@@ -179,7 +171,10 @@ function crossPolylines(p: Polyline, q: Polyline): { point: Vec2; i: number; j: 
   for (let i = 1; i < p.length; i++) {
     for (let j = 1; j < q.length; j++) {
       const hit = segmentCrossing(p[i - 1], p[i], q[j - 1], q[j]);
-      if (hit) return { point: hit, i: i - 1, j: j - 1 };
+      if (hit) {
+        const [a, b] = [p[i - 1], p[i]];
+        return { point: { x: a.x + (b.x - a.x) * hit.u, y: a.y + (b.y - a.y) * hit.u }, i: i - 1, j: j - 1 };
+      }
     }
   }
   return null;
@@ -214,16 +209,6 @@ function direction(line: Polyline): Vec2 {
   const b = line[Math.min(1, line.length - 1)];
   const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
   return { x: (b.x - a.x) / len, y: (b.y - a.y) / len };
-}
-
-function segmentCrossing(p0: Vec2, p1: Vec2, q0: Vec2, q1: Vec2): Vec2 | null {
-  const rx = p1.x - p0.x, ry = p1.y - p0.y;
-  const sx = q1.x - q0.x, sy = q1.y - q0.y;
-  const denominator = rx * sy - ry * sx;
-  if (Math.abs(denominator) < 1e-12) return null;
-  const u = ((q0.x - p0.x) * sy - (q0.y - p0.y) * sx) / denominator;
-  const v = ((q0.x - p0.x) * ry - (q0.y - p0.y) * rx) / denominator;
-  return u >= 0 && u <= 1 && v >= 0 && v <= 1 ? { x: p0.x + rx * u, y: p0.y + ry * u } : null;
 }
 
 /** Intersection of the lines p + s·u and q + t·v (null when parallel). */

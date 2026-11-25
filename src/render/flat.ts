@@ -1,4 +1,4 @@
-import { BufferGeometry, DoubleSide, Float32BufferAttribute, MeshBasicMaterial } from "three";
+import { BufferGeometry, DoubleSide, Float32BufferAttribute, MeshBasicMaterial, ShapeUtils, Vector2 } from "three";
 import type { Vec2 } from "../core/geometry";
 
 /**
@@ -25,6 +25,18 @@ export function flatMaterial(color: number, opacity = 1): MeshBasicMaterial {
     depthWrite: false,
     side: DoubleSide,
   });
+}
+
+/**
+ * Triangles exactly covering the polygon `outline` (closed back to its start), whatever its shape:
+ * kerbs along curved roads can fold back as seen from any single point, so a fan won't do.
+ */
+export function fill(outline: Vec2[]): Vec2[][] {
+  const points = outline.filter((p, i) => i === 0 || Math.hypot(p.x - outline[i - 1].x, p.y - outline[i - 1].y) > 1e-3);
+  while (points.length > 1 && Math.hypot(points[0].x - points[points.length - 1].x, points[0].y - points[points.length - 1].y) <= 1e-3) points.pop();
+  if (points.length < 3) return [];
+  const contour = points.map((p) => new Vector2(p.x, p.y));
+  return ShapeUtils.triangulateShape(contour, []).map(([i, j, k]) => [points[i], points[j], points[k]]);
 }
 
 /** A strip of `width` from `a` to `b` with round caps, lying on the ground. A circle when a = b. */

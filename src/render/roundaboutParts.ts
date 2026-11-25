@@ -1,8 +1,8 @@
-import { ShapeUtils, Vector2, type BufferGeometry } from "three";
-import type { Vec2 } from "../core/geometry";
+import type { BufferGeometry } from "three";
+import { distance, segmentCrossing, type Vec2 } from "../core/geometry";
 import type { RoundaboutShape } from "../core/junction";
 import { LANE_WIDTH, MEDIAN_WIDTH } from "../core/roadSpec";
-import { convexGeometry, FlatLayer } from "./flat";
+import { convexGeometry, fill, FlatLayer } from "./flat";
 import type { JunctionArm } from "./junctionParts";
 
 const RING_SEGMENTS = 48;
@@ -345,7 +345,7 @@ function meet(a: Corner, b: Corner): [Corner, Corner] {
     const p0 = a.edge(s);
     const p1 = a.edge(s + STEP);
     for (let t = b.along; t < b.along + span; t += STEP) {
-      const hit = crossing(p0, p1, b.edge(t), b.edge(t + STEP));
+      const hit = segmentCrossing(p0, p1, b.edge(t), b.edge(t + STEP));
       if (hit) {
         const sa = s + hit.u * STEP;
         const sb = t + hit.v * STEP;
@@ -358,18 +358,6 @@ function meet(a: Corner, b: Corner): [Corner, Corner] {
     }
   }
   return [a, b];
-}
-
-/** Where segments p0–p1 and q0–q1 cross, as fractions along each; null if they don't. */
-function crossing(p0: Vec2, p1: Vec2, q0: Vec2, q1: Vec2): { u: number; v: number } | null {
-  const r = sub(p1, p0);
-  const d = sub(q1, q0);
-  const den = r.x * d.y - r.y * d.x;
-  if (Math.abs(den) < 1e-9) return null;
-  const w = sub(q0, p0);
-  const u = (w.x * d.y - w.y * d.x) / den;
-  const v = (w.x * r.y - w.y * r.x) / den;
-  return u >= 0 && u <= 1 && v >= 0 && v <= 1 ? { u, v } : null;
 }
 
 /** Where a corner's kerb leaves its edge, and the edge's direction there (away from the ring). */
@@ -410,18 +398,6 @@ function flare(centre: Vec2, ring: number, c: Corner, gap: number): Vec2[][] {
   const kerb = cubic(t1, sub(t1, scale(d1, c.reach * 0.55)), sub(t2, scale(d2, ring * sweep * 0.55)), t2);
   // Out along the edge to t1, round the kerb to t2; closed back to the corner inside the ring.
   return fill([...along(c).slice(0, -1), ...kerb]);
-}
-
-/**
- * Triangles exactly covering the polygon `outline` (closed back to its start), whatever its shape:
- * curved roads can make it fold back as seen from any single point, so a fan won't do.
- */
-function fill(outline: Vec2[]): Vec2[][] {
-  const points = outline.filter((p, i) => i === 0 || distance(p, outline[i - 1]) > 1e-3);
-  while (points.length > 1 && distance(points[0], points[points.length - 1]) <= 1e-3) points.pop();
-  if (points.length < 3) return [];
-  const contour = points.map((p) => new Vector2(p.x, p.y));
-  return ShapeUtils.triangulateShape(contour, []).map(([i, j, k]) => [points[i], points[j], points[k]]);
 }
 
 /** Points along a corner's edge, from the ring out to where its kerb starts. */
@@ -467,10 +443,6 @@ function dashedCircle(centre: Vec2, radius: number): Vec2[][] {
     quads.push([around(a0, inner), around(a1, inner), around(a1, outer), around(a0, outer)]);
   }
   return quads;
-}
-
-function distance(p: Vec2, q: Vec2): number {
-  return Math.hypot(p.x - q.x, p.y - q.y);
 }
 
 function sub(p: Vec2, q: Vec2): Vec2 {

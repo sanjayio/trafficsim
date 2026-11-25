@@ -1,5 +1,5 @@
 import { Group, Mesh, type MeshBasicMaterial } from "three";
-import { kerbRadius, MAX_CORNER_RADIUS, roundaboutShape, signalLights } from "../core/junction";
+import { effectiveControl, kerbRadius, MAX_CORNER_RADIUS, roundaboutShape, signalLights } from "../core/junction";
 import type { GraphEvent, NodeId, RoadGraph, RoadSegment, SegmentId } from "../core/roadGraph";
 import { carriagewayWidth, FOOTPATH_WIDTH, roadWidth } from "../core/roadSpec";
 import { flatMaterial } from "./flat";
@@ -133,8 +133,7 @@ export class RoadLayer extends Group {
     const meeting = this.graph.segmentsAt(nodeId);
     if (meeting.length < 3) return;
 
-    const settings = this.graph.junction(nodeId);
-    const control = settings.roundabout ? "yield" : settings.control;
+    const control = effectiveControl(this.graph.junction(nodeId));
     if (control === "none") return;
 
     const group = new Group();
@@ -253,8 +252,7 @@ export class RoadLayer extends Group {
     const corners = this.cornerReach.get(nodeId)?.get(segment.id) ?? 0;
     if (corners > 0) inset = Math.max(inset, corners + JUNCTION_MARGIN);
 
-    const settings = this.graph.junction(nodeId);
-    const control = settings.roundabout ? "yield" : settings.control;
+    const control = effectiveControl(this.graph.junction(nodeId));
     const entry = control === "none" ? "none" : control === "yield" ? "yield" : "stop";
     return { inset, entry };
   }

@@ -88,6 +88,8 @@ export class RoadGraph {
   private nextId = 1;
   /** Sampled centre line per segment, built when the segment is added. */
   private sampled = new Map<SegmentId, SampledCurve>();
+  /** Segments meeting at each node, so finding a junction's roads doesn't scan the whole map. */
+  private adjacent = new Map<NodeId, Set<SegmentId>>();
   private listeners = new Set<(e: GraphEvent) => void>();
 
   subscribe(listener: (e: GraphEvent) => void): () => void {
@@ -276,6 +278,7 @@ export class RoadGraph {
     // Replace the segment without pruning its end nodes, which the halves keep using.
     this.segments.delete(segment.id);
     this.sampled.delete(segment.id);
+    this.unlink(segment);
     this.emit({ type: "segment-removed", segment });
     this.insertSegment(segment.a, mid.id, first, segment.spec);
     this.insertSegment(mid.id, segment.b, second, segment.spec);
@@ -286,8 +289,25 @@ export class RoadGraph {
     const segment: RoadSegment = { id: this.nextId++, a, b, spec };
     if (!isStraight(curve)) segment.controls = [{ ...curve.c1 }, { ...curve.c2 }];
     this.segments.set(segment.id, segment);
+    this.link(segment);
     this.emit({ type: "segment-added", segment });
     return segment;
+  }
+
+  private link(segment: RoadSegment): void {
+    for (const nodeId of [segment.a, segment.b]) {
+      let ids = this.adjacent.get(nodeId);
+      if (!ids) this.adjacent.set(nodeId, (ids = new Set()));
+      ids.add(segment.id);
+    }
+  }
+
+  private unlink(segment: RoadSegment): void {
+    for (const nodeId of [segment.a, segment.b]) {
+      const ids = this.adjacent.get(nodeId);
+      ids?.delete(segment.id);
+      if (ids?.size === 0) this.adjacent.delete(nodeId);
+    }
   }
 
   /** Removes a segment and any nodes it leaves unconnected. */
@@ -296,11 +316,12 @@ export class RoadGraph {
     if (!segment) return;
     this.segments.delete(id);
     this.sampled.delete(id);
+    this.unlink(segment);
     for (const nodeId of [segment.a, segment.b]) {
-      if (!this.isConnected(nodeId)) {
-        this.nodes.delete(nodeId);
-        this.junctionSettings.delete(nodeId);
-      }
+      const left = this.segmentsAt(nodeId).length;
+      // Below three roads it's no junction: its settings would linger, unreachable from the panel.
+      if (left < 3) this.junctionSettings.delete(nodeId);
+      if (left === 0) this.nodes.delete(nodeId);
     }
     this.emit({ type: "segment-removed", segment });
   }
@@ -376,9 +397,18 @@ export class RoadGraph {
     if (map.drivingSide !== undefined && map.drivingSide !== "right" && map.drivingSide !== "left") {
       throw new Error("Invalid driving side in map file");
     }
-    const nodes = new Map(map.nodes.map((n) => [n.id, { id: n.id, x: n.x, y: n.y }]));
+    const nodes = new Map<NodeId, RoadNode>();
+    for (const n of map.nodes) {
+      if (!Number.isSafeInteger(n?.id) || nodes.has(n.id) || !Number.isFinite(n.x) || !Number.isFinite(n.y)) {
+        throw new Error(`Invalid or duplicate node ${n?.id} in map file`);
+      }
+      nodes.set(n.id, { id: n.id, x: n.x, y: n.y });
+    }
+    const segmentIds = new Set<SegmentId>();
     const segments = map.segments.map((s): RoadSegment => {
-      if (!nodes.has(s.a) || !nodes.has(s.b)) {
+      if (!Number.isSafeInteger(s?.id) || segmentIds.has(s.id)) throw new Error(`Invalid or duplicate road ${s?.id} in map file`);
+      segmentIds.add(s.id);
+      if (!nodes.has(s.a) || !nodes.has(s.b) || s.a === s.b) {
         throw new Error(`Segment ${s.id} references a missing node`);
       }
       const spec = map.version === 1 ? { ...DEFAULT_ROAD_SPEC } : parseRoadSpec(s.spec);
@@ -398,8 +428,12 @@ export class RoadGraph {
     this.nodes.clear();
     this.segments.clear();
     this.sampled.clear();
+    this.adjacent.clear();
     for (const n of nodes.values()) this.nodes.set(n.id, n);
-    for (const s of segments) this.segments.set(s.id, s);
+    for (const s of segments) {
+      this.segments.set(s.id, s);
+      this.link(s);
+    }
     const ids = [...map.nodes.map((n) => n.id), ...map.segments.map((s) => s.id)];
     this.nextId = Math.max(0, ...ids) + 1;
     this.emit({ type: "reset" });
@@ -440,14 +474,7 @@ export class RoadGraph {
 
   /** Segments that start or end at a node. */
   segmentsAt(nodeId: NodeId): RoadSegment[] {
-    return [...this.segments.values()].filter((s) => s.a === nodeId || s.b === nodeId);
-  }
-
-  private isConnected(nodeId: NodeId): boolean {
-    for (const s of this.segments.values()) {
-      if (s.a === nodeId || s.b === nodeId) return true;
-    }
-    return false;
+    return [...(this.adjacent.get(nodeId) ?? [])].map((id) => this.segments.get(id)!);
   }
 
   private emit(e: GraphEvent): void {

@@ -32,6 +32,11 @@ export function kerbRadius(setting: number): number {
 
 export const DEFAULT_JUNCTION: JunctionSettings = { control: "stop", roundabout: false, cornerRadius: 16 };
 
+/** How entering traffic is actually controlled: roundabouts always give way. */
+export function effectiveControl(s: JunctionSettings): JunctionControl {
+  return s.roundabout ? "yield" : s.control;
+}
+
 const CONTROLS: JunctionControl[] = ["none", "yield", "stop", "signals"];
 
 /** Validates junction settings read from a saved map (missing fields take defaults). */

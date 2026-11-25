@@ -35,6 +35,17 @@ export function pointInConvexPolygon(p: Vec2, polygon: Vec2[]): boolean {
   return true;
 }
 
+/** Where segments p0–p1 and q0–q1 cross, as fractions along each; null if they don't. */
+export function segmentCrossing(p0: Vec2, p1: Vec2, q0: Vec2, q1: Vec2): { u: number; v: number } | null {
+  const rx = p1.x - p0.x, ry = p1.y - p0.y;
+  const sx = q1.x - q0.x, sy = q1.y - q0.y;
+  const den = rx * sy - ry * sx;
+  if (Math.abs(den) < 1e-12) return null;
+  const u = ((q0.x - p0.x) * sy - (q0.y - p0.y) * sx) / den;
+  const v = ((q0.x - p0.x) * ry - (q0.y - p0.y) * rx) / den;
+  return u >= 0 && u <= 1 && v >= 0 && v <= 1 ? { u, v } : null;
+}
+
 /** Whether segments p0–p1 and q0–q1 touch or cross. */
 export function segmentsIntersect(p0: Vec2, p1: Vec2, q0: Vec2, q1: Vec2): boolean {
   const orient = (a: Vec2, b: Vec2, c: Vec2) => Math.sign((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
