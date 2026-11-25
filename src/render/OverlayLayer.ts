@@ -1,0 +1,102 @@
+import { Group, Mesh, type BufferGeometry, type MeshBasicMaterial } from "three";
+import { SampledCurve, type Curve } from "../core/curve";
+import type { Vec2 } from "../core/geometry";
+import type { RoadSpec } from "../core/roadSpec";
+import type { Overlay } from "../tools/Tool";
+import { capsuleGeometry, convexGeometry, FlatLayer, flatMaterial, stripOutline } from "./flat";
+import { palette } from "./palette";
+import { buildRoadParts, ROAD_PART_STYLE, surface, type RoadPart } from "./roadParts";
+
+const DOT_RADIUS = 4;
+const GUIDE_WIDTH = 1.5;
+/** Snapping guideline style, in screen pixels. */
+const GUIDE_DOT = 4;
+const GUIDE_GAP = 5;
+const GUIDE_LINE_PX = 1.75;
+const GUIDE_CROSS_PX = 7;
+const PREVIEW_OPACITY = 0.6;
+
+/** three.js implementation of the tools' overlay. Contents are small and rebuilt only on input. */
+export class OverlayLayer extends Group implements Overlay {
+  /** Translucent copies of the road materials, shared by every preview. */
+  private previewMaterials = Object.fromEntries(
+    Object.entries(ROAD_PART_STYLE).map(([part, style]) => [part, flatMaterial(style.color, PREVIEW_OPACITY)]),
+  ) as Record<RoadPart, MeshBasicMaterial>;
+  /** Used for every part of a preview that can't be built. */
+  private invalidMaterial = flatMaterial(palette.danger, 0.5);
+
+  /** Removes all children like `Object3D.clear`, and frees their GPU resources. */
+  override clear(): this {
+    for (const child of [...this.children]) {
+      const mesh = child as Mesh;
+      this.remove(mesh);
+      mesh.geometry.dispose();
+      if (mesh.userData.ownsMaterial) (mesh.material as MeshBasicMaterial).dispose();
+    }
+    return this;
+  }
+
+  roadPreview(curve: Curve, spec: RoadSpec, valid: boolean): void {
+    for (const { part, geometry } of buildRoadParts(new SampledCurve(curve), spec)) {
+      const material = valid ? this.previewMaterials[part] : this.invalidMaterial;
+      // Keep the parts' relative order (footpath < asphalt < markings) above everything else.
+      this.addMesh(geometry, material, FlatLayer.overlay + ROAD_PART_STYLE[part].layer, false);
+    }
+  }
+
+  highlight(curve: Curve, width: number, color: number, alpha: number): void {
+    const geometry = convexGeometry(surface(new SampledCurve(curve), width));
+    this.addMesh(geometry, flatMaterial(color, alpha), FlatLayer.overlay, true);
+  }
+
+  line(a: Vec2, b: Vec2, color: number): void {
+    this.addMesh(convexGeometry([stripOutline(a, b, GUIDE_WIDTH)]), flatMaterial(color, 0.8), FlatLayer.overlay + 8, true);
+  }
+
+  guide(origin: Vec2, to: Vec2, color: number, pixel: number): void {
+    const len = Math.hypot(to.x - origin.x, to.y - origin.y);
+    if (len === 0) return;
+    const ux = (to.x - origin.x) / len;
+    const uy = (to.y - origin.y) / len;
+    const at = (d: number): Vec2 => ({ x: origin.x + ux * d, y: origin.y + uy * d });
+    const width = GUIDE_LINE_PX * pixel;
+
+    // Dots start clear of the ✕ so the two don't merge.
+    const dashes: Vec2[][] = [];
+    const step = (GUIDE_DOT + GUIDE_GAP) * pixel;
+    for (let d = GUIDE_CROSS_PX * pixel; d < len; d += step) {
+      dashes.push(stripOutline(at(d), at(Math.min(d + GUIDE_DOT * pixel, len)), width));
+    }
+    // ✕ at the origin, rotated 45° to the line.
+    const arm = GUIDE_CROSS_PX * pixel;
+    const d1 = { x: (ux - uy) * Math.SQRT1_2 * arm, y: (uy + ux) * Math.SQRT1_2 * arm };
+    const d2 = { x: (ux + uy) * Math.SQRT1_2 * arm, y: (uy - ux) * Math.SQRT1_2 * arm };
+    dashes.push(
+      stripOutline({ x: origin.x - d1.x, y: origin.y - d1.y }, { x: origin.x + d1.x, y: origin.y + d1.y }, width),
+      stripOutline({ x: origin.x - d2.x, y: origin.y - d2.y }, { x: origin.x + d2.x, y: origin.y + d2.y }, width),
+    );
+    this.addMesh(convexGeometry(dashes), flatMaterial(color, 0.9), FlatLayer.overlay + 8, true);
+  }
+
+  area(points: Vec2[], color: number, alpha: number): void {
+    this.addMesh(convexGeometry([points]), flatMaterial(color, alpha), FlatLayer.overlay, true);
+    for (let i = 0; i < points.length; i++) this.line(points[i], points[(i + 1) % points.length], color);
+  }
+
+  dot(p: Vec2, color: number): void {
+    this.addMesh(capsuleGeometry(p, p, DOT_RADIUS * 2), flatMaterial(color), FlatLayer.overlay + 9, true);
+  }
+
+  dispose(): void {
+    this.clear();
+    for (const material of Object.values(this.previewMaterials)) material.dispose();
+    this.invalidMaterial.dispose();
+  }
+
+  private addMesh(geometry: BufferGeometry, material: MeshBasicMaterial, order: number, ownsMaterial: boolean): void {
+    const mesh = new Mesh(geometry, material);
+    mesh.renderOrder = order;
+    mesh.userData.ownsMaterial = ownsMaterial;
+    this.add(mesh);
+  }
+}

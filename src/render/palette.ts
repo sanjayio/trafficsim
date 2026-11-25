@@ -1,0 +1,14 @@
+export const palette = {
+  ground: 0x1d2621,
+  gridMinor: 0x26322b,
+  gridMajor: 0x314137,
+  asphalt: 0x3d4148,
+  footpath: 0x6f747b,
+  median: 0x4f5d45,
+  centerLine: 0xd9b44a,
+  laneLine: 0xd8dade,
+  preview: 0x7aa2f7,
+  guide: 0x67e8f9,
+  junction: 0xfbbf24,
+  danger: 0xe5484d,
+} as const;
