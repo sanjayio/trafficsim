@@ -167,7 +167,7 @@ export function LaneEditBar({ engine }: { engine: Engine | null }) {
     <div
       role="dialog"
       aria-label="Lane connector"
-      className="absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-3 rounded-xl border border-white/10 bg-neutral-900/95 py-1.5 pl-3 pr-1.5 shadow-xl shadow-black/40 backdrop-blur"
+      className="absolute left-1/2 top-16 flex -translate-x-1/2 items-center gap-3 rounded-xl border border-white/10 bg-neutral-900/95 py-1.5 pl-3 pr-1.5 shadow-xl shadow-black/40 backdrop-blur"
     >
       <span className="text-neutral-300">
         <span className="font-semibold text-white">Lane connector:</span> click an amber lane end, then green lane starts to

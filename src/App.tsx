@@ -5,6 +5,7 @@ import { CursorHint } from "./ui/CursorHint";
 import { GameCanvas } from "./ui/GameCanvas";
 import { JunctionOverlay, LaneEditBar } from "./ui/JunctionOverlay";
 import { MainMenu } from "./ui/MainMenu";
+import { Radio } from "./ui/Radio";
 import { SettingsDialog } from "./ui/SettingsDialog";
 import { StatusBar } from "./ui/StatusBar";
 import { Toolbar } from "./ui/Toolbar";
@@ -20,6 +21,7 @@ export default function App() {
       <CursorHint />
       <JunctionOverlay engine={engine} />
       <LaneEditBar engine={engine} />
+      <Radio />
       <Toolbar />
       <MainMenu
         engine={engine}

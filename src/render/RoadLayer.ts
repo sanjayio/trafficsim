@@ -1,12 +1,11 @@
-import { BoxGeometry, Group, Mesh, MeshBasicMaterial, type BufferGeometry } from "three";
+import { Group, Mesh, type BufferGeometry, type MeshBasicMaterial } from "three";
 import { effectiveControl, kerbRadius, signalApproaches, MAX_CORNER_RADIUS, roundaboutShape, signalLights } from "../core/junction";
 import type { GraphEvent, NodeId, RoadGraph, RoadSegment, SegmentId } from "../core/roadGraph";
 import { connectionsAt, hasLaneConnector, turnAt, type Turn } from "../core/lanes";
 import { carriagewayWidth, FOOTPATH_WIDTH, hasMedian, LANE_WIDTH, MEDIAN_WIDTH, roadWidth, type RoadSpec } from "../core/roadSpec";
 import { bridge } from "../core/track";
-import { LOT_DEPTH, LOT_LENGTH } from "../core/terminal";
+import { BuildingKit } from "./buildings";
 import { convexGeometry, flatMaterial } from "./flat";
-import { palette } from "./palette";
 import { FurnitureKit, type FurnitureSpot } from "./furniture";
 import { buildJunctionParts, type JunctionArm } from "./junctionParts";
 import { buildRoundaboutParts } from "./roundaboutParts";
@@ -18,13 +17,8 @@ const STRAIGHT_ENOUGH = (10 * Math.PI) / 180;
 const JUNCTION_MARGIN = 2;
 /** Roads meeting at less than ~20° to each other (sin < this) carry on rather than cross. */
 const MIN_CLEARANCE_SINE = 0.35;
-/** Source and sink buildings: height, wall shades, and the width of the driveway to the road. */
-const BUILDING_HEIGHT = 14;
-const WALL_LIGHT = 0xc9ccd1;
-const WALL_DARK = 0x9ea3ab;
+/** Width of a source's or sink's driveway. */
 const DRIVEWAY_WIDTH = 14;
-/** Buildings draw after the flat road layers, with normal depth testing. */
-const BUILDING_ORDER = 20;
 /** Signs stand this far outside a road without a footpath (on a footpath, they stand mid-path). */
 const SIGN_SETBACK = 3;
 
@@ -54,15 +48,9 @@ export class RoadLayer extends Group {
   private roundaboutSigns = new Map<NodeId, Map<SegmentId, FurnitureSpot>>();
   /** Per roundabout approach: where the road's own markings start, and whether it draws the give-way. */
   private roundaboutApproaches = new Map<NodeId, Map<SegmentId, { inset: number; giveWay: boolean }>>();
-  /** Source and sink buildings beside road ends, with their driveways. */
-  private markers = new Map<NodeId, Mesh[]>();
-  private buildingGeometry = new BoxGeometry(LOT_LENGTH, BUILDING_HEIGHT, LOT_DEPTH);
-  private markerMaterials = {
-    // Box faces in order +x, -x, +y, -y, +z, -z: the two pairs of walls in different shades, so the box reads as solid.
-    source: [WALL_LIGHT, WALL_LIGHT, palette.source, WALL_DARK, WALL_DARK, WALL_DARK].map((c) => new MeshBasicMaterial({ color: c })),
-    sink: [WALL_LIGHT, WALL_LIGHT, palette.sink, WALL_DARK, WALL_DARK, WALL_DARK].map((c) => new MeshBasicMaterial({ color: c })),
-    arrow: flatMaterial(0xffffff),
-  };
+  /** Source and sink buildings beside their roads, with their driveways. */
+  private markers = new Map<NodeId, { driveway: Mesh; building: Group }>();
+  private buildings = new BuildingKit();
   private unsubscribe: () => void;
 
   constructor(private graph: RoadGraph) {
@@ -122,51 +110,31 @@ export class RoadLayer extends Group {
    * with a driveway to the road and a roof arrow showing whether cars come out or go in.
    */
   private rebuildMarker(nodeId: NodeId): void {
-    for (const mesh of this.markers.get(nodeId) ?? []) {
-      this.remove(mesh);
-      if (mesh.geometry !== this.buildingGeometry) mesh.geometry.dispose();
+    const old = this.markers.get(nodeId);
+    if (old) {
+      this.remove(old.driveway, old.building);
+      old.driveway.geometry.dispose();
     }
     this.markers.delete(nodeId);
-    const terminal = this.graph.terminal(nodeId);
     const lot = this.graph.terminalLot(nodeId);
     const [segment] = this.graph.segmentsAt(nodeId);
-    if (!terminal || !lot || !segment) return;
-    const { centre, along, out, front } = lot;
-    const at = (a: number, o: number) => ({ x: centre.x + along.x * a + out.x * o, y: centre.y + along.y * a + out.y * o });
-
-    const building = new Mesh(this.buildingGeometry, this.markerMaterials[terminal.kind]);
-    building.position.set(centre.x, BUILDING_HEIGHT / 2, centre.y);
-    building.rotation.y = -Math.atan2(along.y, along.x);
-    building.renderOrder = BUILDING_ORDER;
-
-    // From the carriageway's edge to the building's front, across any footpath.
+    if (!lot || !segment) return;
+    const { door, along, out, front } = lot;
+    // At the door (where cars drive in and out, not always level with the building's middle),
+    // from the building's front to the carriageway's edge, across any footpath.
+    const at = (a: number, o: number) => ({ x: door.x + along.x * a - out.x * o, y: door.y + along.y * a - out.y * o });
     const toFront = front - carriagewayWidth(segment.spec) / 2;
     const half = DRIVEWAY_WIDTH / 2;
-    const back = -LOT_DEPTH / 2;
     const driveway = new Mesh(
-      convexGeometry([[at(-half, back), at(half, back), at(half, back - toFront), at(-half, back - toFront)]]),
+      convexGeometry([[at(-half, 0), at(half, 0), at(half, toFront), at(-half, toFront)]]),
       this.materials.asphalt,
     );
     driveway.renderOrder = ROAD_PART_STYLE.asphalt.layer;
-
-    // On the roof: towards the road for a source (cars come out), away from it for a sink.
-    const d = terminal.kind === "source" ? -1 : 1;
-    const r = LOT_DEPTH * 0.35;
-    const p = (k: number, side: number) => at(side * r, d * k * r);
-    const arrow = new Mesh(
-      convexGeometry([
-        [p(1, 0), p(0, 0.75), p(0, -0.75)],
-        [p(0, 0.28), p(-1, 0.28), p(-1, -0.28), p(0, -0.28)],
-      ]),
-      this.markerMaterials.arrow,
-    );
-    arrow.position.y = BUILDING_HEIGHT + 0.05;
-    arrow.renderOrder = BUILDING_ORDER + 1;
-
-    const meshes = [driveway, building, arrow];
-    this.add(...meshes);
-    this.markers.set(nodeId, meshes);
+    const building = this.buildings.model(lot);
+    this.add(driveway, building);
+    this.markers.set(nodeId, { driveway, building });
   }
+
 
   /** Switches every junction's signals to the lights for simulation time `time`. */
   updateSignals(time: number): void {
@@ -450,13 +418,8 @@ export class RoadLayer extends Group {
     this.furniture.clear();
     this.signals.clear();
     this.kit.dispose();
-    for (const meshes of this.markers.values()) {
-      for (const mesh of meshes) if (mesh.geometry !== this.buildingGeometry) mesh.geometry.dispose();
-    }
-    this.buildingGeometry.dispose();
-    for (const material of [...this.markerMaterials.source, ...this.markerMaterials.sink, this.markerMaterials.arrow]) {
-      material.dispose();
-    }
+    for (const { driveway } of this.markers.values()) driveway.geometry.dispose();
+    this.buildings.dispose();
     for (const material of Object.values(this.materials)) material.dispose();
   }
 }

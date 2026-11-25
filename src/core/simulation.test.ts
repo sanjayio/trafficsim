@@ -5,7 +5,7 @@ import { RoadGraph, type NodeId } from "./roadGraph";
 import { findRoute } from "./routing";
 import { DEFAULT_ROAD_SPEC, LANE_WIDTH, type RoadSpec } from "./roadSpec";
 import { CAR_LENGTH, CAR_WIDTH, SIM_DT, Simulation, type Car } from "./simulation";
-import { DEFAULT_SOURCE, SINK } from "./terminal";
+import { BUILDING_SIZE, DEFAULT_SOURCE, newTerminal, parseTerminal, SINK } from "./terminal";
 import { lanesInnerToKerb } from "./lanes";
 import { TrackBuilder } from "./track";
 
@@ -380,16 +380,11 @@ describe("sources and sinks along a road", () => {
       }
     });
     expect([...headings].sort()).toEqual(["east", "west"]);
-    // Not too close to a junction: cars would join the road past its stop line.
-    road(graph, 500, -300, 500, 300, spec);
-    expect(graph.nearJunction({ x: 470, y: 0 })).toBe(true);
-    expect(graph.nodeOnRoad({ x: 470, y: 0 })).toBeNull();
-    expect(graph.nearJunction({ x: 380, y: 0 })).toBe(false);
     expect(sim.delivered).toBeGreaterThan(20);
 
     const loaded = new RoadGraph();
     loaded.load(JSON.parse(JSON.stringify(graph.toJSON())));
-    expect(loaded.terminal(middle.id)).toEqual({ kind: "sink", side: -1 });
+    expect(loaded.terminal(middle.id)).toEqual({ kind: "sink", building: "smallShop", side: -1 });
   });
 });
 
@@ -415,9 +410,22 @@ describe("terminals", () => {
     expect(graph.terminalAt({ x: -300, y: 0 })).toBeUndefined();
   });
 
+  it("load maps from before buildings, and use each building's footprint", () => {
+    const old = (rate: number) => parseTerminal({ kind: "source", enabled: true, rate, sinks: [] });
+    expect([old(1), old(3), old(10)].map((t) => t.building)).toEqual(["villa", "townhouse", "apartment"]);
+    expect(old(10)).toMatchObject({ rate: 10 });
+    expect(parseTerminal({ kind: "sink" })).toEqual({ kind: "sink", building: "smallShop" });
+    expect(() => parseTerminal({ kind: "sink", building: "castle" })).toThrow();
+
+    const { graph } = crossroads({ control: "stop" });
+    const east = at(graph, 300, 0);
+    graph.setTerminal(east, newTerminal("largeShop"));
+    expect(graph.terminalLot(east)).toMatchObject(BUILDING_SIZE.largeShop);
+  });
+
   it("rejects a source or sink that isn't on a dead end", () => {
     const { graph, centre } = crossroads({ control: "stop" });
     const map = graph.toJSON();
-    expect(() => new RoadGraph().load({ ...map, terminals: [{ node: centre, kind: "sink" }] })).toThrow();
+    expect(() => new RoadGraph().load({ ...map, terminals: [{ node: centre, kind: "sink", building: "smallShop" }] })).toThrow();
   });
 });

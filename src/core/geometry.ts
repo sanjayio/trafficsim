@@ -63,3 +63,26 @@ export function segmentsIntersect(p0: Vec2, p1: Vec2, q0: Vec2, q1: Vec2): boole
     (d4 === 0 && onSegment(p0, p1, q1))
   );
 }
+
+/**
+ * Whether two convex polygons overlap by more than `margin` (separating-axis test): polygons that
+ * only touch, as neighbouring tiles sharing an edge, don't count.
+ */
+export function convexOverlap(a: Vec2[], b: Vec2[], margin = 0.5): boolean {
+  for (const polygon of [a, b]) {
+    for (let i = 0; i < polygon.length; i++) {
+      const p = polygon[i];
+      const q = polygon[(i + 1) % polygon.length];
+      const len = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+      const axis = { x: (p.y - q.y) / len, y: (q.x - p.x) / len };
+      const range = (poly: Vec2[]) => {
+        const d = poly.map((v) => v.x * axis.x + v.y * axis.y);
+        return [Math.min(...d), Math.max(...d)];
+      };
+      const [aMin, aMax] = range(a);
+      const [bMin, bMax] = range(b);
+      if (Math.min(aMax, bMax) - Math.max(aMin, bMin) <= margin) return false;
+    }
+  }
+  return true;
+}

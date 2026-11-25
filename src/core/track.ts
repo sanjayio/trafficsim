@@ -4,7 +4,7 @@ import { roundaboutShape } from "./junction";
 import type { DrivingSide, NodeId, RoadGraph, RoadSegment, SegmentId } from "./roadGraph";
 import { laneOffsets, lanesInnerToKerb, scaleRank, type Turn } from "./lanes";
 import { LANE_WIDTH } from "./roadSpec";
-import { LOT_DEPTH, type Lot } from "./terminal";
+import type { Lot } from "./terminal";
 
 /** A drivable line made of curve pieces joined end to end, walked by distance. */
 export class Track {
@@ -147,7 +147,7 @@ export class TrackBuilder {
    * for a gap in it, and those in it make room).
    */
   drivewayOut(node: NodeId, lot: Lot, road: Leg): [Leg, Leg] {
-    const door = { x: lot.centre.x - lot.out.x * (LOT_DEPTH / 2), y: lot.centre.y - lot.out.y * (LOT_DEPTH / 2) };
+    const door = lot.door;
     const towards = { x: -lot.out.x, y: -lot.out.y };
     const step = { x: door.x + towards.x * DOOR_LENGTH, y: door.y + towards.y * DOOR_LENGTH };
     const join = legAt(road, 0);
@@ -171,7 +171,7 @@ export class TrackBuilder {
 
   /** Off `road` (where it ends) along a sink's driveway, to its building's door. */
   drivewayIn(node: NodeId, lot: Lot, road: Leg): Leg {
-    const door = { x: lot.centre.x - lot.out.x * (LOT_DEPTH / 2), y: lot.centre.y - lot.out.y * (LOT_DEPTH / 2) };
+    const door = lot.door;
     const leave = legAt(road, legLength(road));
     const driveway = new Track(bridge(leave.p, leave.tangent, door, lot.out));
     const turn = leave.tangent.x * lot.out.y - leave.tangent.y * lot.out.x;

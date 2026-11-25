@@ -6,7 +6,9 @@ import { RoadGraph, type RoadSegment, type SavedMap } from "../core/roadGraph";
 import { SIM_DT, Simulation } from "../core/simulation";
 import { LaneTool } from "../tools/LaneTool";
 import { TrafficTool } from "../tools/TrafficTool";
+import { ZoneMap } from "../core/zoning";
 import { CarLayer } from "./CarLayer";
+import { ZoneLayer } from "./ZoneLayer";
 import { openMapFile, saveMapFile } from "../platform";
 import { gameStore, isSnapping, type NodeAnchor, type ToolId } from "../state/store";
 import { BulldozeTool } from "../tools/BulldozeTool";
@@ -51,6 +53,8 @@ export class Engine {
   private grid = new Grid();
   private roads = new RoadLayer(this.graph);
   private cars = new CarLayer();
+  private zones = new ZoneMap(this.graph);
+  private zoneLayer = new ZoneLayer(this.graph, this.zones);
   private overlay = new OverlayLayer();
   private camera!: Camera;
   private tools!: Record<ToolId, Tool>;
@@ -81,7 +85,7 @@ export class Engine {
     host.appendChild(canvas);
 
     this.scene.fog = this.fog;
-    this.scene.add(this.grid, this.roads, this.cars, this.overlay);
+    this.scene.add(this.grid, this.roads, this.zoneLayer, this.cars, this.overlay);
 
     // Left-drag pans with the Select tool, except in the lane connector, which needs left clicks.
     this.camera = new Camera(canvas, () => gameStore.getState().tool === "select" && gameStore.getState().laneEditNode === null);
@@ -114,6 +118,7 @@ export class Engine {
       worldPerPixel: () => 1 / this.camera.zoom,
       bulldozeMode: () => gameStore.getState().bulldozeMode,
       trafficMode: () => gameStore.getState().trafficMode,
+      zones: this.zones,
       stopLineAt: (segment: RoadSegment, node: number) => this.roads.stopLineAt(segment, node),
       screenRect: (a: Vec2, b: Vec2) => {
         const sa = this.camera.worldToScreen(a);
@@ -221,6 +226,8 @@ export class Engine {
     this.camera.destroy();
     this.roads.dispose();
     this.cars.dispose();
+    this.zoneLayer.dispose();
+    this.zones.dispose();
     this.sim.dispose();
     this.overlay.dispose();
     this.grid.dispose();
@@ -260,6 +267,7 @@ export class Engine {
 
     this.roads.updateSignals(this.sim.time);
     this.cars.update(this.sim);
+    this.zoneLayer.show(gameStore.getState().tool === "traffic" && gameStore.getState().laneEditNode === null);
     this.trackJunctionPositions();
     this.renderer.render(this.scene, this.camera.camera);
 

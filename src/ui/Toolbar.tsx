@@ -1,7 +1,12 @@
 import {
   ArrowBigUp,
-  ArrowDownToDot,
-  ArrowUpFromDot,
+  Briefcase,
+  Building as BuildingIcon,
+  Hotel,
+  House,
+  Houses,
+  ShoppingCart,
+  Store,
   Car,
   ChevronLeft,
   ChevronRight,
@@ -24,7 +29,8 @@ import {
 import { MAX_LANES } from "../core/roadSpec";
 import { useEffect, type ReactNode } from "react";
 import { gameStore, isSnapping, useGame, type SimSpeed, type ToolId } from "../state/store";
-import type { BulldozeMode, RoadMode, TrafficMode } from "../tools/Tool";
+import type { BulldozeMode, RoadMode } from "../tools/Tool";
+import { BUILDING_LABEL, isSourceBuilding, SINK_BUILDINGS, SOURCE_BUILDINGS, SOURCE_RATE, type Building } from "../core/terminal";
 import { IconButton, keepFocusOnGame, Panel, PanelButton, PanelDivider } from "./Panel";
 
 const TOOLS: { id: ToolId; label: string; key: string; icon: LucideIcon }[] = [
@@ -148,21 +154,35 @@ function BulldozeOptions() {
   );
 }
 
-const TRAFFIC_MODES: { id: TrafficMode; label: string; icon: LucideIcon }[] = [
-  { id: "source", label: "Source: cars start here", icon: ArrowUpFromDot },
-  { id: "sink", label: "Sink: cars head here", icon: ArrowDownToDot },
-];
+const BUILDING_ICON: Record<Building, LucideIcon> = {
+  villa: House,
+  townhouse: Houses,
+  apartment: BuildingIcon,
+  smallShop: Store,
+  largeShop: ShoppingCart,
+  smallOffice: Briefcase,
+  largeOffice: Hotel,
+};
 
-/** Second-level options shown while the Traffic tool is active. */
+/** Second-level options shown while the Traffic tool is active: homes (sources), then shops and offices (sinks). */
 function TrafficOptions() {
   const mode = useGame((s) => s.trafficMode);
+  const button = (b: Building) => {
+    const Icon = BUILDING_ICON[b];
+    const label = isSourceBuilding(b)
+      ? `${BUILDING_LABEL[b]}: ${SOURCE_RATE[b]} car${SOURCE_RATE[b] === 1 ? "" : "s"} a minute`
+      : `${BUILDING_LABEL[b]}: cars head here`;
+    return (
+      <IconButton key={b} label={label} pressed={mode === b} onClick={() => gameStore.getState().setTrafficMode(b)}>
+        <Icon size={ICON_SIZE} strokeWidth={2} aria-hidden />
+      </IconButton>
+    );
+  };
   return (
     <Panel>
-      {TRAFFIC_MODES.map(({ id, label, icon: Icon }) => (
-        <IconButton key={id} label={label} pressed={mode === id} onClick={() => gameStore.getState().setTrafficMode(id)}>
-          <Icon size={ICON_SIZE} strokeWidth={2} aria-hidden />
-        </IconButton>
-      ))}
+      {SOURCE_BUILDINGS.map(button)}
+      <PanelDivider />
+      {SINK_BUILDINGS.map(button)}
     </Panel>
   );
 }

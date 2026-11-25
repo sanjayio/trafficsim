@@ -2,6 +2,8 @@ import type { Curve } from "../core/curve";
 import type { Vec2 } from "../core/geometry";
 import type { NodeId, RoadGraph, RoadSegment } from "../core/roadGraph";
 import type { RoadSpec } from "../core/roadSpec";
+import type { Building } from "../core/terminal";
+import type { ZoneMap } from "../core/zoning";
 
 /** Transient previews and highlights drawn above the road network. Implemented by the renderer. */
 export interface Overlay {
@@ -28,8 +30,8 @@ export interface Overlay {
  */
 export type RoadMode = "straight" | "curve" | "complex" | "continuous";
 
-/** Traffic tool: place sources (cars appear) or sinks (cars head there) on road ends. */
-export type TrafficMode = "source" | "sink";
+/** Traffic tool: the building to place (homes are sources, where cars come from; shops and offices sinks, where they go). */
+export type TrafficMode = Building;
 
 /** Bulldoze one road per click, or every road in a dragged rectangle. */
 export type BulldozeMode = "single" | "area";
@@ -53,6 +55,8 @@ export interface ToolContext {
   worldPerPixel: () => number;
   bulldozeMode: () => BulldozeMode;
   trafficMode: () => TrafficMode;
+  /** The zoning tiles beside roads, where the Traffic tool places buildings. */
+  zones: ZoneMap;
   /**
    * The ground area under the screen rectangle spanned by two ground points (as a convex quad).
    * Screen-aligned, so it matches what the player sees even when the camera is rotated or tilted.

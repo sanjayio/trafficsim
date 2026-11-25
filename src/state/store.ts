@@ -96,7 +96,7 @@ export const gameStore = createStore<GameState>()((set, get) => ({
   roadSpec: { ...DEFAULT_ROAD_SPEC, footpath: true },
   roadMode: "straight",
   bulldozeMode: "single",
-  trafficMode: "source",
+  trafficMode: "villa",
   highlightNode: null,
   laneEditNode: null,
   guideSnapping: true,

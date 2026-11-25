@@ -58,8 +58,8 @@ export const CONTROL_GROUPS: ControlGroup[] = [
   {
     title: "Traffic",
     rows: [
-      { keys: ["Click"], action: "Traffic tool: place a source or sink at a road end, or along a road on the side you click (click again to remove)" },
-      { keys: ["Hover"], action: "Show a source's ⚙ button: on/off, cars per minute, destinations" },
+      { keys: ["Click"], action: "Traffic tool: place the chosen home, shop or office on the zoning tiles beside a road (click a building to remove or swap it)" },
+      { keys: ["Hover"], action: "Show a home's ⚙ button: on/off, kind of home, destinations" },
     ],
   },
   {

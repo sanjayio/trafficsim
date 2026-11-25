@@ -3,14 +3,13 @@ import { isStraight, rightNormal, SampledCurve, splitCurve, straightCurve, type 
 import { distance, pointInConvexPolygon, segmentsIntersect, type Vec2 } from "./geometry";
 import {
   DEFAULT_JUNCTION,
-  kerbRadius,
   isDefaultJunction,
   parseJunctionSettings,
   roundaboutShape,
   type JunctionSettings,
 } from "./junction";
 import type { LaneRef } from "./lanes";
-import { DRIVEWAY_BLEND, LOT_DEPTH, LOT_LENGTH, LOT_SETBACK, parseTerminal, type Lot, type Terminal } from "./terminal";
+import { BUILDING_SIZE, LOT_SETBACK, parseTerminal, type Lot, type Terminal } from "./terminal";
 import { carriagewayWidth, DEFAULT_ROAD_SPEC, normalizeRoadSpec, parseRoadSpec, roadWidth, type RoadSpec } from "./roadSpec";
 
 export type NodeId = number;
@@ -192,15 +191,23 @@ export class RoadGraph {
     const keep = dead ? (this.side === "right" ? 1 : -1) * (terminal.kind === "source" ? 1 : -1) : (terminal.side ?? 1);
     const right = rightNormal(along);
     const out = { x: right.x * keep, y: right.y * keep };
+    const { length, depth } = BUILDING_SIZE[terminal.building];
     const front = Math.max(...roads.map((s) => roadWidth(s.spec))) / 2 + LOT_SETBACK;
-    const back = front + LOT_DEPTH / 2;
-    const at = dead ? LOT_LENGTH / 2 : 0;
+    const back = front + depth / 2;
+    // On a dead end the building stands beside the road end, its driveway in the middle; along a
+    // road, the driveway is at the node and the building `offset` along from it.
+    const at = dead ? length / 2 : 0;
+    const centreAt = dead ? at : (terminal.offset ?? 0);
     return {
-      centre: { x: node.x + along.x * at + out.x * back, y: node.y + along.y * at + out.y * back },
+      building: terminal.building,
+      centre: { x: node.x + along.x * centreAt + out.x * back, y: node.y + along.y * centreAt + out.y * back },
+      door: { x: node.x + along.x * at + out.x * front, y: node.y + along.y * at + out.y * front },
       along,
       at,
       out,
       front,
+      length,
+      depth,
     };
   }
 
@@ -220,7 +227,7 @@ export class RoadGraph {
    */
   nodeOnRoad(p: Vec2): RoadNode | null {
     const segment = this.segmentAt(p);
-    if (!segment || this.nearJunction(p)) return null;
+    if (!segment) return null;
     const path = this.path(segment);
     const { point, s } = path.nearest(p);
     for (const end of [segment.a, segment.b]) {
@@ -231,25 +238,7 @@ export class RoadGraph {
     return this.splitAt(point);
   }
 
-  /**
-   * Whether `p`, on a road, is too close to a junction for a source or sink: its driveway would
-   * join the road past the junction's stop line. Kept clear of the junction, its corners and
-   * the room a driveway takes.
-   */
-  nearJunction(p: Vec2): boolean {
-    const segment = this.segmentAt(p);
-    if (!segment) return false;
-    const path = this.path(segment);
-    const { s } = path.nearest(p);
-    return [
-      [segment.a, s],
-      [segment.b, path.length - s],
-    ].some(([end, along]) => {
-      if (this.segmentsAt(end).length < 3) return false;
-      const corners = this.junction(end).roundabout ? 0 : kerbRadius(this.junction(end).cornerRadius);
-      return along < this.junctionRadius(end) + corners + DRIVEWAY_BLEND + LOT_LENGTH / 2;
-    });
-  }
+
 
   /** The corners of a source's or sink's building. */
   lotCorners(nodeId: NodeId): Vec2[] {
@@ -257,8 +246,8 @@ export class RoadGraph {
     if (!lot) return [];
     const { centre, along, out } = lot;
     const corner = (a: number, o: number) => ({
-      x: centre.x + along.x * a * (LOT_LENGTH / 2) + out.x * o * (LOT_DEPTH / 2),
-      y: centre.y + along.y * a * (LOT_LENGTH / 2) + out.y * o * (LOT_DEPTH / 2),
+      x: centre.x + along.x * a * (lot.length / 2) + out.x * o * (lot.depth / 2),
+      y: centre.y + along.y * a * (lot.length / 2) + out.y * o * (lot.depth / 2),
     });
     return [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
   }

@@ -27,8 +27,8 @@ In the app: ☰ menu (top right) → **Controls**. That list is generated from `
 | Road → snap-to-grid toggle (grid icon) | Snap endpoints to the grid (default) or place them freely. Either way, clicking near an existing road end attaches to it |
 | Hold `Alt` / `Option` (Road) | Place freely: flips grid snapping and turns off guides and angles |
 | Bulldoze → one by one / area | Click a road to remove it, or drag a rectangle to remove every road it touches (`Esc` / right-click abandons the drag) |
-| Traffic → Source / Sink, click a road | Places a source (cars come out of a building) or a sink (cars drive into one): at a road end, or anywhere along a road, with the building on the side you click. Cars use its driveway. Click it again to remove. Saved with the map |
-| Hover a source → ⚙ (or click it with Select) | Source options: on/off, cars per minute, and destinations (any sink, or chosen sinks) |
+| Traffic → a building, click the zoning tiles | The Traffic tool shows zoning tiles beside every road (left out where they'd overlap a road, belong to a nearer road, or crowd a junction). Hover to see the tiles the chosen building takes: green where it fits, red where it doesn't; click to place it, facing the road. Homes are sources: villa (1 car a minute, 2×2 tiles), townhouse (4, 3×2), apartment (12, 3×3). Shops and offices are sinks, where cars head: small shop and small office (2×2), large shop (4×3), large office (3×3). Click a building to remove it, or with another building selected to swap. Saved with the map |
+| Hover a home → ⚙ (or click it with Select) | Home options: on/off, the kind of home (which sets its cars a minute), and destinations (any shop or office, or chosen ones) |
 | Hover a junction → ⚙ (or click it with Select) | Junction options: control (none / give way / stop / signals), roundabout, corner smoothness, lane connector. Saved with the map |
 | Junction options → Lane connector | Click an incoming lane's end (amber), then outgoing lanes' starts (green) to connect or disconnect them; cars only drive connected lanes, and the painted lane arrows follow. Reset restores the defaults; `Esc` or Done leaves. Changing a road at the junction resets it |
 | ☰ → Settings → Driving side | Right- or left-hand traffic (decides which lanes get stop lines, and later which lanes cars use). Saved with the map |
@@ -41,6 +41,7 @@ In the app: ☰ menu (top right) → **Controls**. That list is generated from `
 | `T` / `G` | Tilt the camera towards 30° (3D view) / back to 90° top-down |
 | Right- or middle-drag (left-drag in Select) | Pan |
 | `Space` | Pause / resume |
+| Radio (top middle) | Internet radio from Radio Paradise (Main Mix, Mellow, Rock, Global): play/stop, station and volume. Remembers your station and volume |
 | Right-click / `Esc` | Step back one point / cancel the road in progress |
 
 ## Layout
