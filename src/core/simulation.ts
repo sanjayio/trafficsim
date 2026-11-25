@@ -289,7 +289,9 @@ export class Simulation {
     for (const [source, t] of terminals) {
       if (t.kind !== "source" || !t.enabled || t.rate <= 0) continue;
       // A source that can't release a car keeps one waiting, rather than a growing backlog.
-      const due = Math.min(1, (this.due.get(source) ?? 0) + (t.rate / 60) * dt);
+      // A home seen for the first time (a new one, or every one when a map loads) starts part way
+      // through its wait, so homes don't all send their first car at once.
+      const due = Math.min(1, (this.due.get(source) ?? this.random()) + (t.rate / 60) * dt);
       this.due.set(source, due);
       if (due < 1) continue;
       // Only to shops and offices with a free bay: when they're all full, the source waits.

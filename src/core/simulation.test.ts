@@ -182,6 +182,31 @@ describe("Simulation", () => {
     expect(atShop()).toBe(0);
   });
 
+  it("staggers the first cars from many homes rather than sending them all at once", () => {
+    const graph = new RoadGraph();
+    road(graph, 0, 0, 2000, 0);
+    graph.setTerminal(at(graph, 2000, 0), SINK);
+    for (let x = 100; x <= 1900; x += 60) {
+      const node = graph.nodeOnRoad({ x, y: 5 })!;
+      graph.setTerminal(node.id, { ...DEFAULT_SOURCE, side: 1 });
+    }
+    const sim = new Simulation(graph);
+    sim.parking = false;
+    const firsts: number[] = [];
+    const seen = new Set<number>();
+    run(sim, 70, () => {
+      for (const c of sim.cars) {
+        if (seen.has(c.home)) continue;
+        seen.add(c.home);
+        firsts.push(sim.time);
+      }
+    });
+    // Over thirty villas at a car a minute: first cars spread across the minute, not in one burst.
+    expect(firsts.length).toBeGreaterThan(25);
+    const span = Math.max(...firsts) - Math.min(...firsts);
+    expect(span).toBeGreaterThan(30);
+  });
+
   it("only sends cars to the sinks a source lists", () => {
     const { graph } = crossroads({ control: "yield" });
     const east = at(graph, 300, 0);
