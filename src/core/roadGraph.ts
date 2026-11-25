@@ -9,7 +9,7 @@ import {
   type JunctionSettings,
 } from "./junction";
 import type { LaneRef } from "./lanes";
-import { BUILDING_SIZE, LOT_SETBACK, parseTerminal, type Lot, type Terminal } from "./terminal";
+import { buildingSize, LEVEL_NEEDS, levelOf, LOT_SETBACK, MAX_LEVEL, parseTerminal, type Lot, type Terminal } from "./terminal";
 import { carriagewayWidth, DEFAULT_ROAD_SPEC, normalizeRoadSpec, parseRoadSpec, roadWidth, type RoadSpec } from "./roadSpec";
 
 export type NodeId = number;
@@ -203,7 +203,7 @@ export class RoadGraph {
     const keep = dead ? (this.side === "right" ? 1 : -1) * (terminal.kind === "source" ? 1 : -1) : (terminal.side ?? 1);
     const right = rightNormal(along);
     const out = { x: right.x * keep, y: right.y * keep };
-    const { length, depth } = BUILDING_SIZE[terminal.building];
+    const { length, depth } = buildingSize(terminal);
     const front = Math.max(...roads.map((s) => roadWidth(s.spec))) / 2 + LOT_SETBACK;
     const back = front + depth / 2;
     // On a dead end the building stands beside the road end, its driveway in the middle; along a
@@ -212,6 +212,7 @@ export class RoadGraph {
     const centreAt = dead ? at : (terminal.offset ?? 0);
     return {
       building: terminal.building,
+      level: levelOf(terminal),
       centre: { x: node.x + along.x * centreAt + out.x * back, y: node.y + along.y * centreAt + out.y * back },
       door: { x: node.x + along.x * at + out.x * front, y: node.y + along.y * at + out.y * front },
       along,
@@ -263,6 +264,23 @@ export class RoadGraph {
     });
     return [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
   }
+
+  /**
+   * Counts one more customer (or trip home) for the building at `nodeId`. Quietly, without an
+   * event: a car arriving changes nothing anyone draws or routes by. True when that takes it to
+   * the count for its next level (see `levelUp`). `visits` counts these since last read.
+   */
+  recordVisit(nodeId: NodeId): boolean {
+    const t = this.terminals.get(nodeId);
+    if (!t) return false;
+    t.served = (t.served ?? 0) + 1;
+    this.visits++;
+    const level = levelOf(t);
+    return level < MAX_LEVEL && t.served === LEVEL_NEEDS[level];
+  }
+
+  /** Visits recorded (see `recordVisit`) that no event has announced; reset by whoever saves them. */
+  visits = 0;
 
   /** The source or sink whose building covers `p`, if any. */
   terminalAt(p: Vec2): NodeId | undefined {

@@ -83,6 +83,8 @@ export class CarLayer extends Group {
     this.materials.beams.opacity = night * 0.32;
     const lit = Math.floor(sim.time * BLINK_HZ * 2) % 2 === 0;
     for (const car of cars) {
+      // Parked underground: out of sight.
+      if (car.leaveAt !== null && car.legs[car.leg].underground) continue;
       const { x, y, heading } = sim.pose(car);
       const shape = SHAPES[car.type];
       const cos = Math.cos(heading);

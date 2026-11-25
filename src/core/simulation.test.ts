@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { straightCurve } from "./curve";
-import { kerbRadius, roundaboutShape, signalApproaches, signalLights } from "./junction";
+import { kerbRadius, minorRoads, roundaboutShape, signalApproaches, signalLights } from "./junction";
+
+/** Longer than a stop sign's hold: a car standing at the line this long has stopped there. */
+const STOP_HOLD_TEST = 1;
 import { RoadGraph, type NodeId } from "./roadGraph";
 import { findRoute } from "./routing";
 import { DEFAULT_ROAD_SPEC, LANE_WIDTH, type RoadSpec } from "./roadSpec";
@@ -43,6 +46,8 @@ function apart(distance: number, min: number): void {
 function noOverlap(sim: Simulation): void {
   const lanes = new Map<string, Car[]>();
   for (const car of sim.cars) {
+    // Parked underground: out of sight, all at the entrance.
+    if (car.leaveAt !== null && car.legs[car.leg].underground) continue;
     const key = car.legs[car.leg].key;
     lanes.set(key, [...(lanes.get(key) ?? []), car]);
   }
@@ -116,14 +121,15 @@ describe("Simulation", () => {
     expect(homeward).toBeGreaterThan(0);
   });
 
-  it("parks cars behind a large office too, up its side path, and brings them out again", () => {
+  it("parks cars behind a large shop, in two rows facing each other, up its side driveway", () => {
     const graph = new RoadGraph();
     road(graph, 0, 0, 400, 0);
     graph.setTerminal(at(graph, 0, 0), { ...DEFAULT_SOURCE, rate: 60 });
     const office = at(graph, 400, 0);
-    graph.setTerminal(office, newTerminal("largeOffice"));
+    graph.setTerminal(office, newTerminal("largeShop"));
     const { bays } = carPark(graph.terminalLot(office)!);
-    expect(bays.some((b) => b.rear) && bays.some((b) => !b.rear)).toBe(true);
+    expect(bays.every((b) => b.rear)).toBe(true);
+    expect(new Set(bays.map((b) => b.facing))).toEqual(new Set([1, -1]));
     const sim = new Simulation(graph);
     const used = new Set<number>();
     let pathUp = 0;
@@ -136,6 +142,27 @@ describe("Simulation", () => {
     });
     expect([...used].some((i) => bays[i].rear)).toBe(true);
     expect(pathUp).toBeGreaterThan(0);
+  });
+
+  it("parks cars under an office out of sight, and brings them out one at a time", () => {
+    const graph = new RoadGraph();
+    road(graph, 0, 0, 400, 0);
+    graph.setTerminal(at(graph, 0, 0), { ...DEFAULT_SOURCE, rate: 60 });
+    const office = at(graph, 400, 0);
+    graph.setTerminal(office, newTerminal("smallOffice"));
+    const { bays } = carPark(graph.terminalLot(office)!);
+    expect(bays.every((b) => b.underground)).toBe(true);
+    const sim = new Simulation(graph);
+    let most = 0;
+    let out = 0;
+    run(sim, 200, () => {
+      noOverlap(sim);
+      most = Math.max(most, sim.cars.filter((c) => c.leaveAt !== null).length);
+      expect(sim.cars.filter((c) => c.parking?.sink === office).length).toBeLessThanOrEqual(bays.length);
+      if (sim.cars.some((c) => c.legs[c.leg].key === `exit:${office}`)) out++;
+    });
+    expect(most).toBeGreaterThan(2);
+    expect(out).toBeGreaterThan(0);
   });
 
   it("only sends cars to the sinks a source lists", () => {
@@ -403,6 +430,34 @@ describe("lane changes", () => {
 });
 
 describe("sources and sinks along a road", () => {
+  it("give way pulling out of a driveway: they never pull out in front of a car close by on the road", () => {
+    const graph = new RoadGraph();
+    road(graph, 0, 0, 1200, 0);
+    // Busy through traffic from the west end to the east, and a home halfway along on its side.
+    graph.setTerminal(at(graph, 0, 0), { ...DEFAULT_SOURCE, rate: 25 });
+    graph.setTerminal(at(graph, 1200, 0), SINK);
+    const home = graph.nodeOnRoad({ x: 600, y: 10 })!;
+    graph.setTerminal(home.id, { ...DEFAULT_SOURCE, rate: 30, side: 1 });
+    const sim = new Simulation(graph);
+    sim.parking = false;
+    const pulledOut = new Set<number>();
+    run(sim, 120, () => {
+      for (const car of sim.cars) {
+        const leg = car.legs[car.leg];
+        if (!leg.key.startsWith(`out:${home.id}:`) || pulledOut.has(car.id)) continue;
+        pulledOut.add(car.id);
+        // Just pulled out: nobody in the lane it joins within ~2 s of the joining point.
+        for (const other of sim.cars) {
+          const theirs = other.legs[other.leg];
+          if (other === car || theirs.key !== leg.outKey) continue;
+          const behind = leg.joinAt! - (theirs.from + other.s);
+          if (behind > 0) apart(behind, other.v * 2.2);
+        }
+      }
+    });
+    expect(pulledOut.size).toBeGreaterThan(3);
+  });
+
   it("send cars out of the driveway both ways, and take them in at the far end", () => {
     const graph = new RoadGraph();
     const spec = { ...DEFAULT_ROAD_SPEC, lanes: 2 };
@@ -442,13 +497,16 @@ describe("sources and sinks along a road", () => {
 
     const loaded = new RoadGraph();
     loaded.load(JSON.parse(JSON.stringify(graph.toJSON())));
-    expect(loaded.terminal(middle.id)).toEqual({ kind: "sink", building: "smallShop", side: -1 });
+    // Plus the customers it has served by now.
+    expect(loaded.terminal(middle.id)).toMatchObject({ kind: "sink", building: "smallShop", side: -1 });
   });
 });
 
 describe("terminals", () => {
   it("survive save and load, stay on a road that's extended, and are dropped when it becomes a junction", () => {
     const { graph } = crossroads({ control: "stop" });
+    // Rates a home could really have (loading caps them at its kind's top rate).
+    for (const [id, t] of graph.allTerminals()) if (t.kind === "source") graph.setTerminal(id, { ...t, rate: 2 });
     const loaded = new RoadGraph();
     loaded.load(JSON.parse(JSON.stringify(graph.toJSON())));
     expect(loaded.toJSON()).toEqual(graph.toJSON());
@@ -485,5 +543,53 @@ describe("terminals", () => {
     const { graph, centre } = crossroads({ control: "stop" });
     const map = graph.toJSON();
     expect(() => new RoadGraph().load({ ...map, terminals: [{ node: centre, kind: "sink", building: "smallShop" }] })).toThrow();
+  });
+});
+
+describe("stop and give way junctions", () => {
+  it("put the signs on the side road at a T, and on one opposite pair (swappable) at a crossroads", () => {
+    const t = new RoadGraph();
+    road(t, -300, 0, 300, 0);
+    road(t, 0, 0, 0, 300);
+    const tee = at(t, 0, 0);
+    const stem = t.segmentsAt(tee).find((s) => Math.abs(t.directionAway(s, tee).y) > 0.9)!;
+    expect([...minorRoads(t, tee)]).toEqual([stem.id]);
+
+    const { graph, centre } = crossroads({ control: "stop" });
+    const pair = () => [...minorRoads(graph, centre)].map((id) => graph.directionAway(graph.segments.get(id)!, centre));
+    const first = pair();
+    expect(first).toHaveLength(2);
+    // Opposite each other.
+    expect(first[0].x * first[1].x + first[0].y * first[1].y).toBeCloseTo(-1, 3);
+    graph.setJunction(centre, { major: 1 });
+    const second = pair();
+    expect(Math.abs(first[0].x * second[0].x + first[0].y * second[0].y)).toBeLessThan(0.01);
+  });
+
+  it("let main-road traffic drive straight through, while the side road stops", () => {
+    const graph = new RoadGraph();
+    road(graph, -300, 0, 300, 0);
+    road(graph, 0, 0, 0, 300);
+    const centre = at(graph, 0, 0);
+    graph.setJunction(centre, { control: "stop" });
+    graph.setTerminal(at(graph, -300, 0), { ...DEFAULT_SOURCE, rate: 30 });
+    graph.setTerminal(at(graph, 0, 300), { ...DEFAULT_SOURCE, rate: 30 });
+    graph.setTerminal(at(graph, 300, 0), SINK);
+    const sim = new Simulation(graph);
+    sim.parking = false;
+    const stem = [...minorRoads(graph, centre)][0];
+    let mainStopped = 0;
+    let sideStopped = 0;
+    run(sim, 90, () => {
+      for (const car of sim.cars) {
+        const leg = car.legs[car.leg];
+        if (car.legs[car.leg + 1]?.node !== centre || car.stopped < STOP_HOLD_TEST) continue;
+        if (leg.segment === stem) sideStopped++;
+        // A main-road car held at the line with nobody ahead of it would be stopping for nothing.
+        else if (!sim.cars.some((c) => c !== car && c.legs[c.leg].key === leg.key && c.s > car.s)) mainStopped++;
+      }
+    });
+    expect(sideStopped).toBeGreaterThan(0);
+    expect(mainStopped).toBe(0);
   });
 });

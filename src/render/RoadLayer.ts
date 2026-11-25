@@ -1,9 +1,9 @@
 import { Group, Mesh, type BufferGeometry, type InstancedMesh, type MeshBasicMaterial, type Object3D } from "three";
-import { effectiveControl, kerbRadius, signalApproaches, MAX_CORNER_RADIUS, roundaboutShape, signalLights } from "../core/junction";
+import { effectiveControl, kerbRadius, minorRoads, signalApproaches, MAX_CORNER_RADIUS, roundaboutShape, signalLights } from "../core/junction";
 import type { GraphEvent, NodeId, RoadGraph, RoadSegment, SegmentId } from "../core/roadGraph";
 import { connectionsAt, hasLaneConnector, turnAt, type Turn } from "../core/lanes";
 import { carriagewayWidth, FOOTPATH_WIDTH, hasMedian, LANE_WIDTH, MEDIAN_WIDTH, roadWidth, type RoadSpec } from "../core/roadSpec";
-import { carPark, DRIVEWAY_WIDTH, isSourceBuilding, SIDE_PATH } from "../core/terminal";
+import { carPark, defaultName, DRIVEWAY_WIDTH, isSourceBuilding, SIDE_PATH } from "../core/terminal";
 import { bridge } from "../core/track";
 import { BuildingKit } from "./buildings";
 import { convexGeometry, flatMaterial } from "./flat";
@@ -115,7 +115,15 @@ export class RoadLayer extends Group {
       this.remove(old.driveway, old.building);
       old.driveway.geometry.dispose();
       // Geometry and materials are the kit's, shared; instanced parts own their per-instance buffers.
-      old.building.traverse((o) => (o as InstancedMesh).isInstancedMesh && (o as InstancedMesh).dispose());
+      old.building.traverse((o) => {
+        if ((o as InstancedMesh).isInstancedMesh) (o as InstancedMesh).dispose();
+        // Name signs: their own texture and material.
+        if (o.userData.own) {
+          const material = (o as Mesh).material as MeshBasicMaterial;
+          material.map?.dispose();
+          material.dispose();
+        }
+      });
     }
     this.markers.delete(nodeId);
     const lot = this.graph.terminalLot(nodeId);
@@ -132,15 +140,17 @@ export class RoadLayer extends Group {
       at(middle + width / 2, toFront),
       at(middle - width / 2, toFront),
     ];
-    // A second one where the side path to a car park behind the building meets the road.
+    // With a car park behind the building, the driveway is the side path to it instead.
     const { path } = isSourceBuilding(lot.building) ? { path: null } : carPark(lot);
     const doorAt = (door.x - lot.centre.x) * along.x + (door.y - lot.centre.y) * along.y;
     const driveway = new Mesh(
-      convexGeometry([strip(0, DRIVEWAY_WIDTH), ...(path === null ? [] : [strip(path - doorAt, SIDE_PATH)])]),
+      convexGeometry([path === null ? strip(0, DRIVEWAY_WIDTH) : strip(path - doorAt, SIDE_PATH)]),
       this.materials.asphalt,
     );
     driveway.renderOrder = ROAD_PART_STYLE.asphalt.layer;
-    const building = this.buildings.model(lot);
+    const terminal = this.graph.terminal(nodeId)!;
+    const name = terminal.kind === "sink" ? terminal.name || defaultName(terminal.building, nodeId) : undefined;
+    const building = this.buildings.model(lot, { ...terminal, name });
     this.add(driveway, building);
     this.markers.set(nodeId, { driveway, building });
   }
@@ -219,6 +229,8 @@ export class RoadLayer extends Group {
 
     const group = new Group();
     const approaches = signalApproaches(this.graph, nodeId);
+    // Stop and give way signs only where traffic stops or gives way: not on the main road.
+    const minor = minorRoads(this.graph, nodeId);
     const lamps: Mesh[][] = [];
     // Approaching traffic drives on its own right (right-hand traffic), which is to the left of
     // the direction leaving the junction.
@@ -232,6 +244,7 @@ export class RoadLayer extends Group {
         position: arm.edge(keep * (arm.halfWidth + setback), along),
         facing: arm.dir,
       };
+      if ((control === "stop" || control === "yield") && !minor.has(segment.id)) continue;
       if (control === "stop") group.add(this.kit.stopSign(spot));
       else if (control === "yield") group.add(this.kit.yieldSign(spot));
       else {
@@ -339,7 +352,9 @@ export class RoadLayer extends Group {
     if (corners > 0) inset = Math.max(inset, corners + JUNCTION_MARGIN);
 
     const control = effectiveControl(this.graph.junction(nodeId));
-    const entry = control === "none" ? "none" : control === "yield" ? "yield" : "stop";
+    // The main road under a stop or give-way control has no line: its traffic doesn't stop.
+    const main = (control === "stop" || control === "yield") && !minorRoads(this.graph, nodeId).has(segment.id);
+    const entry = control === "none" || main ? "none" : control === "yield" ? "yield" : "stop";
     return { inset, entry, turns: this.laneTurns(segment, nodeId) };
   }
 

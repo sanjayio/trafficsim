@@ -58,6 +58,8 @@ export interface Leg {
   turn?: Turn;
   /** Driven backwards (backing out of a parking bay). */
   reverse?: boolean;
+  /** Into an underground car park: a car parked at its end is out of sight, and out of the way. */
+  underground?: boolean;
   /** Roundabout legs: the ring's centre, the radius cars circulate at, and the angles they join and leave it. */
   ring?: { centre: Vec2; radius: number; entry: number; exit: number; direction: 1 | -1 };
 }
@@ -189,6 +191,15 @@ export class TrackBuilder {
   parkIn(node: NodeId, lot: Lot, index: number, last: Leg): { road: Leg; legs: Leg[] } {
     const park = carPark(lot);
     const bay = park.bays[index];
+    if (bay.underground) {
+      // Down the driveway and across the plaza to the garage entrance, where the car goes out of sight.
+      const entrance = lotPoint(lot, bay.a, bay.z);
+      const ramp = new Track([straight(lot.door, entrance)]);
+      return {
+        road: last,
+        legs: [this.drivewayIn(node, lot, last), { track: ramp, from: 0, to: ramp.length, key: `ramp:${node}`, underground: true }],
+      };
+    }
     const centre = lotPoint(lot, bay.a, bay.z);
     const end = legAt(last, legLength(last));
     const along = alongWith(lot, end.tangent);
@@ -197,19 +208,17 @@ export class TrackBuilder {
       park.path !== null && bay.rear
         ? [lotPoint(lot, park.path, -lot.depth / 2), lot.out, TURN_IN]
         : [lotPoint(lot, bay.a - sign(lot, along) * AISLE_TURN, bay.z - AISLE_TURN), along, YARD_RUN];
+    const rear = park.path !== null && bay.rear ? this.rearIn(node, lot, park.path, park.aisle, bay, index, target) : null;
     const ahead = (target.x - end.p.x) * end.tangent.x + (target.y - end.p.y) * end.tangent.y;
     const road = { ...last, to: Math.min(last.track.length, Math.max(last.from + 1, last.to + ahead - before)) };
     const leave = legAt(road, legLength(road));
     const off = new Track(bridge(leave.p, leave.tangent, target, heading));
     const turn = leave.tangent.x * lot.out.y - leave.tangent.y * lot.out.x;
-    const curves = bay.rear ? this.rearWay(lot, park, bay, false) : bridge(target, heading, centre, lot.out);
-    const into = new Track(curves);
+    const into = new Track(bridge(target, heading, centre, lot.out));
+    const offLeg: Leg = { track: off, from: 0, to: off.length, key: bay.rear ? `in:${node}:rear` : `in:${node}`, segment: road.segment, shift: turn > 0 ? 1 : -1 };
     return {
       road,
-      legs: [
-        { track: off, from: 0, to: off.length, key: bay.rear ? `in:${node}:rear` : `in:${node}`, segment: road.segment, shift: turn > 0 ? 1 : -1 },
-        { track: into, from: 0, to: into.length, key: `bay:${node}:${index}` },
-      ],
+      legs: rear ? [offLeg, ...rear] : [offLeg, { track: into, from: 0, to: into.length, key: `bay:${node}:${index}` }],
     };
   }
 
@@ -221,23 +230,39 @@ export class TrackBuilder {
   parkOut(node: NodeId, lot: Lot, index: number, first: Leg): { road: Leg; legs: Leg[] } {
     const park = carPark(lot);
     const bay = park.bays[index];
+    if (bay.underground) {
+      // Up out of the garage entrance, across the plaza and out of the driveway.
+      const entrance = lotPoint(lot, bay.a, bay.z);
+      const exit = new Track([straight(entrance, lot.door)]);
+      const [door, driveway] = this.drivewayOut(node, lot, first);
+      return { road: first, legs: [{ track: exit, from: 0, to: exit.length, key: `exit:${node}` }, door, driveway] };
+    }
     const centre = lotPoint(lot, bay.a, bay.z);
     const start = legAt(first, 0);
     const toPath = park.path !== null && bay.rear;
-    // Backing out along the yard (or lane) away from where the car heads next: with the traffic, or to the path.
-    const forward = toPath ? alongToward(lot, park.path! - bay.a) : alongWith(lot, start.tangent);
-    const back = toPath ? Math.min(AISLE_TURN, Math.max(4, lot.length / 2 - Math.abs(bay.a) - 3)) : AISLE_TURN;
-    const backTo = lotPoint(lot, bay.a - sign(lot, forward) * back, toPath ? park.aisle : bay.z - AISLE_TURN);
-    const reverse = new Track(bridge(centre, neg(lot.out), backTo, neg(forward)));
-    const legs: Leg[] = [{ track: reverse, from: 0, to: reverse.length, key: `bay:${node}:${index}`, reverse: true }];
-    let from = backTo;
-    let heading = forward;
+    let legs: Leg[];
+    let from: Vec2;
+    let heading: Vec2;
     if (toPath) {
-      // Along the lane, round the corner and up the side path to the road.
+      // Rear bays face the lane: drive straight out, along it, and up the side driveway to the road.
       from = lotPoint(lot, park.path!, -lot.depth / 2);
       heading = neg(lot.out);
-      const up = new Track(this.rearWay(lot, park, bay, true, backTo));
-      legs.push({ track: up, from: 0, to: up.length, key: `path:${node}` });
+      const towardPath = alongToward(lot, park.path! - bay.a);
+      // Out of the bay onto the lane, short of the corner, then the lane and driveway every car shares.
+      const turn = Math.min(AISLE_TURN, Math.abs(park.path! - bay.a) - LANE_CORNER - 0.5);
+      const onLane = bay.a + sign(lot, towardPath) * turn;
+      const out = new Track(bridge(centre, noseOf(lot, bay), lotPoint(lot, onLane, park.aisle), towardPath));
+      const shared = this.laneOut(lot, park.path!, park.aisle, towardPath);
+      legs = [
+        { track: out, from: 0, to: out.length, key: `bay:${node}:${index}` },
+        { track: shared.track, from: Math.abs(shared.far - onLane), to: shared.track.length, key: `path:${node}` },
+      ];
+    } else {
+      // Backing out along the front yard with the traffic, then onto the road.
+      heading = alongWith(lot, start.tangent);
+      from = lotPoint(lot, bay.a - sign(lot, heading) * AISLE_TURN, bay.z - AISLE_TURN);
+      const reverse = new Track(bridge(centre, neg(lot.out), from, neg(heading)));
+      legs = [{ track: reverse, from: 0, to: reverse.length, key: `bay:${node}:${index}`, reverse: true }];
     }
     const ahead = (from.x - start.p.x) * start.tangent.x + (from.y - start.p.y) * start.tangent.y;
     const road = { ...first, from: Math.max(0, Math.min(first.to - 1, first.from + ahead + (toPath ? TURN_IN : YARD_RUN))) };
@@ -258,19 +283,33 @@ export class TrackBuilder {
   }
 
   /**
-   * Between the side path's start (at the front of the lot) and rear bay `bay`: down the path,
-   * a turn along the lane behind the building, and a turn into the bay; or, leaving (`out`), from
-   * `from` in the lane along it and up the path.
+   * From the top of the side driveway (`top`) to rear bay `bay`: down the driveway, along the
+   * lane behind the building past the bay, and backing into it, so it faces the lane.
    */
-  private rearWay(lot: Lot, park: ReturnType<typeof carPark>, bay: Bay, out: boolean, from?: Vec2): Curve[] {
-    const top = lotPoint(lot, park.path!, -lot.depth / 2);
-    const towardBay = alongToward(lot, bay.a - park.path!);
-    if (out) {
-      const mid = lotPoint(lot, park.path!, (park.aisle - lot.depth / 2) / 2);
-      return [...bridge(from!, neg(towardBay), mid, neg(lot.out)), ...bridge(mid, neg(lot.out), top, neg(lot.out))];
-    }
-    const lane = lotPoint(lot, (park.path! + bay.a) / 2, park.aisle);
-    return [...bridge(top, lot.out, lane, towardBay), ...bridge(lane, towardBay, lotPoint(lot, bay.a, bay.z), lot.out)];
+  private rearIn(node: NodeId, lot: Lot, path: number, aisle: number, bay: Bay, index: number, top: Vec2): Leg[] {
+    const towardBay = alongToward(lot, bay.a - path);
+    const pastAt = bay.a + sign(lot, towardBay) * AISLE_TURN;
+    const past = lotPoint(lot, pastAt, aisle);
+    // Down the driveway and along the lane: one track every car shares (so they queue), each to its own spot.
+    const corner = lotPoint(lot, path + sign(lot, towardBay) * LANE_CORNER, aisle);
+    const farAt = path + sign(lot, towardBay) * lot.length * 1.5;
+    const lane = new Track([...bridge(top, lot.out, corner, towardBay), straight(corner, lotPoint(lot, farAt, aisle))]);
+    const into = new Track(bridge(past, neg(towardBay), lotPoint(lot, bay.a, bay.z), neg(noseOf(lot, bay))));
+    return [
+      { track: lane, from: 0, to: lane.length - Math.abs(farAt - pastAt), key: `lane:${node}` },
+      { track: into, from: 0, to: into.length, key: `bay:${node}:${index}`, reverse: true },
+    ];
+  }
+
+  /**
+   * Along the lane behind the building towards the side driveway (`toward`) and up it to the road
+   * end, from far along the lane: one track every car leaving shares. `far` is where it starts (along).
+   */
+  private laneOut(lot: Lot, path: number, aisle: number, toward: Vec2): { track: Track; far: number } {
+    const far = path - sign(lot, toward) * lot.length * 1.5;
+    const corner = lotPoint(lot, path - sign(lot, toward) * LANE_CORNER, aisle);
+    const top = lotPoint(lot, path, -lot.depth / 2);
+    return { track: new Track([straight(lotPoint(lot, far, aisle), corner), ...bridge(corner, toward, top, neg(lot.out))]), far };
   }
 
   /** Whether `node` is drawn (and driven) as a roundabout. */
@@ -378,6 +417,8 @@ const DOOR_LENGTH = 1;
 const AISLE_TURN = PARKING_DEPTH / 2 + LOT_SETBACK / 2;
 /** How far along the road a car takes to cross between its lane and the front yard. */
 const YARD_RUN = 20;
+/** Radius of the turn between the lane behind a building and its side driveway. */
+const LANE_CORNER = 6;
 /** How far along the road a car takes to turn between its lane and a side path. */
 const TURN_IN = 12;
 
@@ -386,6 +427,8 @@ const neg = (v: Vec2): Vec2 => ({ x: -v.x, y: -v.y });
 const sign = (lot: Lot, v: Vec2) => (v.x * lot.along.x + v.y * lot.along.y >= 0 ? 1 : -1);
 /** The way along the lot's road that goes with `traffic`. */
 const alongWith = (lot: Lot, traffic: Vec2): Vec2 => ({ x: lot.along.x * sign(lot, traffic), y: lot.along.y * sign(lot, traffic) });
+/** Which way a parked car in `bay` points: to the building (front bays), or to the lane (rear bays, `facing`). */
+const noseOf = (lot: Lot, bay: Bay): Vec2 => (bay.facing === -1 ? neg(lot.out) : lot.out);
 /** The way along the lot's road towards an offset `delta` along it. */
 const alongToward = (lot: Lot, delta: number): Vec2 => (delta >= 0 ? lot.along : neg(lot.along));
 

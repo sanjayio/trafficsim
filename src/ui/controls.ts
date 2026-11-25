@@ -59,7 +59,7 @@ export const CONTROL_GROUPS: ControlGroup[] = [
     title: "Traffic",
     rows: [
       { keys: ["Click"], action: "Traffic tool: place the chosen home, shop or office on the zoning tiles beside a road (click a building to remove or swap it)" },
-      { keys: ["Hover"], action: "Show a home's ⚙ button: on/off, kind of home, destinations" },
+      { keys: ["Hover"], action: "Show a building's ⚙ button: name (shops and offices), colours, level; for homes on/off, kind of home, destinations" },
     ],
   },
   {

@@ -9,6 +9,7 @@ import { SIM_DT, Simulation } from "../core/simulation";
 import { LaneTool } from "../tools/LaneTool";
 import { TrafficTool } from "../tools/TrafficTool";
 import { ZoneMap } from "../core/zoning";
+import { levelUp } from "../core/growth";
 import { CarLayer } from "./CarLayer";
 import { ZoneLayer } from "./ZoneLayer";
 import { loadAutosave, loadView, openMapFile, saveAutosave, saveMapFile, saveView } from "../platform";
@@ -22,6 +23,7 @@ import { Grid } from "./Grid";
 import { FlatLayer } from "./flat";
 import { Ground } from "./Ground";
 import { Sky } from "./Sky";
+import { swayUniforms } from "./buildings";
 import { StreetLights } from "./StreetLights";
 import { installCloudShadows, SunShadows } from "./shadows";
 import { OverlayLayer } from "./OverlayLayer";
@@ -32,6 +34,8 @@ import { RoadLayer } from "./RoadLayer";
 const MINOR_GRID_MIN_ZOOM = 0.45;
 const STATS_INTERVAL_MS = 250;
 const VIEW_CHECK_MS = 1000;
+/** How often customers counted since the last save are kept (they change nothing else, so nothing else saves them). */
+const VISITS_SAVE_MS = 10_000;
 /** Magnetic snaps (road ends, guidelines) reach this far from the cursor, in screen pixels. */
 const SNAP_PIXELS = 10;
 /** Offset of the cursor readout from the pointer, in pixels. */
@@ -74,6 +78,7 @@ export class Engine {
   /** The view last kept (see keepView), and time since it was last checked. */
   private keptView = "";
   private viewCheck = 0;
+  private visitsCheck = 0;
   private roads = new RoadLayer(this.graph);
   private cars = new CarLayer();
   private zones = new ZoneMap(this.graph);
@@ -323,6 +328,20 @@ export class Engine {
     this.cleanups.push(() => target.removeEventListener(type, handler as EventListener));
   }
 
+  /**
+   * Buildings that have served enough go up a level (wider if there's room, else taller); and
+   * customers counted since the last save are kept every so often (counting them fires no event).
+   */
+  private grow(deltaMS: number): void {
+    for (const id of this.sim.levelUps.splice(0)) levelUp(this.graph, this.zones, id);
+    this.visitsCheck += deltaMS;
+    if (this.visitsCheck < VISITS_SAVE_MS) return;
+    this.visitsCheck = 0;
+    if (this.graph.visits === 0) return;
+    this.graph.visits = 0;
+    saveAutosave(JSON.stringify(this.graph.toJSON()));
+  }
+
   /** The view (camera, time of day, weather) as last kept, then kept again whenever it changes. */
   private restoreView(): void {
     try {
@@ -389,6 +408,9 @@ export class Engine {
     // Well inside the camera's far plane (20 orbit distances).
     this.sky.follow(this.camera.camera.position, distance * 10);
     this.sky.update(look, deltaMS / 1000);
+    // Trees sway a little always, hard in the wind.
+    swayUniforms.swayTime.value += deltaMS / 1000;
+    swayUniforms.swayStrength.value = 0.025 + look.wind * 0.16;
     const focus = this.camera.target;
     this.shadows.update(look.sun, focus.x, focus.y, distance, look.shadow);
     SunShadows.clouds(look.tint, look.cloudShade, look.clouds.cover, this.sky.drift);
@@ -408,6 +430,7 @@ export class Engine {
     this.zoneLayer.show(gameStore.getState().tool === "traffic" && gameStore.getState().laneEditNode === null);
     this.trackJunctionPositions();
     this.keepView(deltaMS);
+    this.grow(deltaMS);
     this.renderer.render(this.scene, this.camera.camera);
 
     this.statsFrames++;
@@ -451,8 +474,8 @@ export class Engine {
     let hit = this.camera.pick(s, [...buildings.keys()]);
     while (hit && !buildings.has(hit)) hit = hit.parent;
     const id = hit ? buildings.get(hit)! : undefined;
-    if (id === undefined || this.graph.terminal(id)?.kind !== "source") return null;
-    return { id, kind: "source", ...this.camera.worldToScreen(this.anchorPoint(id, "source")!) };
+    if (id === undefined || !this.graph.terminal(id)) return null;
+    return { id, kind: "building", ...this.camera.worldToScreen(this.anchorPoint(id, "building")!) };
   }
 
   /** Where a junction's or source's options button sits: on the junction, or on the source's building. */
@@ -485,7 +508,7 @@ export class Engine {
       if (!j) return j;
       const point = this.anchorPoint(j.id, j.kind);
       const valid =
-        j.kind === "junction" ? this.graph.segmentsAt(j.id).length >= 3 : this.graph.terminal(j.id)?.kind === "source";
+        j.kind === "junction" ? this.graph.segmentsAt(j.id).length >= 3 : this.graph.terminal(j.id) !== undefined;
       if (!point || !valid) return null;
       const at = this.camera.worldToScreen(point);
       return Math.abs(at.x - j.x) < 0.5 && Math.abs(at.y - j.y) < 0.5 ? j : { ...j, ...at };

@@ -13,7 +13,7 @@ export type ToolId = "select" | "road" | "bulldoze" | "traffic";
 /** A junction or source offering its ⚙ button or options panel, at its screen position in canvas pixels. */
 export interface NodeAnchor {
   id: number;
-  kind: "junction" | "source";
+  kind: "junction" | "building";
   x: number;
   y: number;
 }

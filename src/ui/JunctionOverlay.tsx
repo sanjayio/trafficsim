@@ -1,11 +1,11 @@
 import { Ban, GitMerge, Octagon, RefreshCw, Settings2, Triangle, type LucideProps } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import { MAX_CORNER_RADIUS, type JunctionControl, type JunctionSettings } from "../core/junction";
+import { mainRoadChoices, MAX_CORNER_RADIUS, type JunctionControl, type JunctionSettings } from "../core/junction";
 import type { Engine } from "../render/Engine";
 import { gameStore, useGame } from "../state/store";
 import { OptionsPanel, Switch } from "./OptionsPanel";
 import { keepFocusOnGame } from "./Panel";
-import { SourcePanel } from "./SourcePanel";
+import { BuildingPanel } from "./BuildingPanel";
 
 const PANEL_HEIGHT = 290;
 
@@ -39,21 +39,21 @@ const CONTROLS: { id: JunctionControl; label: string; icon: ReactNode }[] = [
 ];
 
 /**
- * Junction and source options: a ⚙ button beside the hovered junction or source, and the options
+ * Junction and building options: a ⚙ button beside the hovered junction or building, and the options
  * panel for the open one. Both follow their node as the camera moves.
  */
 export function JunctionOverlay({ engine }: { engine: Engine | null }) {
   const hover = useGame((s) => s.junctionHover);
   const open = useGame((s) => s.junctionOpen);
   if (!engine) return null;
-  if (open?.kind === "source") return <SourcePanel engine={engine} id={open.id} x={open.x} y={open.y} />;
+  if (open?.kind === "building") return <BuildingPanel engine={engine} id={open.id} x={open.x} y={open.y} />;
   if (open) return <JunctionPanel engine={engine} id={open.id} x={open.x} y={open.y} />;
   if (!hover) return null;
   return (
     <button
       type="button"
-      aria-label={hover.kind === "source" ? "Source options" : "Junction options"}
-      title={hover.kind === "source" ? "Source options" : "Junction options"}
+      aria-label={hover.kind === "building" ? "Building options" : "Junction options"}
+      title={hover.kind === "building" ? "Building options" : "Junction options"}
       onMouseDown={keepFocusOnGame}
       onClick={() => {
         gameStore.getState().setJunctionOpen(hover);
@@ -82,8 +82,11 @@ function useJunctionSettings(engine: Engine, id: number): JunctionSettings {
 function JunctionPanel({ engine, id, x, y }: { engine: Engine; id: number; x: number; y: number }) {
   const settings = useJunctionSettings(engine, id);
   const update = (changes: Partial<JunctionSettings>) => engine.graph.setJunction(id, changes);
+  // Which roads stop or give way can be swapped when there's more than one way to pick the main road.
+  const choices = engine.graph.segmentsAt(id).length >= 3 ? mainRoadChoices(engine.graph, id).length : 0;
+  const swappable = (settings.control === "stop" || settings.control === "yield") && choices > 1;
   return (
-    <OptionsPanel title="Junction" x={x} y={y} height={PANEL_HEIGHT}>
+    <OptionsPanel title="Junction" x={x} y={y} height={PANEL_HEIGHT + 20}>
       <fieldset disabled={settings.roundabout} className="flex flex-col gap-1.5 disabled:opacity-40">
         <legend className="mb-1.5 text-xs font-medium uppercase tracking-wide text-neutral-500">
           Control{settings.roundabout ? " (roundabouts give way)" : ""}
@@ -95,7 +98,10 @@ function JunctionPanel({ engine, id, x, y }: { engine: Engine; id: number; x: nu
               type="button"
               role="radio"
               aria-checked={settings.control === c.id}
-              onClick={() => update({ control: c.id })}
+              // Stop or give way clicked again: the other roads become the main road.
+              onClick={() =>
+                update(settings.control === c.id && swappable ? { major: ((settings.major ?? 0) + 1) % choices } : { control: c.id })
+              }
               onMouseDown={keepFocusOnGame}
               className={`flex flex-col items-center gap-1 rounded-lg py-1.5 text-[11px] font-medium transition-colors duration-100 ${
                 settings.control === c.id ? "bg-sky-500/90 text-white" : "text-neutral-300 hover:bg-white/10 hover:text-white"
@@ -106,6 +112,9 @@ function JunctionPanel({ engine, id, x, y }: { engine: Engine; id: number; x: nu
             </button>
           ))}
         </div>
+        {swappable && !settings.roundabout && (
+          <p className="px-1 text-xs text-neutral-500">Click {settings.control === "stop" ? "Stop" : "Give way"} again to swap which roads have it.</p>
+        )}
       </fieldset>
 
       <Switch

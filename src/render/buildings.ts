@@ -1,19 +1,38 @@
-import { BoxGeometry, BufferGeometry, Color, Float32BufferAttribute, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, PlaneGeometry, Quaternion, Vector3 } from "three";
-import { carPark, DRIVEWAY_WIDTH, isSourceBuilding, LOT_SETBACK, PARKING_DEPTH, type Building, type Lot } from "../core/terminal";
+import { BoxGeometry, BufferGeometry, CanvasTexture, Color, Float32BufferAttribute, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, PlaneGeometry, Quaternion, SRGBColorSpace, Vector3 } from "three";
+import { carPark, DRIVEWAY_WIDTH, isSourceBuilding, LOT_SETBACK, PARKING_DEPTH, PLAZA_DEPTH, tallSteps, type Building, type BuildingDetails, type Lot } from "../core/terminal";
 import { FlatLayer, flatMaterial } from "./flat";
 
 /** Buildings draw after the flat road layers, with normal depth testing. */
 const BUILDING_ORDER = 20;
 
+/** Each building's usual colours: its main colour (walls, or glass) and its accent (roof, awning, sign band, frames). */
+export const BUILDING_COLORS: Record<Building, { primary: number; secondary: number }> = {
+  villa: { primary: 0xf2ede4, secondary: 0xb5543c },
+  townhouse: { primary: 0xe8dcc6, secondary: 0x4a4f57 },
+  apartment: { primary: 0xc9c4ba, secondary: 0xa9a49a },
+  smallShop: { primary: 0xe9e4d8, secondary: 0x2a9d8f },
+  largeShop: { primary: 0xd8d4cc, secondary: 0xe63946 },
+  smallOffice: { primary: 0x4f7ea8, secondary: 0xd6dde3 },
+  largeOffice: { primary: 0x4f7ea8, secondary: 0xd6dde3 },
+};
+
 /** Homes take this share of their plot's length; trees fill the rest. */
 const HOME_SHARE = 0.7;
 const TREE_SPACING = 9;
+/** Leaf colours: mostly greens, some turning yellow and orange, the odd red. Conifers stay green. */
+const LEAVES = [0x3f7a3a, 0x4f9446, 0x5c8f3a, 0x3b6e35, 0x6b9a3e, 0x4a8a44, 0x7fa53f, 0xb5a03a, 0xc98a2e, 0xa8432f];
+const CONIFER = [0x2f5f34, 0x355e2e, 0x2a5236, 0x3d6b3a];
+/** `colour` lightened (k > 1) or darkened (k < 1). */
+const shade = (colour: number, k: number) => new Color(colour).multiplyScalar(k).getHex();
+
+/** Trees along an office plaza, with a bench between each pair. */
+const PLAZA_SPACING = 12;
 /**
  * Panels over office glass and flats' window bands where someone's in: the glass's colour by
  * day (a shade off it, so their own materials), lit at night while the rest stays dark.
  */
-const OCCUPIED_GLASS = 0x4f7ea9;
-const OCCUPIED_BAND = 0x2e3a49;
+const OCCUPIED_GLASS_LIGHT = 0xf2c96a;
+const OCCUPIED_BAND_LIGHT = 0xffdf99;
 /** Share lit at night (most offices have gone home; most flats are lived in), and roughly how wide each unit is along a wall. */
 const OCCUPANCY = { office: 0.3, flat: 0.7 };
 const UNIT_WIDTH = 7;
@@ -21,8 +40,6 @@ const UNIT_WIDTH = 7;
 /** Window colours, and the light they give at night: warm everywhere, offices included. */
 const WINDOW_LIGHT = new Map<number, number>([
   [0x2b3440, 0xffd27a],
-  [OCCUPIED_BAND, 0xffdf99],
-  [OCCUPIED_GLASS, 0xf2c96a],
 ]);
 const GARAGE_WIDTH = 8;
 
@@ -39,7 +56,56 @@ export class BuildingKit {
   private grass = flatMaterial(0x7fa86a);
   private concrete = flatMaterial(0xa3a59f);
   private paint = flatMaterial(0xf2f2ee);
-  private materials = new Map<number, MeshBasicMaterial[]>();
+  private drive = flatMaterial(0x45494f);
+  private materials = new Map<string, MeshBasicMaterial[]>();
+  /** Trees placed on the lot being made (see `tree`), planted together at the end (see `plantTrees`). */
+  private trees: { x: number; z: number; bush?: boolean }[] = [];
+  /** Leaves: white, shaded by face, each tree's colour set per instance; they sway (see `swayMaterial`). */
+  private leafMaterials = [0.86, 0.86, 1, 0.7, 0.7, 0.7].map((k) => swayMaterial(new Color(1, 1, 1).multiplyScalar(k)));
+
+  /** The building being made's details (see `model`): its colours, and its name for its sign. */
+  private details: BuildingDetails = {};
+  private signName = "";
+  private building: Building = "villa";
+  /** An upright unit square facing -z (a building's front), for name signs. */
+  private signPlane = new PlaneGeometry(1, 1).rotateY(Math.PI);
+
+  /** The building's chosen colour for `role`, or its usual `colour`. */
+  private colour(colour: number, role: "primary" | "secondary"): number {
+    return this.details.colors?.[role] ?? colour;
+  }
+
+  /**
+   * The building's name on a board `w` × `h`, centred on x, from height y, just in front of the
+   * wall at `front`: light lettering on its secondary colour (dark lettering on a light one).
+   * Not dimmed at night. Its texture and material are its own (`userData.own`), freed with it.
+   */
+  private sign(w: number, h: number, x: number, y: number, front: number): Mesh {
+    const canvas = document.createElement("canvas");
+    canvas.width = 512;
+    canvas.height = Math.max(64, Math.round((512 * h) / w));
+    const ctx = canvas.getContext("2d")!;
+    const back = new Color(this.colour(BUILDING_COLORS[this.building].secondary, "secondary"));
+    ctx.fillStyle = `#${back.getHexString()}`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const light = back.r * 0.3 + back.g * 0.59 + back.b * 0.11 > 0.55;
+    ctx.fillStyle = light ? "#1d232b" : "#fdf8ec";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    let size = canvas.height * 0.62;
+    ctx.font = `700 ${size}px system-ui, sans-serif`;
+    while (size > 10 && ctx.measureText(this.signName).width > canvas.width * 0.9) ctx.font = `700 ${(size *= 0.9)}px system-ui, sans-serif`;
+    ctx.fillText(this.signName, canvas.width / 2, canvas.height / 2);
+    const texture = new CanvasTexture(canvas);
+    texture.colorSpace = SRGBColorSpace;
+    const mesh = new Mesh(this.signPlane, new MeshBasicMaterial({ map: texture, toneMapped: false }));
+    mesh.scale.set(w, h, 1);
+    mesh.position.set(x, y + h / 2, front - 0.08);
+    mesh.renderOrder = BUILDING_ORDER;
+    mesh.userData.own = true;
+    return mesh;
+  }
+
   /** Picks which offices and flats are vacant: seeded per building (see `model`), so it's the same each time it's drawn. */
   private random = () => 0.5;
   /** Window materials, with their colours by day and lit at night. */
@@ -57,7 +123,11 @@ export class BuildingKit {
    * A model for `lot`'s building, placed and turned so its front faces the road. In its own frame,
    * x runs along the road, z away from it (the front is at z = -depth/2), y is up.
    */
-  model(lot: Lot): Group {
+  model(lot: Lot, details: BuildingDetails = {}): Group {
+    this.trees = [];
+    this.details = details;
+    this.signName = details.name ?? "";
+    this.building = lot.building;
     const group = new Group();
     // Local +z is the right of local +x: point x along the road the way that puts z towards the building.
     const right = { x: -lot.along.y, y: lot.along.x };
@@ -86,22 +156,48 @@ export class BuildingKit {
     body.position.set(bx, 0, bz);
     // Homes: a garage door where the driveway ends (in the house's own frame).
     for (const mesh of this.parts(building, bl, bd, doorX - bx)) body.add(mesh);
+    // Levels gained upward: the same building, taller.
+    body.scale.y = 1 + 0.3 * tallSteps(details);
     group.add(body);
 
     if (home) {
       const yard = -d / 2 - LOT_SETBACK / 2;
       for (let x = plot.left + TREE_SPACING / 2; x <= plot.right - 2; x += TREE_SPACING) {
-        if (Math.abs(x - doorX) >= DRIVEWAY_WIDTH / 2 + 3) group.add(...this.tree(x, yard));
+        if (Math.abs(x - doorX) < DRIVEWAY_WIDTH / 2 + 3) continue;
+        // Flats get low bushes along the front rather than trees.
+        if (building === "apartment") this.bush(x - TREE_SPACING / 4, yard), this.bush(x + TREE_SPACING / 4, yard);
+        else this.tree(x, yard);
       }
       for (const [from, to] of [[plot.left, bx - bl / 2], [bx + bl / 2, plot.right]]) {
         if (to - from < 5) continue;
         // From behind where the villa's side door is.
-        for (let z = -d / 2 + 10; z <= d / 2 - 2; z += TREE_SPACING) group.add(...this.tree((from + to) / 2, z));
+        for (let z = -d / 2 + 10; z <= d / 2 - 2; z += TREE_SPACING) this.tree((from + to) / 2, z);
+      }
+    } else if (park!.bays[0]?.underground) {
+      // A plaza in front, with trees and benches either side of the drive to the garage entrance.
+      group.add(this.flat(this.drive, FlatLayer.asphalt, doorX, -d / 2 + PLAZA_DEPTH / 2, DRIVEWAY_WIDTH, PLAZA_DEPTH));
+      const z = -d / 2 + PLAZA_DEPTH / 2;
+      for (let x = -l / 2 + 4, i = 0; x <= l / 2 - 3; x += PLAZA_SPACING / 2, i++) {
+        if (Math.abs(x - doorX) < DRIVEWAY_WIDTH / 2 + 3) continue;
+        if (i % 2 === 0) this.tree(x, z);
+        else group.add(...this.bench(x, z));
       }
     } else {
       // The bays cars park in (see Simulation), between painted lines.
       for (const { a, z } of park!.lines) group.add(this.flat(this.paint, FlatLayer.markings, a * flip, z, 0.5, PARKING_DEPTH - 1));
+      // The large shop: two trees and a bench in the front yard, clear of the entrance and the side driveway.
+      if (park!.path !== null) {
+        const yard = -d / 2 - LOT_SETBACK / 2;
+        // At the ends of the front, clear of the shop's entrance in the middle.
+        const { a0, a1 } = at!;
+        if (building === "largeShop") {
+          this.tree((a0 + 4) * flip, yard);
+          this.tree((a1 - 4) * flip, yard);
+          for (const mesh of this.bench(a0 + 11, yard)) mesh.position.x *= flip, group.add(mesh);
+        }
+      }
     }
+    group.add(...this.plantTrees());
     return group;
   }
 
@@ -124,20 +220,112 @@ export class BuildingKit {
     ];
   }
 
-  /** A small low-poly tree: a trunk and two stacked blocks of leaves. */
-  private tree(x: number, z: number): Mesh[] {
+  /**
+   * Air-handling units on a roof `l` × `d` at height `y`, one at each spot (fractions of the roof
+   * from its middle): a grey box with a dark fan grille on top and a duct running off it.
+   */
+  private roofUnits(l: number, d: number, y: number, spots: [number, number][]): Mesh[] {
+    return spots.flatMap(([u, v]) => {
+      const x = u * l;
+      const z = v * d;
+      return [
+        this.block(0xb8bcc0, 5, 2.6, 3.6, x, y, z),
+        this.block(0x34373c, 2.6, 0.25, 2.6, x + 0.8, y + 2.6, z),
+        this.block(0x9da2a7, 1.2, 1.2, 6, x - 1.4, y + 0.4, z + 4.4),
+      ];
+    });
+  }
+
+  /** A park bench facing the road, centred on (x, z): a seat, a back, and two legs. */
+  private bench(x: number, z: number): Mesh[] {
     return [
-      this.block(0x6b4a33, 1, 3, 1, x, 0, z),
-      this.block(0x3f7a3a, 5, 4.5, 5, x, 3, z),
-      this.block(0x4f9446, 3.2, 2.5, 3.2, x, 7.5, z),
+      this.block(0x8b5a2b, 5, 0.5, 1.6, x, 1.2, z),
+      this.block(0x8b5a2b, 5, 1.4, 0.4, x, 1.7, z + 0.8),
+      this.block(0x4a4d52, 0.4, 1.2, 1.4, x - 2, 0, z),
+      this.block(0x4a4d52, 0.4, 1.2, 1.4, x + 2, 0, z),
     ];
+  }
+
+  /** The way into an underground car park, in the front wall at `front`, centred on x: a dark opening under a concrete lintel. */
+  private garageEntrance(x: number, front: number): Mesh[] {
+    // Stands proud of the wall, its window bands and lit panels, so the faces don't flicker.
+    return [this.block(0x15171b, 10, 5, 1, x, 0, front - 0.5), this.block(0x8a8f96, 11, 1, 1.2, x, 5, front - 0.6)];
+  }
+
+  /** A small low-poly tree: a trunk and two stacked blocks of leaves. */
+  private tree(x: number, z: number): void {
+    this.trees.push({ x, z });
+  }
+
+  /** A low bush at (x, z), planted with the trees. */
+  private bush(x: number, z: number): void {
+    this.trees.push({ x, z, bush: true });
+  }
+
+  /**
+   * The lot's trees (see `tree`), each a kind picked at random (round broadleaf, stacked conifer,
+   * tall poplar) at a random size, turned a little, its leaves somewhere from deep green to autumn
+   * red. Trunks and leaves are one instanced mesh each; the leaves sway in the wind (see `swayUniforms`).
+   */
+  private plantTrees(): Mesh[] {
+    if (!this.trees.length) return [];
+    const trunks: Matrix4[] = [];
+    const leaves: { m: Matrix4; colour: number }[] = [];
+    const up = new Vector3(0, 1, 0);
+    for (const { x, z, bush } of this.trees) {
+      const kind = this.random();
+      const size = 0.8 + this.random() * 0.5;
+      const turn = new Quaternion().setFromAxisAngle(up, this.random() * Math.PI);
+      const colour = LEAVES[Math.floor(this.random() * LEAVES.length)];
+      const box = (w: number, h: number, y: number, list: Matrix4[] | null, shade = colour) => {
+        const m = new Matrix4().compose(new Vector3(x, y + h / 2, z), turn, new Vector3(w, h, w));
+        if (list) list.push(m);
+        else leaves.push({ m, colour: shade });
+      };
+      if (bush) {
+        // A low, rounded shrub: two blocks, no trunk.
+        box(2.6 * size, 1.4 * size, 0, null);
+        box(1.8 * size, 0.8 * size, 1.3 * size, null, shade(colour, 1.1));
+      } else if (kind < 0.5) {
+        // Broadleaf: a trunk, a wide crown and a smaller top.
+        const trunk = (2.5 + this.random() * 1.5) * size;
+        box(1, trunk, 0, trunks);
+        box(5.2 * size, 4.6 * size, trunk, null);
+        box(3.4 * size, 2.6 * size, trunk + 4.4 * size, null, shade(colour, 1.12));
+      } else if (kind < 0.8) {
+        // Conifer: always green, tiers narrowing upwards.
+        const green = CONIFER[Math.floor(this.random() * CONIFER.length)];
+        box(0.9, 2 * size, 0, trunks);
+        [5, 3.8, 2.6, 1.4].forEach((w, i) => box(w * size, 2.4 * size, (1.6 + i * 2.1) * size, null, shade(green, 1 + i * 0.05)));
+      } else {
+        // Poplar: tall and narrow.
+        box(0.8, 2 * size, 0, trunks);
+        box(2.6 * size, 9 * size, 1.6 * size, null);
+      }
+    }
+    const trunkMesh = new InstancedMesh(this.box, this.shaded(0x6b4a33, "box"), Math.max(1, trunks.length));
+    trunkMesh.count = trunks.length;
+    trunks.forEach((m, i) => trunkMesh.setMatrixAt(i, m));
+    const leafMesh = new InstancedMesh(this.box, this.leafMaterials, leaves.length);
+    leaves.forEach(({ m, colour }, i) => {
+      leafMesh.setMatrixAt(i, m);
+      leafMesh.setColorAt(i, new Color(colour));
+    });
+    for (const mesh of [trunkMesh, leafMesh]) {
+      mesh.renderOrder = BUILDING_ORDER;
+      mesh.castShadow = true;
+      mesh.computeBoundingSphere();
+    }
+    return [trunkMesh, leafMesh];
   }
 
   dispose(): void {
     this.box.dispose();
     this.roof.dispose();
     this.plane.dispose();
-    for (const m of [this.grass, this.concrete, this.paint]) m.dispose();
+    this.signPlane.dispose();
+    for (const m of this.leafMaterials) m.dispose();
+    for (const m of [this.grass, this.concrete, this.paint, this.drive]) m.dispose();
     for (const set of this.materials.values()) for (const m of set) m.dispose();
   }
 
@@ -152,8 +340,8 @@ export class BuildingKit {
         const window = away * l * 0.3;
         return [
           this.block(0x8a8f96, l + 2, 0.6, d + 2, 0, 0, 0),
-          this.block(0xf2ede4, l, 10, d, 0, 0.6, 0),
-          this.gable(0xb5543c, l + 2, 7, d + 3, 0, 10.6, 0),
+          this.block(this.colour(0xf2ede4, "primary"), l, 10, d, 0, 0.6, 0),
+          this.gable(this.colour(0xb5543c, "secondary"), l + 2, 7, d + 3, 0, 10.6, 0),
           this.block(0x9b4a36, 3, 6, 3, l * 0.25, 12, d * 0.15),
           ...this.garageDoor(garageX, 0.6, front),
           this.block(0x2b3440, 6, 3.5, 0.6, window, 4, front - 0.3),
@@ -168,14 +356,15 @@ export class BuildingKit {
       }
       case "townhouse": {
         const unit = l / 3;
-        const colours = [0xb86b4b, 0xe8dcc6, 0x8f9aa3];
+        const colours = [0xb86b4b, this.colour(0xe8dcc6, "primary"), 0x8f9aa3];
+        const roof = this.colour(0x4a4f57, "secondary");
         return colours.flatMap((colour, i) => {
           const x = -l / 2 + unit * (i + 0.5);
           // The unit the driveway leads to has the garage instead of a front door.
           const door = Math.abs(garageX - x) < unit / 2 ? this.garageDoor(garageX, 0, front) : [this.block(0x5a3e2b, 3.5, 6, 0.6, x - unit * 0.2, 0, front - 0.3)];
           return [
             this.block(colour, unit - 0.4, 16, d, x, 0, 0),
-            this.gable(0x4a4f57, unit, 6, d + 2, x, 16, 0),
+            this.gable(roof, unit, 6, d + 2, x, 16, 0),
             ...door,
             this.block(0x2b3440, 4, 3.5, 0.6, x + unit * 0.2, 9.5, front - 0.3),
             // Back windows, downstairs and up.
@@ -193,35 +382,48 @@ export class BuildingKit {
         const storey = 7.5;
         const height = floors * storey;
         return [
-          this.block(0xc9c4ba, l, height, d, 0, 0, 0),
+          this.block(this.colour(0xc9c4ba, "primary"), l, height, d, 0, 0, 0),
           ...Array.from({ length: floors }, (_, i) => this.block(0x2e3a48, l + 0.6, 3, d + 0.6, 0, i * storey + 3, 0)),
-          this.occupied(OCCUPIED_BAND, OCCUPANCY.flat, l + 0.6, d + 0.6, floors, (i) => i * storey + 3.2, 2.6),
-          this.block(0xa9a49a, l + 1, 1, d + 1, 0, height, 0),
-          this.block(0xb3aea4, l * 0.35, 5, d * 0.4, l * 0.15, height + 1, 0),
-          ...this.garageDoor(garageX, 0, front),
+          this.occupied(0x2e3a48, OCCUPIED_BAND_LIGHT, OCCUPANCY.flat, l + 0.6, d + 0.6, floors, (i) => i * storey + 3.2, 2.6),
+          this.block(this.colour(0xa9a49a, "secondary"), l + 1, 1, d + 1, 0, height, 0),
+          this.block(this.colour(0xb3aea4, "secondary"), l * 0.35, 5, d * 0.4, l * 0.15, height + 1, 0),
+          ...this.roofUnits(l, d, height + 1, [[-0.3, -0.25], [-0.3, 0.25]]),
+          ...this.garageEntrance(garageX, front),
         ];
       }
       case "smallShop":
         return [
-          this.block(0xe9e4d8, l, 10, d, 0, 0, 0),
+          this.block(this.colour(0xe9e4d8, "primary"), l, 10, d, 0, 0, 0),
           this.block(0x2b3440, l * 0.7, 5, 0.6, 0, 1, front - 0.3),
-          this.block(0x2a9d8f, l, 0.8, 5, 0, 7, front - 2.5),
+          this.block(this.colour(0x2a9d8f, "secondary"), l, 0.8, 5, 0, 7, front - 2.5),
           this.block(0xe76f51, l * 0.6, 3, 0.8, 0, 10, front + 1),
+          this.sign(l * 0.6, 3, 0, 10, front + 0.55),
+          ...this.roofUnits(l, d, 10, [[0, 0.2]]),
         ];
       case "largeShop":
         return [
-          this.block(0xd8d4cc, l, 14, d, 0, 0, 0),
-          this.block(0xe63946, l * 0.8, 4, 1, 0, 9, front - 0.5),
+          this.block(this.colour(0xd8d4cc, "primary"), l, 14, d, 0, 0, 0),
+          this.block(this.colour(0xe63946, "secondary"), l * 0.8, 4, 1, 0, 9, front - 0.5),
+          this.sign(l * 0.6, 3.4, 0, 9.3, front - 1),
           this.block(0x2b3440, l * 0.3, 6, 0.6, 0, 0, front - 0.3),
           this.block(0x9a968e, 8, 2.5, 6, -l * 0.25, 14, d * 0.1),
           this.block(0x9a968e, 8, 2.5, 6, l * 0.2, 14, -d * 0.15),
         ];
       case "smallOffice":
-        return this.glassStack(l, d, 4, 7);
+        return [
+          ...this.glassStack(l, d, 4, 7),
+          ...this.garageEntrance(garage, front),
+          this.sign(Math.min(l * 0.7, 20), 2.4, garage, 7.4, front - 0.3),
+          ...this.roofUnits(l, d, 28.6, [[-0.25, 0], [0.25, 0.2]]),
+        ];
       case "largeOffice":
         return [
           ...this.glassStack(l, d, 11, 7),
+          ...this.garageEntrance(garage, front),
+          this.sign(Math.min(l * 0.6, 24), 2.6, garage, 7.3, front - 0.3),
           ...this.glassStack(l * 0.65, d * 0.65, 2, 6, 77),
+          // On the lower roof, round the top floors.
+          ...this.roofUnits(l, d, 77.6, [[-0.41, -0.41], [0.41, 0.41], [0.41, -0.41]]),
           this.block(0x8a939c, 2, 8, 2, 0, 89, 0),
         ];
     }
@@ -233,12 +435,14 @@ export class BuildingKit {
    */
   private glassStack(l: number, d: number, floors: number, storey: number, base = 0): Mesh[] {
     const height = floors * storey;
+    const glass = this.colour(0x4f7ea8, "primary");
+    const frame = this.colour(0xd6dde3, "secondary");
     return [
-      this.block(0x4f7ea8, l, height, d, 0, base, 0),
-      this.occupied(OCCUPIED_GLASS, OCCUPANCY.office, l, d, floors, (i) => base + i * storey + 0.3, storey - 2.1),
-      ...Array.from({ length: floors }, (_, i) => this.block(0xd6dde3, l + 0.4, 1, d + 0.4, 0, base + (i + 1) * storey - 1.5, 0)),
+      this.block(glass, l, height, d, 0, base, 0),
+      this.occupied(glass, OCCUPIED_GLASS_LIGHT, OCCUPANCY.office, l, d, floors, (i) => base + i * storey + 0.3, storey - 2.1),
+      ...Array.from({ length: floors }, (_, i) => this.block(frame, l + 0.4, 1, d + 0.4, 0, base + (i + 1) * storey - 1.5, 0)),
       // A light roof slab on top (its underside, level with the glass's roof, faces down and isn't drawn).
-      this.block(0xd6dde3, l + 0.4, 0.6, d + 0.4, 0, base + height, 0),
+      this.block(frame, l + 0.4, 0.6, d + 0.4, 0, base + height, 0),
     ];
   }
 
@@ -247,7 +451,7 @@ export class BuildingKit {
    * `floors` floors (the panel from height `bottom(floor)`, `height` tall), each wall split into
    * units about UNIT_WIDTH wide, a share `occupancy` of them occupied. One instanced mesh for the lot.
    */
-  private occupied(colour: number, occupancy: number, l: number, d: number, floors: number, bottom: (floor: number) => number, height: number): Mesh {
+  private occupied(colour: number, light: number, occupancy: number, l: number, d: number, floors: number, bottom: (floor: number) => number, height: number): Mesh {
     const panels: Matrix4[] = [];
     const proud = 0.12;
     for (let floor = 0; floor < floors; floor++) {
@@ -268,7 +472,7 @@ export class BuildingKit {
         }
       }
     }
-    const mesh = new InstancedMesh(this.box, this.shaded(colour, "box"), Math.max(1, panels.length));
+    const mesh = new InstancedMesh(this.box, this.shaded(colour, "box", light), Math.max(1, panels.length));
     panels.forEach((m, i) => mesh.setMatrixAt(i, m));
     mesh.count = panels.length;
     mesh.renderOrder = BUILDING_ORDER;
@@ -299,11 +503,11 @@ export class BuildingKit {
    * Materials faking light from above and one side. Boxes, by face (+x, -x, +y, -y, +z, -z): the
    * ends mid-tone, the top lit, the front and back a step darker. Roofs: the two slopes, then the gable ends.
    */
-  private shaded(colour: number, shape: "box" | "roof"): MeshBasicMaterial[] {
-    const key = colour * 2 + (shape === "roof" ? 1 : 0);
+  private shaded(colour: number, shape: "box" | "roof", light?: number): MeshBasicMaterial[] {
+    const lit = light ?? WINDOW_LIGHT.get(colour);
+    const key = `${colour}:${shape}:${lit ?? ""}`;
     let set = this.materials.get(key);
     if (!set) {
-      const lit = WINDOW_LIGHT.get(colour);
       const tone = (k: number) => {
         // Windows aren't dimmed with the scene: they light up at night (see setLights).
         const material = new MeshBasicMaterial({ color: new Color(colour).multiplyScalar(k), toneMapped: !lit });
@@ -336,4 +540,38 @@ function gableGeometry(): BufferGeometry {
   geometry.addGroup(6, 6, 1);
   geometry.addGroup(12, 6, 2);
   return geometry;
+}
+
+/**
+ * Shared by every tree's leaves (see `swayMaterial`): the time, and how hard the wind blows them.
+ * The engine sets both each frame.
+ */
+export const swayUniforms = { swayTime: { value: 0 }, swayStrength: { value: 0.03 } };
+
+/**
+ * A leaf material that sways: the top of each block of leaves moves more than its bottom, each
+ * tree in its own rhythm (by where it stands). Keeps the scene's own shader changes (tint, cloud
+ * shadows) by running them first.
+ */
+function swayMaterial(color: Color): MeshBasicMaterial {
+  const material = new MeshBasicMaterial({ color });
+  const base = MeshBasicMaterial.prototype.onBeforeCompile;
+  material.onBeforeCompile = function (shader, renderer) {
+    base.call(this, shader, renderer);
+    Object.assign(shader.uniforms, swayUniforms);
+    shader.vertexShader = shader.vertexShader
+      .replace("void main() {", "uniform float swayTime;\nuniform float swayStrength;\nvoid main() {")
+      .replace(
+        "#include <begin_vertex>",
+        `#include <begin_vertex>
+        #ifdef USE_INSTANCING
+          float swayPhase = instanceMatrix[3].x * 0.13 + instanceMatrix[3].z * 0.17;
+          float swayHeight = position.y + 0.5;
+          transformed.x += sin(swayTime * 1.7 + swayPhase) * swayStrength * swayHeight;
+          transformed.z += sin(swayTime * 1.3 + swayPhase * 1.4) * swayStrength * 0.6 * swayHeight;
+        #endif`,
+      );
+  };
+  material.customProgramCacheKey = () => "leaves-sway";
+  return material;
 }

@@ -1,9 +1,9 @@
-import { effectiveControl, roundaboutShape, signalApproaches, signalLights, type JunctionControl } from "./junction";
+import { effectiveControl, minorRoads, roundaboutShape, signalApproaches, signalLights, type JunctionControl } from "./junction";
 import type { NodeId, RoadGraph, RoadSegment } from "./roadGraph";
 import { CRUISE_SPEED, findRoute, type Route } from "./routing";
 import { LANE_WIDTH } from "./roadSpec";
 import { connectionsAt, hasLaneConnector, laneOffsets, lanesInnerToKerb, turnAt, type Turn } from "./lanes";
-import { carPark, DRIVEWAY_BLEND } from "./terminal";
+import { carPark, DRIVEWAY_BLEND, headsTo } from "./terminal";
 import { legAt, legLength, TrackBuilder, type Leg } from "./track";
 
 /** Fixed simulation timestep in seconds, so traffic logic never sees a variable dt. */
@@ -29,6 +29,8 @@ const SIGNAL_AHEAD = 60;
 /** On green, turning cars give way to priority traffic this many seconds from the junction. */
 const YIELD_HORIZON = 3;
 
+/** Pulling out of a driveway, the gap (in seconds) wanted before the next car along the road gets there. */
+const GIVE_WAY_TIME = 2.5;
 /** Top speed in a car park bay (driving in or backing out). */
 const PARK_SPEED = 8;
 /** How long a car stays parked at a shop or office, in seconds: somewhere between these. */
@@ -43,7 +45,7 @@ export const CAR_TYPES = ["sedan", "hatch", "suv"] as const;
 export type CarType = (typeof CAR_TYPES)[number];
 
 /** How entry to a leg is controlled: a junction's rule, "merge" for a lane change, null at a plain bend where two roads meet. */
-type Rule = JunctionControl | "roundabout" | "merge" | null;
+type Rule = JunctionControl | "roundabout" | "merge" | "priority" | null;
 
 interface Movement extends Leg {
   rule: Rule;
@@ -111,6 +113,8 @@ export class Simulation {
   time = 0;
   ticks = 0;
   cars: Car[] = [];
+  /** Buildings that have served enough to level up (see `levelUp`), for the engine to grow. */
+  levelUps: NodeId[] = [];
   /** Cars that have reached their sink (parked, unless `parking` is off). */
   delivered = 0;
   /**
@@ -180,14 +184,18 @@ export class Simulation {
       if (next?.rule && !car.cleared) car.s = Math.min(car.s, Math.max(before, legLength(car.legs[car.leg]) - CAR_LENGTH / 2));
       while (car.s >= legLength(car.legs[car.leg])) {
         if (car.leg === car.legs.length - 1) {
-          if (car.parking && car.legs[car.leg].key.startsWith("bay:")) {
+          if (car.parking) {
             // In its bay: stays a while.
             car.s = legLength(car.legs[car.leg]);
             car.v = 0;
             car.leaveAt = this.time + PARK_MIN + this.random() * (PARK_MAX - PARK_MIN);
             this.delivered++;
+            if (this.graph.recordVisit(car.parking.sink)) this.levelUps.push(car.parking.sink);
           } else {
             arrived.add(car);
+            // Home again: one more trip for its home.
+            const end = car.legs[car.leg];
+            if (this.parking && end.key === `in:${car.home}` && this.graph.recordVisit(car.home)) this.levelUps.push(car.home);
             // At its sink (with parking on, cars only vanish once home again).
             if (!car.parking && !this.parking) this.delivered++;
           }
@@ -252,7 +260,7 @@ export class Simulation {
   /** Each enabled source releases cars at its rate, when its road end is clear. */
   private spawn(dt: number): void {
     const terminals = this.graph.allTerminals();
-    const sinks = [...terminals].filter(([, t]) => t.kind === "sink").map(([id]) => id);
+    const sinks = [...terminals].filter(([, t]) => t.kind === "sink");
     for (const [source, t] of terminals) {
       if (t.kind !== "source" || !t.enabled || t.rate <= 0) continue;
       // A source that can't release a car keeps one waiting, rather than a growing backlog.
@@ -260,7 +268,7 @@ export class Simulation {
       this.due.set(source, due);
       if (due < 1) continue;
       // Only to shops and offices with a free bay: when they're all full, the source waits.
-      const reachable = (t.sinks.length ? t.sinks : sinks).filter(
+      const reachable = sinks.filter(([id, s]) => headsTo(t, id, s.building)).map(([id]) => id).filter(
         (sink) => sink !== source && (!this.parking || this.freeBay(sink) !== null) && this.route(source, sink),
       );
       if (!reachable.length) continue;
@@ -305,7 +313,17 @@ export class Simulation {
     const { sink, bay } = car.parking!;
     const route = this.graph.terminal(car.home)?.kind === "source" ? this.route(sink, car.home) : null;
     if (!route) return false;
-    Object.assign(car, { legs: this.legsFor(route, { leaveFrom: bay }), leg: 0, s: 0, v: 0, leaveAt: null, cleared: false, arrival: null, stopped: 0 });
+    const legs = this.legsFor(route, { leaveFrom: bay });
+    // Out of an underground or rear car park, one at a time: through the entrance, or out of a bay and up the side driveway.
+    const leaving = (key: string, reverse?: boolean) =>
+      key === `exit:${sink}` || key === `path:${sink}` || (key.startsWith(`bay:${sink}:`) && !reverse);
+    if (leaving(legs[0].key) && this.cars.some((c) => c !== car && c.leaveAt === null && leaving(c.legs[c.leg].key, c.legs[c.leg].reverse))) {
+      car.leaveAt = this.time + 1;
+      return true;
+    }
+    Object.assign(car, { legs, leg: 0, s: 0, v: 0, leaveAt: null, cleared: false, arrival: null, stopped: 0 });
+    // Out of an underground car park (no backing out of a bay): its space is free once it sets off.
+    if (!legs.some((l) => l.reverse)) car.parking = null;
     return true;
   }
 
@@ -395,8 +413,17 @@ export class Simulation {
       const into = pieces[pieces.length - 1];
       const junction = this.tracks.junctionLeg(node, into, roads[i + 1][0], exitLanes[i], entryLanes[i + 1], turns[i]!);
       const settings = graph.junction(node);
+      const control = effectiveControl(settings);
+      // Under stop or give way, the main road's traffic has priority; the others stop or give way to it.
+      const minor = control === "stop" || control === "yield" ? minorRoads(graph, node) : null;
       const rule: Rule =
-        graph.segmentsAt(node).length < 3 ? null : settings.roundabout ? "roundabout" : effectiveControl(settings);
+        graph.segmentsAt(node).length < 3
+          ? null
+          : settings.roundabout
+            ? "roundabout"
+            : minor && !minor.has(segments[i].id)
+              ? "priority"
+              : control;
       const movement: Movement = { ...junction, rule };
       if (junction.ring) {
         movement.exit = this.tracks.exitNumber(node, segments[i], segments[i + 1]);
@@ -452,6 +479,8 @@ export class Simulation {
   private byLane(): Map<string, Car[]> {
     const lanes = new Map<string, Car[]>();
     for (const car of this.cars) {
+      // Parked underground: out of everyone's way.
+      if (car.leaveAt !== null && car.legs[car.leg].underground) continue;
       const key = car.legs[car.leg].key;
       const list = lanes.get(key);
       if (list) list.push(car);
@@ -611,10 +640,24 @@ export class Simulation {
       return !approaching.some((c) => this.tracks.conflicts(next, c.legs[c.leg + 1]));
     }
 
-    // All-way stop, give way or none: first come, first served among conflicting movements.
+    // On the main road: through traffic first; a turning car lets conflicting traffic going on
+    // ahead (then turning kerb-side) on the main road come past.
+    const rank = (turn: Turn | undefined) => (turn === "straight" ? 2 : turn === "kerb" ? 1 : 0);
+    const coming = (c: Car) => {
+      const upcoming = c.legs[c.leg + 1];
+      return c !== car && upcoming?.node === next.node && upcoming.rule === "priority" && legLength(c.legs[c.leg]) - c.s < c.v * YIELD_HORIZON + 10;
+    };
+    if (next.rule === "priority") {
+      return !this.cars.some((c) => coming(c) && rank(c.legs[c.leg + 1].turn) > rank(next.turn) && this.tracks.conflicts(next, c.legs[c.leg + 1]));
+    }
+    // Stop or give way: wait for the main road to be clear of anyone it would cross or join.
     if (next.rule === "stop" && car.stopped < STOP_HOLD) return false;
+    if ((next.rule === "stop" || next.rule === "yield") && this.cars.some((c) => coming(c) && this.tracks.conflicts(next, c.legs[c.leg + 1]))) {
+      return false;
+    }
+    // Then first come, first served among the side roads' conflicting movements (and all-way with no control).
     const mine = car.arrival ?? this.time;
-    return !waiting.some(
+    return !waiting.filter((c) => c.legs[c.leg + 1].rule !== "priority").some(
       (c) =>
         this.tracks.conflicts(next, c.legs[c.leg + 1]) &&
         (c.arrival! < mine || (c.arrival === mine && c.id < car.id)),
@@ -644,8 +687,17 @@ export class Simulation {
       } else if (leg.node !== undefined && leg.outKey === change.outKey) {
         // Still in the junction behind, about to come out into the target lane: count it from there.
         position = other.legs[other.leg + 1].from - (legLength(leg) - other.s);
+      } else if (door !== null) {
+        // Seen from a driveway: a car further back along the road, a leg or two before the lane joined.
+        let ahead = legLength(leg) - other.s;
+        let i = other.leg + 1;
+        while (i < other.legs.length && i <= other.leg + 3 && other.legs[i].key !== change.outKey) ahead += legLength(other.legs[i++]);
+        if (other.legs[i]?.key !== change.outKey) continue;
+        position = other.legs[i].from - ahead;
       } else continue;
-      const behind = join - (other.v * HEADWAY * 1.5 + CAR_LENGTH + MIN_GAP * 2);
+      // Out of a driveway, give way: road traffic keeps going, so wait for a gap it won't have to slow for.
+      const gap = door !== null ? other.v * GIVE_WAY_TIME + CAR_LENGTH : other.v * HEADWAY * 1.5 + CAR_LENGTH;
+      const behind = join - (gap + MIN_GAP * 2);
       if (position > behind && position < join + CAR_LENGTH + MIN_GAP * 2) return false;
     }
     return true;

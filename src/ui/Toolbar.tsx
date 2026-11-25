@@ -30,7 +30,7 @@ import { MAX_LANES } from "../core/roadSpec";
 import { useEffect, type ReactNode } from "react";
 import { gameStore, isSnapping, useGame, type SimSpeed, type ToolId } from "../state/store";
 import type { BulldozeMode, RoadMode } from "../tools/Tool";
-import { BUILDING_LABEL, isSourceBuilding, SINK_BUILDINGS, SOURCE_BUILDINGS, SOURCE_RATE, type Building } from "../core/terminal";
+import { BUILDING_LABEL, isSourceBuilding, SINK_BUILDINGS, SOURCE_BUILDINGS, SOURCE_RATE, SOURCE_RATE_MAX, type Building } from "../core/terminal";
 import { IconButton, keepFocusOnGame, Panel, PanelButton, PanelDivider } from "./Panel";
 
 const TOOLS: { id: ToolId; label: string; key: string; icon: LucideIcon }[] = [
@@ -170,7 +170,7 @@ function TrafficOptions() {
   const button = (b: Building) => {
     const Icon = BUILDING_ICON[b];
     const label = isSourceBuilding(b)
-      ? `${BUILDING_LABEL[b]}: ${SOURCE_RATE[b]} car${SOURCE_RATE[b] === 1 ? "" : "s"} a minute`
+      ? `${BUILDING_LABEL[b]}: ${SOURCE_RATE[b]}–${SOURCE_RATE_MAX[b]} cars a minute, rising as it levels up`
       : `${BUILDING_LABEL[b]}: cars head here`;
     return (
       <IconButton key={b} label={label} pressed={mode === b} onClick={() => gameStore.getState().setTrafficMode(b)}>
