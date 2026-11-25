@@ -20,7 +20,7 @@ export const BUILDING_COLORS: Record<Building, { primary: number; secondary: num
 const HOME_SHARE = 0.7;
 const TREE_SPACING = 9;
 /** Leaf colours: mostly greens, some turning yellow and orange, the odd red. Conifers stay green. */
-const LEAVES = [0x3f7a3a, 0x4f9446, 0x5c8f3a, 0x3b6e35, 0x6b9a3e, 0x4a8a44, 0x7fa53f, 0xb5a03a, 0xc98a2e, 0xa8432f];
+export const LEAVES = [0x3f7a3a, 0x4f9446, 0x5c8f3a, 0x3b6e35, 0x6b9a3e, 0x4a8a44, 0x7fa53f, 0xb5a03a, 0xc98a2e, 0xa8432f];
 const CONIFER = [0x2f5f34, 0x355e2e, 0x2a5236, 0x3d6b3a];
 /** `colour` lightened (k > 1) or darkened (k < 1). */
 const shade = (colour: number, k: number) => new Color(colour).multiplyScalar(k).getHex();
@@ -553,7 +553,7 @@ export const swayUniforms = { swayTime: { value: 0 }, swayStrength: { value: 0.0
  * tree in its own rhythm (by where it stands). Keeps the scene's own shader changes (tint, cloud
  * shadows) by running them first.
  */
-function swayMaterial(color: Color): MeshBasicMaterial {
+export function swayMaterial(color: Color): MeshBasicMaterial {
   const material = new MeshBasicMaterial({ color });
   const base = MeshBasicMaterial.prototype.onBeforeCompile;
   material.onBeforeCompile = function (shader, renderer) {

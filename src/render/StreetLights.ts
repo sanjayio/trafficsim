@@ -12,7 +12,8 @@ import {
   Vector3,
 } from "three";
 import type { RoadGraph } from "../core/roadGraph";
-import { carriagewayWidth, FOOTPATH_WIDTH, roadWidth } from "../core/roadSpec";
+import { carriagewayWidth, FOOTPATH_WIDTH, hasTrees, roadWidth } from "../core/roadSpec";
+import { LEAVES, swayMaterial } from "./buildings";
 
 /** Distance between lights along a road (they alternate sides), and clearance from a road's ends. */
 const SPACING = 55;
@@ -21,6 +22,9 @@ const END_CLEAR = 14;
 const POLE = { height: 16, width: 0.7 };
 const ARM = 4;
 const POOL = 30;
+/** Street trees: roughly how far apart along each footpath, and their square planters' size. */
+const TREE_SPACING = 24;
+const PLANTER = 4;
 const HEAD_COLOR = { day: 0x5c6168, night: 0xffe2a0 };
 /** Light pools draw after the road layers, before cars and buildings. */
 const POOL_ORDER = 15;
@@ -46,6 +50,10 @@ export class StreetLights extends Group {
     toneMapped: false,
   });
   private parts: InstancedMesh[] = [];
+  private planterMaterial = new MeshBasicMaterial({ color: 0x9a968e });
+  private soilMaterial = new MeshBasicMaterial({ color: 0x4a3a2a });
+  private trunkMaterial = new MeshBasicMaterial({ color: 0x6b4a33 });
+  private leafMaterial = swayMaterial(new Color(0.9, 0.9, 0.9));
   private dayHead = new Color(HEAD_COLOR.day);
   private nightHead = new Color(HEAD_COLOR.night);
 
@@ -63,6 +71,13 @@ export class StreetLights extends Group {
     const arms: Matrix4[] = [];
     const heads: Matrix4[] = [];
     const pools: Matrix4[] = [];
+    const planters: Matrix4[] = [];
+    const soil: Matrix4[] = [];
+    const trunks: Matrix4[] = [];
+    const leaves: { m: Matrix4; colour: number }[] = [];
+    // The same trees on a road each time it's drawn.
+    let seed = 1;
+    const random = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
     const q = new Quaternion();
     const up = new Vector3(0, 1, 0);
     const box = (x: number, y: number, z: number, sx: number, sy: number, sz: number, angle: number) =>
@@ -85,6 +100,29 @@ export class StreetLights extends Group {
       const count = Math.max(1, Math.floor((to - from) / SPACING) + 1);
       const step = count > 1 ? (to - from) / (count - 1) : 0;
       const kerb = roadWidth(segment.spec) / 2 - FOOTPATH_WIDTH / 2;
+      if (hasTrees(segment.spec)) {
+        seed = (segment.id * 7919) % 2147483646 || 1;
+        // Both sides, staggered between the lights (which stand at multiples of `step`).
+        const trees = Math.max(1, Math.floor((to - from) / TREE_SPACING));
+        for (let i = 0; i < trees; i++) {
+          const d = from + (to - from) * ((i + 0.5) / trees);
+          if (count > 1 && Math.abs(((d - from) % step) - step / 2) > step / 2 - 6) continue;
+          const f = path.at(d);
+          for (const side of [1, -1]) {
+            const at = { x: f.p.x + f.normal.x * side * kerb, y: f.p.y + f.normal.y * side * kerb };
+            if (onRoad(at)) continue;
+            const angle = Math.atan2(f.tangent.y, f.tangent.x);
+            planters.push(box(at.x, 0.4, at.y, PLANTER, 0.8, PLANTER, angle));
+            soil.push(box(at.x, 0.82, at.y, PLANTER - 0.8, 0.05, PLANTER - 0.8, angle));
+            const size = 0.8 + random() * 0.4;
+            const trunk = (3 + random()) * size;
+            trunks.push(box(at.x, trunk / 2, at.y, 0.8, trunk, 0.8, angle));
+            const colour = LEAVES[Math.floor(random() * 7)];
+            leaves.push({ m: box(at.x, trunk + 2.2 * size, at.y, 4.6 * size, 4.4 * size, 4.6 * size, angle + random()), colour });
+            leaves.push({ m: box(at.x, trunk + 5.2 * size, at.y, 3 * size, 2.4 * size, 3 * size, angle), colour });
+          }
+        }
+      }
       for (let i = 0; i < count; i++) {
         const f = path.at(count > 1 ? from + step * i : (from + to) / 2);
         const side = i % 2 === 0 ? 1 : -1;
@@ -116,7 +154,14 @@ export class StreetLights extends Group {
       make(this.box, this.poleMaterial, arms, LIGHT_ORDER, true),
       make(this.box, this.headMaterial, heads, LIGHT_ORDER, false),
       make(this.plane, this.poolMaterial, pools, POOL_ORDER, false),
+      make(this.box, this.planterMaterial, planters, LIGHT_ORDER, true),
+      make(this.box, this.soilMaterial, soil, LIGHT_ORDER, false),
+      make(this.box, this.trunkMaterial, trunks, LIGHT_ORDER, true),
     ];
+    // Leaves: coloured per tree, swaying with the others (see `swayUniforms`).
+    const leafMesh = make(this.box, this.leafMaterial, leaves.map((l) => l.m), LIGHT_ORDER, true);
+    leaves.forEach((l, i) => leafMesh.setColorAt(i, new Color(l.colour)));
+    this.parts.push(leafMesh);
   }
 
   /** Switches the lights on as `night` goes from 0 to 1; by day the heads look as the rest of the scene does at `exposure`. */
@@ -130,6 +175,7 @@ export class StreetLights extends Group {
     this.box.dispose();
     this.plane.dispose();
     this.poleMaterial.dispose();
+    for (const m of [this.planterMaterial, this.soilMaterial, this.trunkMaterial, this.leafMaterial]) m.dispose();
     this.headMaterial.dispose();
     this.poolMaterial.map?.dispose();
     this.poolMaterial.dispose();

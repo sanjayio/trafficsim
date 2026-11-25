@@ -8,6 +8,8 @@ export interface RoadSpec {
   median: boolean;
   /** Sidewalk on both sides. */
   footpath: boolean;
+  /** Trees in planters along the footpaths. Roads with footpaths only. */
+  trees?: boolean;
 }
 
 export const MAX_LANES = 3;
@@ -37,9 +39,14 @@ export function roadWidth(spec: RoadSpec): number {
   return carriagewayWidth(spec) + (spec.footpath ? 2 * FOOTPATH_WIDTH : 0);
 }
 
-/** Drops settings that don't apply (a median on a one-way road), so each road stores what it really is. */
+export function hasTrees(spec: RoadSpec): boolean {
+  return !!spec.trees && spec.footpath;
+}
+
+/** Drops settings that don't apply (a median on a one-way road, trees without footpaths), so each road stores what it really is. */
 export function normalizeRoadSpec(spec: RoadSpec): RoadSpec {
-  return { ...spec, median: hasMedian(spec) };
+  const { trees: _, ...rest } = spec;
+  return { ...rest, median: hasMedian(spec), ...(hasTrees(spec) ? { trees: true } : {}) };
 }
 
 /** Validates a spec read from a saved map. */
@@ -52,9 +59,10 @@ export function parseRoadSpec(raw: unknown): RoadSpec {
     s.lanes! > MAX_LANES ||
     typeof s.oneWay !== "boolean" ||
     typeof s.median !== "boolean" ||
-    typeof s.footpath !== "boolean"
+    typeof s.footpath !== "boolean" ||
+    (s.trees !== undefined && typeof s.trees !== "boolean")
   ) {
     throw new Error("Invalid road settings in map file");
   }
-  return normalizeRoadSpec({ lanes: s.lanes!, oneWay: s.oneWay, median: s.median, footpath: s.footpath });
+  return normalizeRoadSpec({ lanes: s.lanes!, oneWay: s.oneWay, median: s.median, footpath: s.footpath, trees: s.trees });
 }

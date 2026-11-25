@@ -12,6 +12,7 @@ import {
   ChevronRight,
   Equal,
   Footprints,
+  TreeDeciduous,
   Grid3x3,
   Magnet,
   MousePointer2,
@@ -258,6 +259,14 @@ function RoadOptions() {
       </IconButton>
       <IconButton label="Footpath" pressed={spec.footpath} onClick={() => update({ footpath: !spec.footpath })}>
         <Footprints size={ICON_SIZE} strokeWidth={2} aria-hidden />
+      </IconButton>
+      <IconButton
+        label={spec.footpath ? "Street trees" : "Street trees (roads with footpaths only)"}
+        pressed={!!spec.trees && spec.footpath}
+        disabled={!spec.footpath}
+        onClick={() => update({ trees: !spec.trees })}
+      >
+        <TreeDeciduous size={ICON_SIZE} strokeWidth={2} aria-hidden />
       </IconButton>
       <PanelDivider />
       {/* Holding Alt/Option switches guides off, and the button shows it. */}
