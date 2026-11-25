@@ -91,3 +91,12 @@ export function saveView(contents: string): void {
     // Nothing lost but the view.
   }
 }
+
+/** Keeps a kept map that couldn't be read, so the next save doesn't overwrite it (it may be readable by a fixed version). */
+export function keepUnreadableAutosave(contents: string): void {
+  try {
+    localStorage.setItem(`${AUTOSAVE_KEY}:unreadable`, contents);
+  } catch {
+    // Storage blocked or full: nothing more to do.
+  }
+}

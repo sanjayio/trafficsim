@@ -62,11 +62,6 @@ export const PLAZA_DEPTH = 16;
 /** With a car park behind, a front row of bays too only if it leaves the building at least this deep. */
 const MIN_BUILDING_DEPTH = 20;
 
-/** Each building's footprint, along the road and back from it: its tiles, less the front yard and a little space round it. */
-export const BUILDING_SIZE = Object.fromEntries(
-  Object.entries(BUILDING_TILES).map(([b, [w, d]]) => [b, { length: w * TILE - 4, depth: d * TILE - LOT_SETBACK - 2 }]),
-) as Record<Building, { length: number; depth: number }>;
-
 /**
  * A traffic source or sink, saved with the map: on a road's dead end, or anywhere along a road (a
  * node where two roads join, where its driveway meets the road). Along a road, `side` is which

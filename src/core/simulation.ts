@@ -3,7 +3,7 @@ import type { NodeId, RoadGraph, RoadSegment } from "./roadGraph";
 import { CRUISE_SPEED, findRoute, type Route } from "./routing";
 import { LANE_WIDTH } from "./roadSpec";
 import { connectionsAt, hasLaneConnector, laneOffsets, lanesInnerToKerb, turnAt, type Turn } from "./lanes";
-import { carPark, DRIVEWAY_BLEND, headsTo } from "./terminal";
+import { carPark, DRIVEWAY_BLEND, headsTo, type Terminal } from "./terminal";
 import { legAt, legLength, TrackBuilder, type Leg } from "./track";
 
 /** Fixed simulation timestep in seconds, so traffic logic never sees a variable dt. */
@@ -82,6 +82,11 @@ export interface Car {
   leaveAt: number | null;
 }
 
+/** A shop's or office's footprint: what its bays depend on. Null for a home or no building. */
+function lotKey(t: Terminal | undefined): string | null {
+  return t?.kind === "sink" ? `${t.building}:${t.side ?? ""}:${t.offset ?? ""}:${t.wide ?? 0}` : null;
+}
+
 /** Small seeded random generator (mulberry32), so runs can be repeated. */
 function seeded(seed: number): () => number {
   let a = seed >>> 0;
@@ -127,6 +132,10 @@ export class Simulation {
   parking = true;
 
   private tracks: TrackBuilder;
+  /** Each shop's and office's footprint when its bays were last handed out (see `lotKey`). */
+  private lotKeys = new Map<NodeId, string>();
+  /** Bays held at each shop or office, counted once a step (see `spawn`). */
+  private held = new Map<NodeId, Set<number>>();
   private routes = new Map<string, Route | null>();
   private due = new Map<NodeId, number>();
   private random: () => number;
@@ -144,10 +153,16 @@ export class Simulation {
     this.unsubscribe = graph.subscribe((e) => {
       this.routes.clear();
       if (e.type === "terminal-changed") {
-        // A shop or office removed or rebuilt: its bays (and cars in or heading for them) go too.
-        this.cars = this.cars.filter((c) => c.parking?.sink !== e.nodeId);
+        // A shop or office removed, or moved or resized: its bays (and cars in or heading for
+        // them) go too. Renamed, recoloured or grown taller, they stay.
+        const before = this.lotKeys.get(e.nodeId);
+        const after = lotKey(graph.terminal(e.nodeId));
+        if (before !== undefined && before !== after) this.cars = this.cars.filter((c) => c.parking?.sink !== e.nodeId);
+        if (after === null) this.lotKeys.delete(e.nodeId);
+        else this.lotKeys.set(e.nodeId, after);
         return;
       }
+      if (e.type === "reset") this.lotKeys.clear();
       this.tracks.clear();
       // shortcut: cars driving through a changed part of the network just vanish; reroute them when it matters.
       if (e.type === "reset" || e.type === "settings") this.cars = [];
@@ -262,6 +277,13 @@ export class Simulation {
 
   /** Each enabled source releases cars at its rate, when its road end is clear. */
   private spawn(dt: number): void {
+    // Bays held at each shop or office, counted once for all the homes trying to send cars.
+    this.held.clear();
+    for (const c of this.cars) {
+      if (!c.parking) continue;
+      if (!this.held.has(c.parking.sink)) this.held.set(c.parking.sink, new Set());
+      this.held.get(c.parking.sink)!.add(c.parking.bay);
+    }
     const terminals = this.graph.allTerminals();
     const sinks = [...terminals].filter(([, t]) => t.kind === "sink");
     for (const [source, t] of terminals) {
@@ -299,6 +321,11 @@ export class Simulation {
         parking: bay === null ? null : { sink, bay },
         leaveAt: null,
       });
+      if (bay !== null) {
+        if (!this.held.has(sink)) this.held.set(sink, new Set());
+        this.held.get(sink)!.add(bay);
+        if (!this.lotKeys.has(sink)) this.lotKeys.set(sink, lotKey(this.graph.terminal(sink))!);
+      }
     }
   }
 
@@ -306,8 +333,8 @@ export class Simulation {
   private freeBay(sink: NodeId): number | null {
     const lot = this.graph.terminalLot(sink);
     if (!lot) return null;
-    const taken = new Set(this.cars.filter((c) => c.parking?.sink === sink).map((c) => c.parking!.bay));
-    const free = carPark(lot).bays.findIndex((_, i) => !taken.has(i));
+    const taken = this.held.get(sink);
+    const free = carPark(lot).bays.findIndex((_, i) => !taken?.has(i));
     return free < 0 ? null : free;
   }
 

@@ -147,7 +147,8 @@ const DESTINATION_LABEL: Record<Destinations, string> = { any: "Any", shops: "Sh
 
 /** A home's traffic: on/off, how many cars it sends, and where they go (any, shops, offices, or ones picked by name). */
 function HomeOptions({ engine, id, source, sinks }: { engine: Engine; id: number; source: Source; sinks: { node: number; name: string }[] }) {
-  const update = (changes: Partial<Source>) => engine.graph.setTerminal(id, { ...source, ...changes });
+  // From the building as it is now (the panel's copy can be a second old: a level since then would be undone).
+  const update = (changes: Partial<Source>) => engine.graph.setTerminal(id, { ...(engine.graph.terminal(id) as Source), ...changes });
   const to = destinationsOf(source);
   const picked = sinks.filter((s) => source.sinks.includes(s.node));
 

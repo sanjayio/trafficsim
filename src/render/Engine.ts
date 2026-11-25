@@ -13,7 +13,7 @@ import { levelUp } from "../core/growth";
 import { slipRoad } from "../core/junction";
 import { CarLayer } from "./CarLayer";
 import { ZoneLayer } from "./ZoneLayer";
-import { loadAutosave, loadView, openMapFile, saveAutosave, saveMapFile, saveView } from "../platform";
+import { keepUnreadableAutosave, loadAutosave, loadView, openMapFile, saveAutosave, saveMapFile, saveView } from "../platform";
 import { gameStore, isSnapping, WEATHERS, type NodeAnchor, type ToolId, type Weather } from "../state/store";
 import { BulldozeTool } from "../tools/BulldozeTool";
 import { RoadTool } from "../tools/RoadTool";
@@ -263,6 +263,8 @@ export class Engine {
         this.graph.load(JSON.parse(saved) as SavedMap);
         gameStore.getState().setDrivingSide(this.graph.drivingSide);
       } catch {
+        // Kept aside before the next save replaces it.
+        keepUnreadableAutosave(saved);
         gameStore.getState().showMessage("Couldn't restore your last map");
       }
     }

@@ -8,7 +8,7 @@ import { RoadGraph, type NodeId } from "./roadGraph";
 import { findRoute } from "./routing";
 import { DEFAULT_ROAD_SPEC, LANE_WIDTH, type RoadSpec } from "./roadSpec";
 import { CAR_LENGTH, CAR_WIDTH, SIM_DT, Simulation, type Car } from "./simulation";
-import { BUILDING_SIZE, DEFAULT_SOURCE, carPark, newTerminal, parseTerminal, SINK } from "./terminal";
+import { buildingSize, DEFAULT_SOURCE, carPark, newTerminal, parseTerminal, SINK } from "./terminal";
 import { lanesInnerToKerb } from "./lanes";
 import { legLength, TrackBuilder } from "./track";
 
@@ -163,6 +163,23 @@ describe("Simulation", () => {
     });
     expect(most).toBeGreaterThan(2);
     expect(out).toBeGreaterThan(0);
+  });
+
+  it("keeps a shop's parked cars when it's renamed or recoloured, and drops them when it's moved", () => {
+    const graph = new RoadGraph();
+    road(graph, 0, 0, 400, 0);
+    graph.setTerminal(at(graph, 0, 0), { ...DEFAULT_SOURCE, rate: 60 });
+    const shop = at(graph, 400, 0);
+    graph.setTerminal(shop, SINK);
+    const sim = new Simulation(graph);
+    run(sim, 40);
+    const atShop = () => sim.cars.filter((c) => c.parking?.sink === shop).length;
+    const before = atShop();
+    expect(before).toBeGreaterThan(0);
+    graph.setTerminal(shop, { ...graph.terminal(shop)!, name: "Corner Mart", colors: { primary: 0x123456, secondary: 0x654321 } });
+    expect(atShop()).toBe(before);
+    graph.setTerminal(shop, { ...graph.terminal(shop)!, wide: 1, level: 2 });
+    expect(atShop()).toBe(0);
   });
 
   it("only sends cars to the sinks a source lists", () => {
@@ -536,7 +553,7 @@ describe("terminals", () => {
     const { graph } = crossroads({ control: "stop" });
     const east = at(graph, 300, 0);
     graph.setTerminal(east, newTerminal("largeShop"));
-    expect(graph.terminalLot(east)).toMatchObject(BUILDING_SIZE.largeShop);
+    expect(graph.terminalLot(east)).toMatchObject(buildingSize({ building: "largeShop" }));
   });
 
   it("rejects a source or sink that isn't on a dead end", () => {
