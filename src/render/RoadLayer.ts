@@ -1,16 +1,19 @@
-import { BoxGeometry, Group, Mesh, MeshBasicMaterial } from "three";
+import { BoxGeometry, Group, Mesh, MeshBasicMaterial, type BufferGeometry } from "three";
 import { effectiveControl, kerbRadius, signalApproaches, MAX_CORNER_RADIUS, roundaboutShape, signalLights } from "../core/junction";
 import type { GraphEvent, NodeId, RoadGraph, RoadSegment, SegmentId } from "../core/roadGraph";
 import { connectionsAt, hasLaneConnector, turnAt, type Turn } from "../core/lanes";
-import { carriagewayWidth, FOOTPATH_WIDTH, roadWidth } from "../core/roadSpec";
+import { carriagewayWidth, FOOTPATH_WIDTH, hasMedian, LANE_WIDTH, MEDIAN_WIDTH, roadWidth, type RoadSpec } from "../core/roadSpec";
+import { bridge } from "../core/track";
 import { LOT_DEPTH, LOT_LENGTH } from "../core/terminal";
 import { convexGeometry, flatMaterial } from "./flat";
 import { palette } from "./palette";
 import { FurnitureKit, type FurnitureSpot } from "./furniture";
 import { buildJunctionParts, type JunctionArm } from "./junctionParts";
 import { buildRoundaboutParts } from "./roundaboutParts";
-import { buildRoadParts, ROAD_PART_STYLE, type RoadEnd, type RoadPart } from "./roadParts";
+import { buildBendMarkings, buildRoadParts, ROAD_PART_STYLE, type BendLine, type RoadEnd, type RoadPart } from "./roadParts";
 
+/** Roads meeting this close to straight on (radians short of 180°) just carry their markings through. */
+const STRAIGHT_ENOUGH = (10 * Math.PI) / 180;
 /** Clearance between a junction's crossing road and where markings stop. */
 const JUNCTION_MARGIN = 2;
 /** Roads meeting at less than ~20° to each other (sin < this) carry on rather than cross. */
@@ -300,7 +303,9 @@ export class RoadLayer extends Group {
         kerbRadius(settings.cornerRadius),
       );
       this.cornerReach.set(nodeId, new Map(meeting.map((segment, i) => [segment.id, reach[i]])));
-      meshes = parts.map(({ part, geometry }) => {
+      const bend = this.bendLines(nodeId);
+      const all: { part: RoadPart; geometry: BufferGeometry }[] = [...parts, ...(bend ? buildBendMarkings(bend) : [])];
+      meshes = all.map(({ part, geometry }) => {
         const mesh = new Mesh(geometry, this.materials[part]);
         mesh.renderOrder = ROAD_PART_STYLE[part].layer;
         return mesh;
@@ -320,7 +325,10 @@ export class RoadLayer extends Group {
    */
   private endAt(segment: RoadSegment, nodeId: NodeId): RoadEnd {
     const meeting = this.graph.segmentsAt(nodeId);
-    if (meeting.length === 2) return { inset: 0, entry: "none" };
+    if (meeting.length === 2) {
+      // Round a bend, markings stop where its paved corner starts and carry on along curves (see bendLines).
+      return { inset: this.bendLines(nodeId) ? this.bendInset(segment, nodeId) : 0, entry: "none" };
+    }
     if (meeting.length === 1) return { inset: carriagewayWidth(segment.spec) / 2, entry: "none", turnaround: true };
 
     // At a roundabout the ring (and any splitter island) decides where this road's markings start.
@@ -345,6 +353,60 @@ export class RoadLayer extends Group {
     const control = effectiveControl(this.graph.junction(nodeId));
     const entry = control === "none" ? "none" : control === "yield" ? "yield" : "stop";
     return { inset, entry, turns: this.laneTurns(segment, nodeId) };
+  }
+
+  /** Where a road's markings stop short of a bend: where the corner's kerb meets it, and at least half the road's width. */
+  private bendInset(segment: RoadSegment, nodeId: NodeId): number {
+    return Math.max(this.cornerReach.get(nodeId)?.get(segment.id) ?? 0, carriagewayWidth(segment.spec) / 2);
+  }
+
+  /**
+   * The markings carried round a bend where two roads of the same layout join: the centre line
+   * (or median) and each lane line, as curves from one road's markings to the other's. Null where
+   * the roads carry straight on, or differ (their markings simply meet).
+   */
+  private bendLines(nodeId: NodeId): BendLine[] | null {
+    const meeting = this.graph.segmentsAt(nodeId);
+    if (meeting.length !== 2) return null;
+    const [into, out] = meeting;
+    const same = (p: RoadSpec, q: RoadSpec) => p.lanes === q.lanes && p.oneWay === q.oneWay && p.median === q.median;
+    if (!same(into.spec, out.spec)) return null;
+    // One-way roads must run on through the node.
+    if (into.spec.oneWay && (into.b !== nodeId || out.a !== nodeId)) return null;
+    const a = this.graph.directionAway(into, nodeId);
+    const b = this.graph.directionAway(out, nodeId);
+    if (a.x * b.x + a.y * b.y < -Math.cos(STRAIGHT_ENOUGH)) return null;
+
+    // A point `offset` right of travel (from `into`, round the bend, onto `out`) where each road's markings stop.
+    const frame = (segment: RoadSegment, arriving: boolean, offset: number) => {
+      const path = this.graph.path(segment);
+      const forward = (segment.b === nodeId) === arriving;
+      const inset = this.bendInset(segment, nodeId);
+      const f = path.at(segment.b === nodeId ? path.length - inset : inset);
+      const sign = forward ? 1 : -1;
+      return {
+        p: { x: f.p.x + f.normal.x * offset * sign, y: f.p.y + f.normal.y * offset * sign },
+        t: { x: f.tangent.x * sign, y: f.tangent.y * sign },
+      };
+    };
+    const curve = (offset: number) => {
+      const from = frame(into, true, offset);
+      const to = frame(out, false, offset);
+      return bridge(from.p, from.t, to.p, to.t);
+    };
+    const { spec } = into;
+    const lines: BendLine[] = [];
+    if (spec.oneWay) {
+      const left = -carriagewayWidth(spec) / 2;
+      for (let k = 1; k < spec.lanes; k++) lines.push({ kind: "laneLine", pieces: curve(left + k * LANE_WIDTH) });
+    } else {
+      lines.push({ kind: hasMedian(spec) ? "median" : "centerLine", pieces: curve(0) });
+      const middle = hasMedian(spec) ? MEDIAN_WIDTH / 2 : 0;
+      for (let k = 1; k < spec.lanes; k++) {
+        for (const side of [1, -1]) lines.push({ kind: "laneLine", pieces: curve(side * (middle + k * LANE_WIDTH)) });
+      }
+    }
+    return lines;
   }
 
   /** The turns each lane of `segment` arriving at junction `nodeId` may make, from its lane connections. */

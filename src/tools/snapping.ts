@@ -110,13 +110,21 @@ function snapOntoRoad(p: Vec2, road: SampledCurve, near: Guide[], o: SnapOptions
 }
 
 /**
- * The direction angles are measured from at `point`: the road leaving an existing node there,
- * otherwise east (+x).
+ * The direction angles are measured from at `point`: the road leaving an existing node there; on
+ * a road (a road started partway along one, as a T-junction), that road's direction there, so its
+ * guidelines include the square-on one; otherwise east (+x).
  */
 export function referenceDirection(graph: RoadGraph, point: Vec2): Vec2 {
   const node = graph.nodeNear(point, 0.5);
   const segment = node ? graph.segmentsAt(node.id)[0] : undefined;
-  return segment ? graph.directionAway(segment, node!.id) : { x: 1, y: 0 };
+  if (segment) return graph.directionAway(segment, node!.id);
+  const road = graph.segmentAt(point);
+  if (road) {
+    const path = graph.path(road);
+    const nearest = path.nearest(point);
+    if (nearest.distance < 0.5) return path.at(nearest.s).tangent;
+  }
+  return { x: 1, y: 0 };
 }
 
 /** Unsigned angle between two directions, in whole degrees (0–180). */

@@ -51,15 +51,23 @@ export function IconButton({
   label,
   pressed,
   disabled,
+  danger,
   onClick,
   children,
 }: {
   label: string;
   pressed?: boolean;
   disabled?: boolean;
+  /** Tinted red, for a destructive tool. */
+  danger?: boolean;
   onClick: () => void;
   children: ReactNode;
 }) {
+  const state = danger
+    ? pressed
+      ? "bg-red-500/90 text-white"
+      : "text-red-400 hover:bg-red-500/20 hover:text-red-300"
+    : buttonStateClass(!!pressed);
   return (
     <span className="group relative flex">
       <button
@@ -69,7 +77,7 @@ export function IconButton({
         disabled={disabled}
         onClick={onClick}
         onMouseDown={keepFocusOnGame}
-        className={`grid size-9 place-items-center rounded-lg transition-colors duration-100 disabled:pointer-events-none disabled:opacity-35 ${buttonStateClass(!!pressed)}`}
+        className={`grid size-9 place-items-center rounded-lg transition-colors duration-100 disabled:pointer-events-none disabled:opacity-35 ${state}`}
       >
         {children}
       </button>

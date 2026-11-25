@@ -92,7 +92,8 @@ export const gameStore = createStore<GameState>()((set, get) => ({
   lastSpeed: 1,
   snapToGrid: true,
   snapInverted: false,
-  roadSpec: { ...DEFAULT_ROAD_SPEC },
+  // New roads get footpaths unless switched off.
+  roadSpec: { ...DEFAULT_ROAD_SPEC, footpath: true },
   roadMode: "straight",
   bulldozeMode: "single",
   trafficMode: "source",

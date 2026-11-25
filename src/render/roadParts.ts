@@ -1,5 +1,5 @@
 import type { BufferGeometry } from "three";
-import type { PathFrame, SampledCurve } from "../core/curve";
+import { SampledCurve, type Curve, type PathFrame } from "../core/curve";
 import type { DrivingSide } from "../core/roadGraph";
 import type { Vec2 } from "../core/geometry";
 import {
@@ -185,6 +185,32 @@ export function buildRoadParts(
   if (turnArrows.length) parts.push({ part: "arrow", geometry: convexGeometry(turnArrows) });
 
   return parts;
+}
+
+/** A marking carried round a bend where two roads join: the centre line, the median, or a lane line. */
+export interface BendLine {
+  kind: "centerLine" | "median" | "laneLine";
+  pieces: Curve[];
+}
+
+/** Markings round a bend, along the curves given (solid centre line or median, dashed lane lines). */
+export function buildBendMarkings(lines: BendLine[]): { part: RoadPart; geometry: BufferGeometry }[] {
+  const shapes: Record<BendLine["kind"], Vec2[][]> = { centerLine: [], median: [], laneLine: [] };
+  for (const { kind, pieces } of lines) {
+    for (const piece of pieces) {
+      const path = new SampledCurve(piece);
+      if (kind === "laneLine") {
+        for (let s = 0; s < path.length; s += DASH_LENGTH + DASH_GAP) {
+          shapes.laneLine.push(...ribbon(path, 0, LANE_LINE_WIDTH, s, Math.min(s + DASH_LENGTH, path.length)));
+        }
+      } else {
+        shapes[kind].push(...ribbon(path, 0, kind === "median" ? MEDIAN_WIDTH : CENTER_LINE_WIDTH, 0, path.length));
+      }
+    }
+  }
+  return (Object.keys(shapes) as BendLine["kind"][])
+    .filter((kind) => shapes[kind].length)
+    .map((kind) => ({ part: kind, geometry: convexGeometry(shapes[kind]) }));
 }
 
 /** Turn arrows stand this far before the stop line, and are this long. */

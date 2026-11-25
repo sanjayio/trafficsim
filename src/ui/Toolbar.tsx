@@ -97,18 +97,21 @@ export function Toolbar() {
         {tool === "road" && <RoadOptions />}
         {tool === "bulldoze" && <BulldozeOptions />}
         {tool === "traffic" && <TrafficOptions />}
-        <Panel>
-          {TOOLS.map(({ id, label, icon: Icon }) => (
-            <IconButton
-              key={id}
-              label={label}
-              pressed={tool === id}
-              onClick={() => gameStore.getState().setTool(id)}
-            >
-              <Icon size={ICON_SIZE} strokeWidth={2} aria-hidden />
+        <div className="flex gap-2">
+          <Panel>
+            {TOOLS.filter((t) => t.id !== "bulldoze").map(({ id, label, icon: Icon }) => (
+              <IconButton key={id} label={label} pressed={tool === id} onClick={() => gameStore.getState().setTool(id)}>
+                <Icon size={ICON_SIZE} strokeWidth={2} aria-hidden />
+              </IconButton>
+            ))}
+          </Panel>
+          {/* Bulldoze stands apart, tinted red: it destroys. */}
+          <Panel>
+            <IconButton label="Bulldoze" danger pressed={tool === "bulldoze"} onClick={() => gameStore.getState().setTool("bulldoze")}>
+              <Tractor size={ICON_SIZE} strokeWidth={2} aria-hidden />
             </IconButton>
-          ))}
-        </Panel>
+          </Panel>
+        </div>
       </div>
       <Panel>
         {SPEEDS.map((s) => (
@@ -164,6 +167,33 @@ function TrafficOptions() {
   );
 }
 
+/** The parallel road toggle, and while it's on, the copy's offset. */
+function ParallelOptions() {
+  const parallel = useGame((s) => s.parallel);
+  const offset = useGame((s) => s.parallelOffset);
+  const side = offset > 0 ? "right" : "left";
+  return (
+    <>
+      <IconButton label="Parallel road" pressed={parallel} onClick={() => gameStore.getState().setParallel(!parallel)}>
+        <Equal size={ICON_SIZE} strokeWidth={2} className="-rotate-45" aria-hidden />
+      </IconButton>
+      {parallel && (
+        <div className="flex items-center" role="group" aria-label={`Parallel offset: ${Math.abs(offset)} to the ${side}`}>
+          <StepButton label="Move parallel road left" onClick={() => gameStore.getState().nudgeParallelOffset(-1)}>
+            <ChevronLeft size={16} aria-hidden />
+          </StepButton>
+          <span className="w-11 text-center text-xs font-medium tabular-nums text-neutral-200">
+            {Math.abs(offset)} {offset > 0 ? "R" : "L"}
+          </span>
+          <StepButton label="Move parallel road right" onClick={() => gameStore.getState().nudgeParallelOffset(1)}>
+            <ChevronRight size={16} aria-hidden />
+          </StepButton>
+        </div>
+      )}
+    </>
+  );
+}
+
 /** Second-level options shown while the Road tool is active. */
 function RoadOptions() {
   // Shows the effective state, so holding Alt/Option visibly flips it. Clicking flips the setting.
@@ -175,10 +205,6 @@ function RoadOptions() {
   const mode = useGame((s) => s.roadMode);
   const guideSnapping = useGame((s) => s.guideSnapping);
   const inverted = useGame((s) => s.snapInverted);
-  const parallel = useGame((s) => s.parallel);
-  const offset = useGame((s) => s.parallelOffset);
-  const side = offset > 0 ? "right" : "left";
-
   return (
     <Panel>
       {ROAD_MODES.map(({ id, label, icon: Icon }) => (
@@ -186,6 +212,7 @@ function RoadOptions() {
           <Icon size={ICON_SIZE} strokeWidth={2} aria-hidden />
         </IconButton>
       ))}
+      <ParallelOptions />
       <PanelDivider />
       {Array.from({ length: MAX_LANES }, (_, i) => i + 1).map((n) => (
         <IconButton
@@ -212,23 +239,6 @@ function RoadOptions() {
       <IconButton label="Footpath" pressed={spec.footpath} onClick={() => update({ footpath: !spec.footpath })}>
         <Footprints size={ICON_SIZE} strokeWidth={2} aria-hidden />
       </IconButton>
-      <PanelDivider />
-      <IconButton label="Parallel road" pressed={parallel} onClick={() => gameStore.getState().setParallel(!parallel)}>
-        <Equal size={ICON_SIZE} strokeWidth={2} className="-rotate-45" aria-hidden />
-      </IconButton>
-      {parallel && (
-        <div className="flex items-center" role="group" aria-label={`Parallel offset: ${Math.abs(offset)} to the ${side}`}>
-          <StepButton label="Move parallel road left" onClick={() => gameStore.getState().nudgeParallelOffset(-1)}>
-            <ChevronLeft size={16} aria-hidden />
-          </StepButton>
-          <span className="w-11 text-center text-xs font-medium tabular-nums text-neutral-200">
-            {Math.abs(offset)} {offset > 0 ? "R" : "L"}
-          </span>
-          <StepButton label="Move parallel road right" onClick={() => gameStore.getState().nudgeParallelOffset(1)}>
-            <ChevronRight size={16} aria-hidden />
-          </StepButton>
-        </div>
-      )}
       <PanelDivider />
       {/* Holding Alt/Option switches guides off, and the button shows it. */}
       <IconButton
