@@ -1,4 +1,4 @@
-import { Group, Mesh, type BufferGeometry, type MeshBasicMaterial, type Object3D } from "three";
+import { Group, Mesh, type BufferGeometry, type InstancedMesh, type MeshBasicMaterial, type Object3D } from "three";
 import { effectiveControl, kerbRadius, signalApproaches, MAX_CORNER_RADIUS, roundaboutShape, signalLights } from "../core/junction";
 import type { GraphEvent, NodeId, RoadGraph, RoadSegment, SegmentId } from "../core/roadGraph";
 import { connectionsAt, hasLaneConnector, turnAt, type Turn } from "../core/lanes";
@@ -114,6 +114,8 @@ export class RoadLayer extends Group {
     if (old) {
       this.remove(old.driveway, old.building);
       old.driveway.geometry.dispose();
+      // Geometry and materials are the kit's, shared; instanced parts own their per-instance buffers.
+      old.building.traverse((o) => (o as InstancedMesh).isInstancedMesh && (o as InstancedMesh).dispose());
     }
     this.markers.delete(nodeId);
     const lot = this.graph.terminalLot(nodeId);
@@ -143,6 +145,11 @@ export class RoadLayer extends Group {
     this.markers.set(nodeId, { driveway, building });
   }
 
+
+  /** Lights the buildings' windows for the time of day (see BuildingKit.setLights). */
+  setLights(exposure: number, night: number): void {
+    this.buildings.setLights(exposure, night);
+  }
 
   /** Source and sink buildings with their plots, by node, for picking with the pointer. */
   buildingGroups(): Map<Object3D, NodeId> {

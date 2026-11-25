@@ -4,8 +4,10 @@ import type { Vec2 } from "../core/geometry";
 const FOV_DEGREES = 45;
 const MIN_ZOOM = 0.15;
 const MAX_ZOOM = 4;
-/** Camera pitch limits, in radians above the ground plane. 90° is straight down (top-down). */
-const MIN_PITCH = (30 * Math.PI) / 180;
+/** Camera pitch limits, in radians above the ground plane. 90° is straight down (top-down); low enough to see the sky. */
+const MIN_PITCH = (5 * Math.PI) / 180;
+/** Zooming and drag-panning hold the ground under the pointer only this many orbit distances from the focus (not out at the horizon). */
+const GRAB_REACH = 4;
 const MAX_PITCH = Math.PI / 2;
 /** Keyboard pan speed in screen pixels per second at the focus point, so it feels the same at every zoom level. */
 const KEY_PAN_SPEED = 800;
@@ -13,7 +15,7 @@ const KEY_PAN_SPEED = 800;
 const KEY_ROTATE_SPEED = Math.PI / 2;
 /** Keyboard zoom speed: zoom is multiplied by e^this per second (~3.3x). */
 const KEY_ZOOM_SPEED = 1.2;
-/** Keyboard tilt speed in radians per second (full 90°→30° sweep in one second). */
+/** Keyboard tilt speed in radians per second. */
 const KEY_TILT_SPEED = (60 * Math.PI) / 180;
 /** Shift multiplies all keyboard camera speeds by this. */
 const KEY_FAST_MULTIPLIER = 2.5;
@@ -56,7 +58,7 @@ function isTextInput(target: EventTarget | null): boolean {
  *
  * Pan: middle/right drag anywhere, left drag when `leftDragPans()` is true, or WASD / arrow keys.
  * Rotate: Q (anticlockwise) / E (clockwise). Zoom: wheel / pinch at the cursor, R (in) / F (out) at the centre.
- * Tilt: T (towards 30°, more 3D) / G (back towards 90°, top-down).
+ * Tilt: T (towards 5°, more 3D, the horizon and sky in view) / G (back towards 90°, top-down).
  * Hold Shift for faster keyboard movement. Keyboard input is applied in `update()`, called once per frame.
  */
 export class Camera {
@@ -105,6 +107,27 @@ export class Camera {
   }
 
   /** Distance from the camera to the focus point, in world units. */
+  /** Where the camera is: its focus, turn, tilt and zoom (to keep between visits). */
+  get view(): { x: number; y: number; yaw: number; pitch: number; zoom: number } {
+    return { x: this.focus.x, y: this.focus.y, yaw: this.yaw, pitch: this.pitch, zoom: this.zoomLevel };
+  }
+
+  /** Puts the camera back where `view` says, ignoring anything missing or out of range. */
+  setView(view: Record<string, unknown>): void {
+    const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+    const [x, y, yaw, pitch, zoom] = ["x", "y", "yaw", "pitch", "zoom"].map((k) => num(view[k]));
+    if (x !== null && y !== null) this.focus = { x, y };
+    if (yaw !== null) this.yaw = yaw;
+    if (pitch !== null) this.pitch = Math.min(MAX_PITCH, Math.max(MIN_PITCH, pitch));
+    if (zoom !== null) this.zoomLevel = this.clampZoom(zoom);
+    this.apply();
+  }
+
+  /** The ground point the camera orbits, at the screen's centre. */
+  get target(): Vec2 {
+    return this.focus;
+  }
+
   get distance(): number {
     const halfFov = (FOV_DEGREES * Math.PI) / 360;
     return this.height / 2 / Math.tan(halfFov) / this.zoomLevel;
@@ -209,6 +232,12 @@ export class Camera {
     this.camera.updateMatrixWorld();
   }
 
+  /** The ground under screen point `s`, if it's near enough to hold while zooming or panning. */
+  private grabAt(s: Vec2): Vec2 | null {
+    const p = this.screenToWorld(s);
+    return p && Math.hypot(p.x - this.focus.x, p.y - this.focus.y) < this.distance * GRAB_REACH ? p : null;
+  }
+
   private clampZoom(zoom: number): number {
     return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
   }
@@ -249,7 +278,7 @@ export class Camera {
   private onWheel = (e: WheelEvent) => {
     e.preventDefault();
     const s = this.toCanvas(e);
-    const anchor = this.screenToWorld(s);
+    const anchor = this.grabAt(s);
     this.zoomLevel = this.clampZoom(this.zoomLevel * Math.exp(-e.deltaY * 0.0015));
     this.apply();
     if (anchor) this.keepUnder(anchor, s);
@@ -258,7 +287,7 @@ export class Camera {
   private onDown = (e: PointerEvent) => {
     if (e.button === 1 || e.button === 2 || (e.button === 0 && this.leftDragPans())) {
       this.panning = true;
-      this.grabbed = this.screenToWorld(this.toCanvas(e));
+      this.grabbed = this.grabAt(this.toCanvas(e));
     }
   };
 
@@ -266,7 +295,7 @@ export class Camera {
     if (!this.panning) return;
     const s = this.toCanvas(e);
     if (this.grabbed) this.keepUnder(this.grabbed, s);
-    else this.grabbed = this.screenToWorld(s);
+    else this.grabbed = this.grabAt(s);
   };
 
   private onUp = () => {

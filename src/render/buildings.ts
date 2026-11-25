@@ -1,4 +1,4 @@
-import { BoxGeometry, BufferGeometry, Color, Float32BufferAttribute, Group, Mesh, MeshBasicMaterial, PlaneGeometry } from "three";
+import { BoxGeometry, BufferGeometry, Color, Float32BufferAttribute, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, PlaneGeometry, Quaternion, Vector3 } from "three";
 import { carPark, DRIVEWAY_WIDTH, isSourceBuilding, LOT_SETBACK, PARKING_DEPTH, type Building, type Lot } from "../core/terminal";
 import { FlatLayer, flatMaterial } from "./flat";
 
@@ -8,6 +8,22 @@ const BUILDING_ORDER = 20;
 /** Homes take this share of their plot's length; trees fill the rest. */
 const HOME_SHARE = 0.7;
 const TREE_SPACING = 9;
+/**
+ * Panels over office glass and flats' window bands where someone's in: the glass's colour by
+ * day (a shade off it, so their own materials), lit at night while the rest stays dark.
+ */
+const OCCUPIED_GLASS = 0x4f7ea9;
+const OCCUPIED_BAND = 0x2e3a49;
+/** Share lit at night (most offices have gone home; most flats are lived in), and roughly how wide each unit is along a wall. */
+const OCCUPANCY = { office: 0.3, flat: 0.7 };
+const UNIT_WIDTH = 7;
+
+/** Window colours, and the light they give at night: warm everywhere, offices included. */
+const WINDOW_LIGHT = new Map<number, number>([
+  [0x2b3440, 0xffd27a],
+  [OCCUPIED_BAND, 0xffdf99],
+  [OCCUPIED_GLASS, 0xf2c96a],
+]);
 const GARAGE_WIDTH = 8;
 
 /**
@@ -24,6 +40,18 @@ export class BuildingKit {
   private concrete = flatMaterial(0xa3a59f);
   private paint = flatMaterial(0xf2f2ee);
   private materials = new Map<number, MeshBasicMaterial[]>();
+  /** Picks which offices and flats are vacant: seeded per building (see `model`), so it's the same each time it's drawn. */
+  private random = () => 0.5;
+  /** Window materials, with their colours by day and lit at night. */
+  private windows: { material: MeshBasicMaterial; day: Color; night: Color }[] = [];
+
+  /**
+   * Lights windows for the time of day: by day they look as the rest of the scene does at
+   * `exposure`; as `night` goes from 0 to 1, they glow.
+   */
+  setLights(exposure: number, night: number): void {
+    for (const w of this.windows) w.material.color.copy(w.day).multiplyScalar(exposure).lerp(w.night, night);
+  }
 
   /**
    * A model for `lot`'s building, placed and turned so its front faces the road. In its own frame,
@@ -37,6 +65,8 @@ export class BuildingKit {
     group.position.set(lot.centre.x, 0, lot.centre.y);
     group.rotation.y = -Math.atan2(lot.along.y * flip, lot.along.x * flip);
     const { building, length: l, depth: d } = lot;
+    let seed = (Math.round(lot.centre.x * 7 + lot.centre.y * 13) >>> 0) || 1;
+    this.random = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
     // Where the driveway meets the plot, along the road in this frame.
     const doorX = ((lot.door.x - lot.centre.x) * lot.along.x + (lot.door.y - lot.centre.y) * lot.along.y) * flip;
     const home = isSourceBuilding(building);
@@ -165,6 +195,7 @@ export class BuildingKit {
         return [
           this.block(0xc9c4ba, l, height, d, 0, 0, 0),
           ...Array.from({ length: floors }, (_, i) => this.block(0x2e3a48, l + 0.6, 3, d + 0.6, 0, i * storey + 3, 0)),
+          this.occupied(OCCUPIED_BAND, OCCUPANCY.flat, l + 0.6, d + 0.6, floors, (i) => i * storey + 3.2, 2.6),
           this.block(0xa9a49a, l + 1, 1, d + 1, 0, height, 0),
           this.block(0xb3aea4, l * 0.35, 5, d * 0.4, l * 0.15, height + 1, 0),
           ...this.garageDoor(garageX, 0, front),
@@ -204,10 +235,44 @@ export class BuildingKit {
     const height = floors * storey;
     return [
       this.block(0x4f7ea8, l, height, d, 0, base, 0),
+      this.occupied(OCCUPIED_GLASS, OCCUPANCY.office, l, d, floors, (i) => base + i * storey + 0.3, storey - 2.1),
       ...Array.from({ length: floors }, (_, i) => this.block(0xd6dde3, l + 0.4, 1, d + 0.4, 0, base + (i + 1) * storey - 1.5, 0)),
       // A light roof slab on top (its underside, level with the glass's roof, faces down and isn't drawn).
       this.block(0xd6dde3, l + 0.4, 0.6, d + 0.4, 0, base + height, 0),
     ];
+  }
+
+  /**
+   * Lit panels over the windows of the occupied units of a block `l` × `d` in plan: on each of
+   * `floors` floors (the panel from height `bottom(floor)`, `height` tall), each wall split into
+   * units about UNIT_WIDTH wide, a share `occupancy` of them occupied. One instanced mesh for the lot.
+   */
+  private occupied(colour: number, occupancy: number, l: number, d: number, floors: number, bottom: (floor: number) => number, height: number): Mesh {
+    const panels: Matrix4[] = [];
+    const proud = 0.12;
+    for (let floor = 0; floor < floors; floor++) {
+      const y = bottom(floor) + height / 2;
+      // Each wall: along x (front and back) or z (the ends), at its offset out from the middle.
+      for (const [length, alongX, out] of [[l, true, d / 2], [l, true, -d / 2], [d, false, l / 2], [d, false, -l / 2]] as const) {
+        const units = Math.max(1, Math.round(length / UNIT_WIDTH));
+        const unit = length / units;
+        for (let i = 0; i < units; i++) {
+          if (this.random() >= occupancy) continue;
+          const at = -length / 2 + unit * (i + 0.5);
+          const offset = out + Math.sign(out) * proud;
+          panels.push(
+            alongX
+              ? new Matrix4().compose(new Vector3(at, y, offset), new Quaternion(), new Vector3(unit - 0.6, height, 0.2))
+              : new Matrix4().compose(new Vector3(offset, y, at), new Quaternion(), new Vector3(0.2, height, unit - 0.6)),
+          );
+        }
+      }
+    }
+    const mesh = new InstancedMesh(this.box, this.shaded(colour, "box"), Math.max(1, panels.length));
+    panels.forEach((m, i) => mesh.setMatrixAt(i, m));
+    mesh.count = panels.length;
+    mesh.renderOrder = BUILDING_ORDER;
+    return mesh;
   }
 
   /** A box of size (w, h, d) standing on height y, centred on (x, z) in the building's frame. */
@@ -216,6 +281,7 @@ export class BuildingKit {
     mesh.scale.set(w, h, d);
     mesh.position.set(x, y + h / 2, z);
     mesh.renderOrder = BUILDING_ORDER;
+    mesh.castShadow = true;
     return mesh;
   }
 
@@ -225,6 +291,7 @@ export class BuildingKit {
     mesh.scale.set(w, h, d);
     mesh.position.set(x, y, z);
     mesh.renderOrder = BUILDING_ORDER;
+    mesh.castShadow = true;
     return mesh;
   }
 
@@ -236,7 +303,13 @@ export class BuildingKit {
     const key = colour * 2 + (shape === "roof" ? 1 : 0);
     let set = this.materials.get(key);
     if (!set) {
-      const tone = (k: number) => new MeshBasicMaterial({ color: new Color(colour).multiplyScalar(k) });
+      const lit = WINDOW_LIGHT.get(colour);
+      const tone = (k: number) => {
+        // Windows aren't dimmed with the scene: they light up at night (see setLights).
+        const material = new MeshBasicMaterial({ color: new Color(colour).multiplyScalar(k), toneMapped: !lit });
+        if (lit) this.windows.push({ material, day: new Color(colour).multiplyScalar(k), night: new Color(lit).multiplyScalar(0.6 + 0.4 * k) });
+        return material;
+      };
       const [top, light, dark] = [tone(1), tone(0.86), tone(0.7)];
       set = shape === "box" ? [light, light, top, dark, dark, dark] : [top, dark, light];
       this.materials.set(key, set);

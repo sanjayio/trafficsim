@@ -1,4 +1,6 @@
-import { Fog, Scene, WebGLRenderer } from "three";
+import { Fog, LinearToneMapping, Scene, Vector3, WebGLRenderer } from "three";
+import { atmosphere, type Atmosphere } from "./atmosphere";
+import { Rain } from "./Rain";
 import { WORLD_SIZE } from "../core/constants";
 import type { Vec2 } from "../core/geometry";
 import { hasLaneConnector } from "../core/lanes";
@@ -9,14 +11,19 @@ import { TrafficTool } from "../tools/TrafficTool";
 import { ZoneMap } from "../core/zoning";
 import { CarLayer } from "./CarLayer";
 import { ZoneLayer } from "./ZoneLayer";
-import { loadAutosave, openMapFile, saveAutosave, saveMapFile } from "../platform";
-import { gameStore, isSnapping, type NodeAnchor, type ToolId } from "../state/store";
+import { loadAutosave, loadView, openMapFile, saveAutosave, saveMapFile, saveView } from "../platform";
+import { gameStore, isSnapping, WEATHERS, type NodeAnchor, type ToolId, type Weather } from "../state/store";
 import { BulldozeTool } from "../tools/BulldozeTool";
 import { RoadTool } from "../tools/RoadTool";
 import { SelectTool } from "../tools/SelectTool";
 import type { Tool, ToolContext } from "../tools/Tool";
 import { Camera } from "./Camera";
 import { Grid } from "./Grid";
+import { FlatLayer } from "./flat";
+import { Ground } from "./Ground";
+import { Sky } from "./Sky";
+import { StreetLights } from "./StreetLights";
+import { installCloudShadows, SunShadows } from "./shadows";
 import { OverlayLayer } from "./OverlayLayer";
 import { palette } from "./palette";
 import { RoadLayer } from "./RoadLayer";
@@ -24,6 +31,7 @@ import { RoadLayer } from "./RoadLayer";
 /** Below this zoom the minor grid is hidden to avoid moiré. */
 const MINOR_GRID_MIN_ZOOM = 0.45;
 const STATS_INTERVAL_MS = 250;
+const VIEW_CHECK_MS = 1000;
 /** Magnetic snaps (road ends, guidelines) reach this far from the cursor, in screen pixels. */
 const SNAP_PIXELS = 10;
 /** Offset of the cursor readout from the pointer, in pixels. */
@@ -52,6 +60,20 @@ export class Engine {
   private scene = new Scene();
   private fog = new Fog(palette.ground, 1, 2);
   private grid = new Grid();
+  private ground = new Ground(FlatLayer.ground);
+  private sky = new Sky(FlatLayer.sky);
+  /** Drawn after buildings and cars (which are at 20). */
+  private rain = new Rain(30);
+  /** The look for the current time of day and weather, worked out again when either changes. */
+  private look: { key: string; value: Atmosphere } | null = null;
+  private tmpFocus = new Vector3();
+  private shadows!: SunShadows;
+  private streetLights = new StreetLights(this.graph);
+  /** Roads changed since the streetlights were placed: rebuilt once, next frame. */
+  private streetLightsDirty = true;
+  /** The view last kept (see keepView), and time since it was last checked. */
+  private keptView = "";
+  private viewCheck = 0;
   private roads = new RoadLayer(this.graph);
   private cars = new CarLayer();
   private zones = new ZoneMap(this.graph);
@@ -78,7 +100,12 @@ export class Engine {
     const renderer = new WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio || 1);
     renderer.setClearColor(palette.ground);
+    // Scales the scene's brightness for the time of day and weather; lights opt out (toneMapped: false).
+    renderer.toneMapping = LinearToneMapping;
     this.renderer = renderer;
+    installCloudShadows();
+    // Over the ground, roads and their markings; under the zoning tiles, buildings and cars.
+    this.shadows = new SunShadows(renderer, FlatLayer.markings + 0.5);
 
     const canvas = renderer.domElement;
     canvas.style.display = "block";
@@ -86,7 +113,8 @@ export class Engine {
     host.appendChild(canvas);
 
     this.scene.fog = this.fog;
-    this.scene.add(this.grid, this.roads, this.zoneLayer, this.cars, this.overlay);
+    this.cleanups.push(this.graph.subscribe(() => (this.streetLightsDirty = true)));
+    this.scene.add(this.streetLights, ...this.shadows.objects, this.sky, this.rain, this.ground, this.grid, this.roads, this.zoneLayer, this.cars, this.overlay);
 
     // Left-drag pans with the Select tool, except in the lane connector, which needs left clicks.
     this.camera = new Camera(canvas, () => gameStore.getState().tool === "select" && gameStore.getState().laneEditNode === null);
@@ -222,6 +250,7 @@ export class Engine {
    * moment after the last one), so the city is still there next visit without saving a file.
    */
   private restoreAutosave(): void {
+    this.restoreView();
     const saved = loadAutosave();
     if (saved) {
       try {
@@ -276,6 +305,11 @@ export class Engine {
     this.sim.dispose();
     this.overlay.dispose();
     this.grid.dispose();
+    this.ground.dispose();
+    this.sky.dispose();
+    this.rain.dispose();
+    this.shadows.dispose();
+    this.streetLights.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }
@@ -287,6 +321,49 @@ export class Engine {
   ): void {
     target.addEventListener(type, handler as EventListener);
     this.cleanups.push(() => target.removeEventListener(type, handler as EventListener));
+  }
+
+  /** The view (camera, time of day, weather) as last kept, then kept again whenever it changes. */
+  private restoreView(): void {
+    try {
+      const view = JSON.parse(loadView() ?? "{}") as Record<string, unknown>;
+      const state = gameStore.getState();
+      if (typeof view.timeOfDay === "number" && view.timeOfDay >= 0 && view.timeOfDay <= 24) state.setTimeOfDay(view.timeOfDay);
+      if (WEATHERS.includes(view.weather as Weather)) state.setWeather(view.weather as Weather);
+      if (view.camera && typeof view.camera === "object") this.camera.setView(view.camera as Record<string, unknown>);
+    } catch {
+      // A broken view just starts from the default.
+    }
+    this.keptView = this.currentView();
+  }
+
+  private currentView(): string {
+    const { timeOfDay, weather } = gameStore.getState();
+    return JSON.stringify({ timeOfDay, weather, camera: this.camera.view });
+  }
+
+  /** Keeps the view a moment after it last changed (checked once a second, not every frame). */
+  private keepView(deltaMS: number): void {
+    this.viewCheck += deltaMS;
+    if (this.viewCheck < VIEW_CHECK_MS) return;
+    this.viewCheck = 0;
+    const view = this.currentView();
+    if (view === this.keptView) return;
+    this.keptView = view;
+    saveView(view);
+  }
+
+  /** The look for the chosen time of day and weather, applied to the scene when it changes. */
+  private atmosphere(): Atmosphere {
+    const { timeOfDay, weather } = gameStore.getState();
+    const key = `${timeOfDay}:${weather}`;
+    if (this.look?.key === key) return this.look.value;
+    const value = atmosphere(timeOfDay, weather);
+    this.look = { key, value };
+    this.fog.color.copy(value.horizon);
+    this.renderer.setClearColor(value.horizon);
+    this.renderer.toneMappingExposure = value.exposure;
+    return value;
   }
 
   private frame = (time: number) => {
@@ -306,14 +383,31 @@ export class Engine {
     }
 
     const distance = this.camera.distance;
-    this.fog.near = distance * FOG_NEAR;
-    this.fog.far = distance * FOG_FAR;
+    const look = this.atmosphere();
+    this.fog.near = distance * FOG_NEAR * look.visibility;
+    this.fog.far = distance * FOG_FAR * look.visibility;
+    // Well inside the camera's far plane (20 orbit distances).
+    this.sky.follow(this.camera.camera.position, distance * 10);
+    this.sky.update(look, deltaMS / 1000);
+    const focus = this.camera.target;
+    this.shadows.update(look.sun, focus.x, focus.y, distance, look.shadow);
+    SunShadows.clouds(look.tint, look.cloudShade, look.clouds.cover, this.sky.drift);
+    this.rain.update(look.precipitation === "rain", this.tmpFocus.set(focus.x, 0, focus.y), distance, look.wind, Math.min(1, look.exposure + 0.2), deltaMS / 1000);
+    // The grid is a guide for drawing roads: shown only with the Road tool.
+    this.grid.visible = gameStore.getState().tool === "road";
     this.grid.minor.visible = this.camera.zoom >= MINOR_GRID_MIN_ZOOM;
 
     this.roads.updateSignals(this.sim.time);
-    this.cars.update(this.sim);
+    this.cars.update(this.sim, look.night);
+    this.roads.setLights(look.exposure, look.night);
+    if (this.streetLightsDirty) {
+      this.streetLights.rebuild();
+      this.streetLightsDirty = false;
+    }
+    this.streetLights.setLights(look.exposure, look.night);
     this.zoneLayer.show(gameStore.getState().tool === "traffic" && gameStore.getState().laneEditNode === null);
     this.trackJunctionPositions();
+    this.keepView(deltaMS);
     this.renderer.render(this.scene, this.camera.camera);
 
     this.statsFrames++;

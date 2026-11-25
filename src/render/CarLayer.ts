@@ -1,4 +1,4 @@
-import { BoxGeometry, Color, Float32BufferAttribute, Group, InstancedMesh, Matrix4, MeshBasicMaterial, Quaternion, Vector3 } from "three";
+import { AdditiveBlending, BoxGeometry, CanvasTexture, Color, Float32BufferAttribute, Group, InstancedMesh, Matrix4, MeshBasicMaterial, PlaneGeometry, Quaternion, Vector3 } from "three";
 import { CAR_LENGTH, CAR_WIDTH, type CarType, type Simulation } from "../core/simulation";
 
 /**
@@ -17,7 +17,10 @@ const WHEEL = { length: 2.8, height: 2.2, inset: 2.6 };
 const GLASS_COLOR = 0x26323f;
 const WHEEL_COLOR = 0x141518;
 const DRL_COLOR = 0xf4f8ff;
-const TAIL_COLOR = 0xb3121c;
+/** Tail lights: dim while driving, bright on the brakes (slowing or held stopped), off when parked. */
+const TAIL = { running: 0x8e0f17, braking: 0xff2b2b, off: 0x2a1012 };
+/** Slowing faster than this (units/s²) counts as braking. */
+const BRAKING = 2;
 /** Indicator lamps: size, colour, and flashes per second (on the simulation clock, so they pause with it). */
 const LAMP = { length: 1.6, height: 1.2, width: 1.4 };
 const LAMP_COLOR = 0xffa31a;
@@ -25,9 +28,14 @@ const BLINK_HZ = 1.5;
 /** Cars draw after the flat road layers, with normal depth testing. */
 const CAR_ORDER = 20;
 
-type Part = "body" | "glass" | "roof" | "wheels" | "drl" | "tail" | "lamps";
-/** Boxes of each part per car (lamps: up to two, on the side signalling). */
-const PER_CAR: Record<Part, number> = { body: 1, glass: 1, roof: 1, wheels: 2, drl: 2, tail: 2, lamps: 2 };
+type Part = "body" | "glass" | "roof" | "wheels" | "drl" | "tail" | "lamps" | "beams";
+/** Boxes of each part per car (lamps: up to two, on the side signalling; beams: the pool of headlight on the road, at night). */
+const PER_CAR: Record<Part, number> = { body: 1, glass: 1, roof: 1, wheels: 2, drl: 2, tail: 2, lamps: 2, beams: 1 };
+/** Headlights' pool of light on the road ahead: its length and width, and colour at full strength. */
+const BEAM = { length: 28, width: 18 };
+const BEAM_COLOR = 0xffe6a8;
+/** Draws after the road layers, before cars. */
+const BEAM_ORDER = 15;
 
 /**
  * Draws every car from a few instanced unit boxes, stretched per car to its type (sedan, hatch,
@@ -41,11 +49,22 @@ export class CarLayer extends Group {
     glass: shaded(GLASS_COLOR),
     roof: shaded(0xffffff),
     wheels: shaded(WHEEL_COLOR),
-    // Lights glow: the same from every side.
-    drl: new MeshBasicMaterial({ color: DRL_COLOR }),
-    tail: new MeshBasicMaterial({ color: TAIL_COLOR }),
-    lamps: new MeshBasicMaterial({ color: LAMP_COLOR }),
+    // Lights glow: the same from every side, and as bright at night (no tone mapping).
+    drl: new MeshBasicMaterial({ color: DRL_COLOR, toneMapped: false }),
+    tail: new MeshBasicMaterial({ toneMapped: false }),
+    lamps: new MeshBasicMaterial({ color: LAMP_COLOR, toneMapped: false }),
+    beams: new MeshBasicMaterial({
+      color: BEAM_COLOR,
+      map: beamTexture(),
+      transparent: true,
+      opacity: 0,
+      blending: AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    }),
   };
+  /** A unit square lying on the ground, for the headlight pools. */
+  private plane = new PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
   private meshes: Partial<Record<Part, InstancedMesh>> = {};
   private capacity = 0;
   private tmpMatrix = new Matrix4();
@@ -55,11 +74,13 @@ export class CarLayer extends Group {
   private tmpUp = new Vector3(0, 1, 0);
   private tmpColor = new Color();
 
-  update(sim: Simulation): void {
+  /** Places every car; `night` (0–1) turns the headlights on. */
+  update(sim: Simulation, night: number): void {
     const cars = sim.cars;
     if (!this.meshes.body || this.capacity < cars.length) this.grow(Math.max(64, cars.length * 2));
     const m = this.meshes as Record<Part, InstancedMesh>;
-    const counts: Record<Part, number> = { body: 0, glass: 0, roof: 0, wheels: 0, drl: 0, tail: 0, lamps: 0 };
+    const counts: Record<Part, number> = { body: 0, glass: 0, roof: 0, wheels: 0, drl: 0, tail: 0, lamps: 0, beams: 0 };
+    this.materials.beams.opacity = night * 0.32;
     const lit = Math.floor(sim.time * BLINK_HZ * 2) % 2 === 0;
     for (const car of cars) {
       const { x, y, heading } = sim.pose(car);
@@ -80,14 +101,19 @@ export class CarLayer extends Group {
       m.body.setColorAt(counts.body, this.tmpColor);
       m.roof.setColorAt(counts.roof, this.tmpColor);
       put("body", 0, 0, CLEARANCE, shape.length, shape.body, CAR_WIDTH);
+      const parked = car.leaveAt !== null;
+      this.tmpColor.setHex(parked ? TAIL.off : car.accel < -BRAKING || car.v < 0.5 ? TAIL.braking : TAIL.running);
+      m.tail.setColorAt(counts.tail, this.tmpColor);
+      m.tail.setColorAt(counts.tail + 1, this.tmpColor);
       // Glass all round the cabin, with a slightly smaller roof in the paint on top: windows show at the sides, front and back.
       put("glass", -shape.back, 0, top, shape.cabin, shape.glass, CAR_WIDTH * 0.86);
       put("roof", -shape.back, 0, top + shape.glass, shape.cabin - 1.2, 0.35, CAR_WIDTH * 0.8);
       for (const along of [half - WHEEL.inset, -(half - WHEEL.inset)]) put("wheels", along, 0, 0, WHEEL.length, WHEEL.height, CAR_WIDTH + 0.3);
       for (const side of [1, -1]) {
-        put("drl", half + 0.05, side * (CAR_WIDTH / 2 - 1.1), top - 1, 0.3, 0.45, 1.8);
+        if (!parked) put("drl", half + 0.05, side * (CAR_WIDTH / 2 - 1.1), top - 1, 0.3, 0.45, 1.8);
         put("tail", -half - 0.05, side * (CAR_WIDTH / 2 - 1.1), top - 1.1, 0.3, 0.7, 1.6);
       }
+      if (night > 0 && !parked) put("beams", half + BEAM.length / 2 - 1, 0, 0.05, BEAM.length, 1, BEAM.width);
       const side = lit ? sim.signal(car) : 0;
       if (!side) continue;
       // Front and rear corners on the signalling side (+1: right of travel, which is world +y when heading +x).
@@ -110,10 +136,11 @@ export class CarLayer extends Group {
         this.remove(old);
         old.dispose();
       }
-      const mesh = new InstancedMesh(this.box, this.materials[part], capacity * PER_CAR[part]);
+      const mesh = new InstancedMesh(part === "beams" ? this.plane : this.box, this.materials[part], capacity * PER_CAR[part]);
       // Painted parts take their colour per car.
-      if (part === "body" || part === "roof") mesh.setColorAt(0, this.tmpColor.setHex(0xffffff));
-      mesh.renderOrder = CAR_ORDER;
+      if (part === "body" || part === "roof" || part === "tail") mesh.setColorAt(0, this.tmpColor.setHex(0xffffff));
+      mesh.renderOrder = part === "beams" ? BEAM_ORDER : CAR_ORDER;
+      mesh.castShadow = part === "body" || part === "glass" || part === "roof" || part === "wheels";
       // Instances move every frame; their combined bounds aren't worth recomputing.
       mesh.frustumCulled = false;
       this.meshes[part] = mesh;
@@ -125,6 +152,8 @@ export class CarLayer extends Group {
     for (const mesh of Object.values(this.meshes)) mesh.dispose();
     for (const material of Object.values(this.materials)) material.dispose();
     this.box.dispose();
+    this.plane.dispose();
+    this.materials.beams.map?.dispose();
   }
 }
 
@@ -141,4 +170,29 @@ function shadedBox(): BoxGeometry {
   const colors = tones.flatMap((t) => Array(12).fill(t) as number[]);
   box.setAttribute("color", new Float32BufferAttribute(colors, 3));
   return box;
+}
+
+/**
+ * A headlight pool, seen from above with the car at the left: brightest just ahead of the car,
+ * fading with distance and towards the sides, widening as it goes. Black adds no light.
+ */
+function beamTexture(): CanvasTexture {
+  const size = 64;
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext("2d")!;
+  const image = ctx.createImageData(size, size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const along = x / (size - 1);
+      const across = Math.abs(y / (size - 1) - 0.5) * 2;
+      const spread = 0.6 + 0.4 * along;
+      const v = Math.max(0, 1 - across / spread) ** 1.5 * (1 - along) ** 1.2 * Math.min(1, along * 6);
+      const i = (y * size + x) * 4;
+      image.data[i] = image.data[i + 1] = image.data[i + 2] = Math.round(v * 255);
+      image.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(image, 0, 0);
+  return new CanvasTexture(canvas);
 }

@@ -7,6 +7,8 @@ import type { Vec2 } from "../core/geometry";
  * Future 3D objects (cars, buildings) use normal depth testing and draw on top.
  */
 export const FlatLayer = {
+  sky: -2,
+  ground: -1,
   grid: 0,
   footpath: 1,
   asphalt: 2,

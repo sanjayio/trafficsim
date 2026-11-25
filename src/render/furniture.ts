@@ -144,6 +144,7 @@ export class FurnitureKit {
   private mesh(geometry: BufferGeometry, material: Material): Mesh {
     const mesh = new Mesh(geometry, material);
     mesh.renderOrder = FURNITURE_ORDER;
+    mesh.castShadow = true;
     return mesh;
   }
 }

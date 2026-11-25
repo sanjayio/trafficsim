@@ -18,6 +18,8 @@ export interface NodeAnchor {
   y: number;
 }
 export type SimSpeed = 0 | 1 | 2 | 4;
+export const WEATHERS = ["sunny", "cloudy", "rain", "windy"] as const;
+export type Weather = (typeof WEATHERS)[number];
 
 export interface Stats {
   fps: number;
@@ -25,6 +27,11 @@ export interface Stats {
 
 interface GameState {
   tool: ToolId;
+  /** Time of day shown, in hours (0–24): the sun, sky and light. */
+  timeOfDay: number;
+  weather: Weather;
+  setTimeOfDay: (hours: number) => void;
+  setWeather: (weather: Weather) => void;
   speed: SimSpeed;
   /** Speed to resume at when unpausing. */
   lastSpeed: Exclude<SimSpeed, 0>;
@@ -94,6 +101,10 @@ interface GameState {
  */
 export const gameStore = createStore<GameState>()((set, get) => ({
   tool: "road",
+  timeOfDay: 13,
+  weather: "sunny",
+  setTimeOfDay: (timeOfDay) => set({ timeOfDay }),
+  setWeather: (weather) => set({ weather }),
   speed: 1,
   lastSpeed: 1,
   snapToGrid: true,

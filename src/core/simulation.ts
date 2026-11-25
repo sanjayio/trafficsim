@@ -60,6 +60,8 @@ export interface Car {
   leg: number;
   s: number;
   v: number;
+  /** Acceleration in the last step (negative while braking). */
+  accel: number;
   color: number;
   type: CarType;
   /** Allowed into the junction at the end of its current road leg. */
@@ -169,6 +171,7 @@ export class Simulation {
 
     for (const car of this.cars) {
       if (car.leaveAt !== null) continue;
+      car.accel = car.v > 0 || acceleration.get(car)! > 0 ? acceleration.get(car)! : 0;
       car.v = Math.max(0, car.v + acceleration.get(car)! * dt);
       const before = car.s;
       car.s += car.v * dt;
@@ -275,6 +278,7 @@ export class Simulation {
         s: 0,
         // Out of the building's door, from a standstill.
         v: 0,
+        accel: 0,
         color: CAR_COLORS[Math.floor(this.random() * CAR_COLORS.length)],
         type: CAR_TYPES[Math.floor(this.random() * CAR_TYPES.length)],
         cleared: false,

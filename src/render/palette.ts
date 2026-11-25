@@ -1,7 +1,9 @@
 export const palette = {
-  ground: 0x1d2621,
-  gridMinor: 0x26322b,
-  gridMajor: 0x314137,
+  /** Haze at the horizon: the fog, and the sky's lowest colour. */
+  ground: 0xb4c9d6,
+  grass: 0x52803c,
+  gridMinor: 0x4a7838,
+  gridMajor: 0x3a6229,
   asphalt: 0x3d4148,
   footpath: 0x6f747b,
   median: 0x4f5d45,

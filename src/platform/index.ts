@@ -51,6 +51,8 @@ export async function openMapFile(): Promise<string | null> {
 }
 
 const AUTOSAVE_KEY = "road-builder:map";
+/** How the map was last seen (camera, time of day, weather): kept apart from the map, which files save. */
+const VIEW_KEY = "road-builder:view";
 
 /** The map kept in this browser (or desktop app) between visits, if there is one. */
 export function loadAutosave(): string | null {
@@ -69,5 +71,23 @@ export function saveAutosave(contents: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** How the map was last seen, if kept. */
+export function loadView(): string | null {
+  try {
+    return localStorage.getItem(VIEW_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Keeps how the map is seen for next visit (quietly does nothing if storage is blocked or full). */
+export function saveView(contents: string): void {
+  try {
+    localStorage.setItem(VIEW_KEY, contents);
+  } catch {
+    // Nothing lost but the view.
   }
 }
