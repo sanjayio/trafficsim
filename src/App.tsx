@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { loadAutosave } from "./platform";
 import type { Engine } from "./render/Engine";
 import { ControlsDialog } from "./ui/ControlsDialog";
 import { CursorHint } from "./ui/CursorHint";
@@ -15,7 +16,10 @@ import { Toolbar } from "./ui/Toolbar";
 
 export default function App() {
   const [engine, setEngine] = useState<Engine | null>(null);
-  const [dialog, setDialog] = useState<"newMap" | "settings" | "controls" | "tutorial" | null>(null);
+  const [dialog, setDialog] = useState<"newMap" | "settings" | "controls" | "tutorial" | null>(
+    // First visit (nothing kept in this browser): start by naming a map.
+    () => (loadAutosave() ? null : "newMap"),
+  );
   const closeDialog = useCallback(() => setDialog(null), []);
 
   return (
