@@ -1,6 +1,6 @@
 import type { LaneConnection } from "./lanes";
 import type { NodeId, RoadGraph, SegmentId } from "./roadGraph";
-import { LANE_WIDTH, type RoadSpec } from "./roadSpec";
+import { carriagewayWidth, LANE_WIDTH, type RoadSpec } from "./roadSpec";
 
 /** How traffic entering a junction is controlled. */
 export type JunctionControl = "none" | "yield" | "stop" | "signals";
@@ -16,7 +16,12 @@ export interface JunctionSettings {
   connections?: LaneConnection[];
   /** Stop or give way: which of the junction's main-road choices (see `mainRoadChoices`) has priority; the rest stop or give way. */
   major?: number;
+  /** Where a slip road joins (see `slipRoad`): give way (the default), stop, or signals on every approach. */
+  slipControl?: SlipControl;
 }
+
+export const SLIP_CONTROLS = ["yield", "stop", "signals"] as const;
+export type SlipControl = (typeof SLIP_CONTROLS)[number];
 
 export const MAX_CORNER_RADIUS = 40;
 
@@ -66,7 +71,10 @@ export function parseJunctionSettings(raw: unknown): JunctionSettings {
   if (s.major !== undefined && (!Number.isInteger(s.major) || s.major < 0 || s.major > 16)) {
     throw new Error("Invalid junction settings in map file");
   }
-  const major = s.major === undefined ? {} : { major: s.major };
+  if (s.slipControl !== undefined && !(SLIP_CONTROLS as readonly unknown[]).includes(s.slipControl)) {
+    throw new Error("Invalid junction settings in map file");
+  }
+  const major = { ...(s.major === undefined ? {} : { major: s.major }), ...(s.slipControl === undefined ? {} : { slipControl: s.slipControl }) };
   if (s.connections === undefined) return { control, roundabout, cornerRadius, ...major };
   const ref = (r: unknown) =>
     !!r && Number.isSafeInteger((r as { segment: unknown }).segment) && Number.isSafeInteger((r as { lane: unknown }).lane);
@@ -86,7 +94,8 @@ export function isDefaultJunction(s: JunctionSettings): boolean {
     s.roundabout === DEFAULT_JUNCTION.roundabout &&
     s.cornerRadius === DEFAULT_JUNCTION.cornerRadius &&
     s.connections === undefined &&
-    s.major === undefined
+    s.major === undefined &&
+    s.slipControl === undefined
   );
 }
 
@@ -118,6 +127,9 @@ export function mainRoadChoices(graph: RoadGraph, nodeId: NodeId): [SegmentId, S
 export function minorRoads(graph: RoadGraph, nodeId: NodeId): Set<SegmentId> {
   const roads = graph.segmentsAt(nodeId);
   const settings = graph.junction(nodeId);
+  // A slip road: the main road has priority; traffic merging off the slip road gives way.
+  const slip = slipRoad(graph, nodeId);
+  if (slip) return new Set(slip.merge && slipControlAt(graph, nodeId) !== "signals" ? [slip.slip] : []);
   const control = effectiveControl(settings);
   if (roads.length < 3 || (control !== "stop" && control !== "yield")) return new Set();
   if (settings.roundabout) return new Set(roads.map((s) => s.id));
@@ -178,4 +190,65 @@ export function signalLights(approaches: number, time: number): SignalLight[] {
   const inPhase = time % cycle;
   const lit: SignalLight = inPhase < SIGNAL_GREEN ? "green" : "yellow";
   return Array.from({ length: approaches }, (_, i) => ((pairs ? i % phases : i) === phase ? lit : "red"));
+}
+
+/** How close to the main road's direction (cosine of ~35°) a one-way road must leave or join it to be a slip road. */
+const SLIP_ALONG = 0.82;
+/** How straight the main road must run through (cosine of ~25° off straight). */
+const SLIP_THROUGH = 0.9;
+
+/**
+ * Whether junction `nodeId` is where a one-way slip road leaves (`merge` false) or joins (`merge`
+ * true) a main road: exactly three roads, two of them running on straight through, the third one-way
+ * and within about 35° of the main road's direction, on the side whose lane runs its way (left
+ * of a road under left-hand traffic, right under right-hand). Such a node has no junction: the slip road
+ * peels off or tapers in, its traffic giving way where it joins. Not at a roundabout.
+ */
+export function slipRoad(graph: RoadGraph, nodeId: NodeId): { slip: SegmentId; through: [SegmentId, SegmentId]; merge: boolean } | null {
+  const roads = graph.segmentsAt(nodeId);
+  if (roads.length !== 3 || graph.junction(nodeId).roundabout) return null;
+  const oneWays = roads.filter((s) => s.spec.oneWay);
+  if (oneWays.length !== 1) return null;
+  const slip = oneWays[0];
+  const [a, b] = roads.filter((s) => s !== slip);
+  const dir = (s: (typeof roads)[number]) => graph.directionAway(s, nodeId);
+  const dot = (p: { x: number; y: number }, q: { x: number; y: number }) => p.x * q.x + p.y * q.y;
+  if (-dot(dir(a), dir(b)) < SLIP_THROUGH) return null;
+  if (Math.max(dot(dir(slip), dir(a)), dot(dir(slip), dir(b))) < SLIP_ALONG) return null;
+  // Only off (or into) the main road's lane running the slip road's way: on the side traffic keeps to.
+  const merge = slip.b === nodeId;
+  const along = dot(dir(slip), dir(a)) >= dot(dir(slip), dir(b)) ? dir(a) : dir(b);
+  const travel = merge ? { x: -along.x, y: -along.y } : along;
+  const right = { x: -travel.y, y: travel.x };
+  const keep = graph.drivingSide === "right" ? 1 : -1;
+  if (dot(dir(slip), right) * keep <= 0) return null;
+  return { slip: slip.id, through: [a.id, b.id], merge };
+}
+
+/** How traffic joining from a slip road at `nodeId` is controlled. */
+export function slipControlAt(graph: RoadGraph, nodeId: NodeId): SlipControl {
+  return graph.junction(nodeId).slipControl ?? "yield";
+}
+
+/**
+ * Where a slip road's end at `nodeId` is drawn and driven from: moved from the main road's centre
+ * line (where the node is) out to the middle of the main road's outside lane on the slip road's
+ * side, so it peels off (or tapers into) that lane. Null for any other road end.
+ */
+export function slipShift(graph: RoadGraph, nodeId: NodeId, segmentId: SegmentId): { x: number; y: number } | null {
+  const slip = slipRoad(graph, nodeId);
+  if (!slip || slip.slip !== segmentId) return null;
+  const road = graph.segments.get(segmentId)!;
+  const away = graph.directionAway(road, nodeId);
+  // The main road's arm running the same way as the slip road, and which side of it the slip road lies.
+  const arms = slip.through.map((id) => graph.segments.get(id)!);
+  const dot = (s: (typeof arms)[number]) => {
+    const d = graph.directionAway(s, nodeId);
+    return d.x * away.x + d.y * away.y;
+  };
+  const arm = dot(arms[0]) >= dot(arms[1]) ? arms[0] : arms[1];
+  const along = graph.directionAway(arm, nodeId);
+  const side = along.x * away.y - along.y * away.x >= 0 ? 1 : -1;
+  const offset = carriagewayWidth(arm.spec) / 2 - LANE_WIDTH / 2;
+  return { x: -along.y * side * offset, y: along.x * side * offset };
 }

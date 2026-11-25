@@ -12,7 +12,7 @@ import {
   Vector3,
 } from "three";
 import type { RoadGraph } from "../core/roadGraph";
-import { FOOTPATH_WIDTH, roadWidth } from "../core/roadSpec";
+import { carriagewayWidth, FOOTPATH_WIDTH, roadWidth } from "../core/roadSpec";
 
 /** Distance between lights along a road (they alternate sides), and clearance from a road's ends. */
 const SPACING = 55;
@@ -69,7 +69,14 @@ export class StreetLights extends Group {
       new Matrix4().compose(new Vector3(x, y, z), q.setFromAxisAngle(up, -angle).clone(), new Vector3(sx, sy, sz));
     for (const segment of this.graph.segments.values()) {
       if (!segment.spec.footpath) continue;
-      const path = this.graph.path(segment);
+      // As drawn (a slip road's end runs from the main road's outside lane).
+      const path = this.graph.drawnPath(segment);
+      // Roads joining this one at its ends: no light where it would stand on one (where a slip road overlaps).
+      const neighbours = [segment.a, segment.b]
+        .flatMap((n) => this.graph.segmentsAt(n))
+        .filter((s) => s.id !== segment.id);
+      const onRoad = (p: { x: number; y: number }) =>
+        neighbours.some((s) => this.graph.drawnPath(s).distanceTo(p) < carriagewayWidth(s.spec) / 2 + 2);
       // Clear of junctions (their corners) and of driveways and joins at the road's ends.
       const clear = (node: number) => (this.graph.segmentsAt(node).length >= 3 ? this.graph.junctionRadius(node) + 8 : END_CLEAR);
       const from = clear(segment.a);
@@ -87,6 +94,7 @@ export class StreetLights extends Group {
         const angle = Math.atan2(-out.y, -out.x);
         const arm = { x: at.x - out.x * (ARM / 2), y: at.y - out.y * (ARM / 2) };
         const head = { x: at.x - out.x * ARM, y: at.y - out.y * ARM };
+        if (onRoad(at)) continue;
         poles.push(box(at.x, POLE.height / 2, at.y, POLE.width, POLE.height, POLE.width, angle));
         arms.push(box(arm.x, POLE.height - 0.3, arm.y, ARM, 0.5, 0.5, angle));
         heads.push(box(head.x, POLE.height - 0.6, head.y, 2.4, 0.5, 1.4, angle));

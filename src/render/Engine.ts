@@ -10,6 +10,7 @@ import { LaneTool } from "../tools/LaneTool";
 import { TrafficTool } from "../tools/TrafficTool";
 import { ZoneMap } from "../core/zoning";
 import { levelUp } from "../core/growth";
+import { slipRoad } from "../core/junction";
 import { CarLayer } from "./CarLayer";
 import { ZoneLayer } from "./ZoneLayer";
 import { loadAutosave, loadView, openMapFile, saveAutosave, saveMapFile, saveView } from "../platform";
@@ -469,7 +470,9 @@ export class Engine {
   private anchorAt(s: Vec2): NodeAnchor | null {
     const world = this.camera.screenToWorld(s);
     const junction = world && this.graph.junctionAt(world);
-    if (junction) return { id: junction.id, kind: "junction", ...this.camera.worldToScreen(junction) };
+    // Where a slip road leaves there's nothing to set; where one joins, how it gives way.
+    const split = junction && slipRoad(this.graph, junction.id)?.merge === false;
+    if (junction && !split) return { id: junction.id, kind: "junction", ...this.camera.worldToScreen(junction) };
     const buildings = this.roads.buildingGroups();
     let hit = this.camera.pick(s, [...buildings.keys()]);
     while (hit && !buildings.has(hit)) hit = hit.parent;

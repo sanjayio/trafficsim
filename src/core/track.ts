@@ -97,14 +97,15 @@ export class TrackBuilder {
     const key = `r:${segment.id}:${forward ? 1 : -1}:${lane}`;
     let track = this.roadTracks.get(key);
     if (!track) {
-      const curve = this.graph.curveOf(segment);
+      // As drawn: a slip road's end runs from the main road's outside lane.
+      const curve = this.graph.drawnCurve(segment);
       const offset = laneOffsets(segment.spec, this.graph.drivingSide)[lane];
       track = new Track(offsetCurve(forward ? curve : reverseCurve(curve), offset));
       this.roadTracks.set(key, track);
     }
     const toNode = forward ? segment.b : segment.a;
     // The lane is a little longer or shorter than the centre line on bends; scale the insets to match.
-    const scale = track.length / (this.graph.path(segment).length || 1);
+    const scale = track.length / (this.graph.drawnPath(segment).length || 1);
     const from = Math.max(this.insetAt(segment, fromNode), ends.start ?? 0) * scale;
     const to = track.length - Math.max(this.insetAt(segment, toNode), ends.end ?? 0) * scale;
     return { track, from, to: Math.max(from, to), key, segment: segment.id };

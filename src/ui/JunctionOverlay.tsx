@@ -1,6 +1,6 @@
 import { Ban, GitMerge, Octagon, RefreshCw, Settings2, Triangle, type LucideProps } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import { mainRoadChoices, MAX_CORNER_RADIUS, type JunctionControl, type JunctionSettings } from "../core/junction";
+import { mainRoadChoices, MAX_CORNER_RADIUS, slipRoad, type JunctionControl, type JunctionSettings, type SlipControl } from "../core/junction";
 import type { Engine } from "../render/Engine";
 import { gameStore, useGame } from "../state/store";
 import { OptionsPanel, Switch } from "./OptionsPanel";
@@ -79,8 +79,39 @@ function useJunctionSettings(engine: Engine, id: number): JunctionSettings {
   return settings;
 }
 
+/** Where a slip road joins: give way (the default), stop, or signals on every approach. */
+function SlipPanel({ engine, id, x, y }: { engine: Engine; id: number; x: number; y: number }) {
+  const settings = useJunctionSettings(engine, id);
+  const current = settings.slipControl ?? "yield";
+  const options = CONTROLS.filter((c) => c.id !== "none");
+  return (
+    <OptionsPanel title="Slip road" x={x} y={y} height={150}>
+      <div role="radiogroup" aria-label="Control" className="grid grid-cols-3 gap-1">
+        {options.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            role="radio"
+            aria-checked={current === c.id}
+            onClick={() => engine.graph.setJunction(id, { slipControl: c.id === "yield" ? undefined : (c.id as SlipControl) })}
+            onMouseDown={keepFocusOnGame}
+            className={`flex flex-col items-center gap-1 rounded-lg py-1.5 text-[11px] font-medium transition-colors duration-100 ${
+              current === c.id ? "bg-sky-500/90 text-white" : "text-neutral-300 hover:bg-white/10 hover:text-white"
+            }`}
+          >
+            {c.icon}
+            {c.label}
+          </button>
+        ))}
+      </div>
+      <p className="px-1 text-xs text-neutral-500">How traffic joining from the slip road meets the main road.</p>
+    </OptionsPanel>
+  );
+}
+
 function JunctionPanel({ engine, id, x, y }: { engine: Engine; id: number; x: number; y: number }) {
   const settings = useJunctionSettings(engine, id);
+  if (slipRoad(engine.graph, id)) return <SlipPanel engine={engine} id={id} x={x} y={y} />;
   const update = (changes: Partial<JunctionSettings>) => engine.graph.setJunction(id, changes);
   // Which roads stop or give way can be swapped when there's more than one way to pick the main road.
   const choices = engine.graph.segmentsAt(id).length >= 3 ? mainRoadChoices(engine.graph, id).length : 0;

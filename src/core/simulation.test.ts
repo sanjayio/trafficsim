@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { straightCurve } from "./curve";
-import { kerbRadius, minorRoads, roundaboutShape, signalApproaches, signalLights } from "./junction";
+import { kerbRadius, minorRoads, roundaboutShape, signalApproaches, signalLights, slipRoad } from "./junction";
 
 /** Longer than a stop sign's hold: a car standing at the line this long has stopped there. */
 const STOP_HOLD_TEST = 1;
@@ -10,7 +10,7 @@ import { DEFAULT_ROAD_SPEC, LANE_WIDTH, type RoadSpec } from "./roadSpec";
 import { CAR_LENGTH, CAR_WIDTH, SIM_DT, Simulation, type Car } from "./simulation";
 import { BUILDING_SIZE, DEFAULT_SOURCE, carPark, newTerminal, parseTerminal, SINK } from "./terminal";
 import { lanesInnerToKerb } from "./lanes";
-import { TrackBuilder } from "./track";
+import { legLength, TrackBuilder } from "./track";
 
 const road = (graph: RoadGraph, ax: number, ay: number, bx: number, by: number, spec: RoadSpec = DEFAULT_ROAD_SPEC) =>
   graph.buildRoad(straightCurve({ x: ax, y: ay }, { x: bx, y: by }), spec);
@@ -591,5 +591,101 @@ describe("stop and give way junctions", () => {
     });
     expect(sideStopped).toBeGreaterThan(0);
     expect(mainStopped).toBe(0);
+  });
+});
+
+describe("slip roads", () => {
+  it("peel a one-way road off the main road and merge it back, giving way, with no junction", () => {
+    const graph = new RoadGraph();
+    road(graph, 0, 0, 900, 0);
+    const oneWay = { ...DEFAULT_ROAD_SPEC, oneWay: true };
+    road(graph, 200, 0, 320, 30, oneWay);
+    road(graph, 320, 30, 580, 30, oneWay);
+    road(graph, 580, 30, 700, 0, oneWay);
+    const split = at(graph, 200, 0);
+    const merge = at(graph, 700, 0);
+    expect(slipRoad(graph, split)).toMatchObject({ merge: false });
+    expect(slipRoad(graph, merge)).toMatchObject({ merge: true });
+    expect(minorRoads(graph, split).size).toBe(0);
+
+    // Off the far side, against the traffic in the lane it would leave: a normal junction instead.
+    const wrong = new RoadGraph();
+    road(wrong, 0, 0, 900, 0);
+    road(wrong, 200, 0, 320, -30, oneWay);
+    expect(slipRoad(wrong, at(wrong, 200, 0))).toBeNull();
+    expect([...minorRoads(graph, merge)]).toEqual([slipRoad(graph, merge)!.slip]);
+
+    // In off the main road to a shop on the slip road; out of a home on it, merging back on.
+    const shop = graph.nodeOnRoad({ x: 450, y: 32 })!;
+    graph.setTerminal(shop.id, { ...SINK, side: 1 });
+    graph.setTerminal(at(graph, 0, 0), { ...DEFAULT_SOURCE, rate: 8, to: "custom", sinks: [shop.id] });
+    const home = graph.nodeOnRoad({ x: 380, y: 32 })!;
+    graph.setTerminal(home.id, { ...DEFAULT_SOURCE, rate: 20, side: 1, to: "custom", sinks: [] });
+    graph.setTerminal(at(graph, 900, 0), SINK);
+    graph.setTerminal(home.id, { ...DEFAULT_SOURCE, rate: 20, side: 1, to: "custom", sinks: [at(graph, 900, 0)] });
+    const sim = new Simulation(graph);
+    sim.parking = false;
+    const arrived = new Map<string, number>();
+    const indicated = new Set<string>();
+    run(sim, 120, () => {
+      noOverlap(sim);
+      // Right-hand traffic, slip road on the right: right onto it, left off it back onto the main road.
+      for (const car of sim.cars) {
+        const leg = car.legs[car.leg];
+        if (leg.node === split && sim.signal(car) === 1) indicated.add("on");
+        // Nothing to wait for on the way onto the slip road: no braking for it (except behind another car).
+        const next = car.legs[car.leg + 1];
+        const alone = !sim.cars.some((c) => c !== car && c.legs[c.leg].key === leg.key && c.s > car.s);
+        if (next?.node === split && alone) expect(car.accel).toBeGreaterThan(-2);
+        if (leg.node === merge && sim.signal(car) === -1) indicated.add("off");
+      }
+      for (const car of sim.cars) {
+        const end = car.legs[car.legs.length - 1].key;
+        if (car.leg === car.legs.length - 1 && car.s > legLength(car.legs[car.leg]) - 1) arrived.set(end, (arrived.get(end) ?? 0) + 1);
+      }
+    });
+    // Coming the other way along the main road, nobody doubles back onto the slip road at its start.
+    const back = findRoute(graph, at(graph, 900, 0), shop.id);
+    if (back) {
+      back.nodes.slice(1, -1).forEach((node, i) => {
+        if (node !== split) return;
+        const p = graph.directionAway(graph.segments.get(back.segments[i])!, node);
+        const q = graph.directionAway(graph.segments.get(back.segments[i + 1])!, node);
+        expect(p.x * q.x + p.y * q.y).toBeLessThan(0);
+      });
+    }
+    // Both ways round got through: in to the shop off the split, out past the merge to the far end.
+    expect(sim.delivered).toBeGreaterThan(20);
+    expect(arrived.get(`in:${shop.id}`)).toBeGreaterThan(0);
+    expect(arrived.get(`in:${at(graph, 900, 0)}`)).toBeGreaterThan(0);
+    expect([...indicated].sort()).toEqual(["off", "on"]);
+  });
+});
+
+describe("turning into driveways", () => {
+  it("waits in its lane for oncoming traffic and for room, rather than stopping halfway across", () => {
+    const graph = new RoadGraph();
+    road(graph, 0, 0, 900, 0);
+    // Through traffic both ways, and a shop on the far side of the road from a home.
+    graph.setTerminal(at(graph, 0, 0), { ...DEFAULT_SOURCE, rate: 3 });
+    graph.setTerminal(at(graph, 900, 0), { ...DEFAULT_SOURCE, rate: 3 });
+    const home = graph.nodeOnRoad({ x: 300, y: 5 })!;
+    graph.setTerminal(home.id, { ...DEFAULT_SOURCE, rate: 3, side: 1 });
+    const shop = graph.nodeOnRoad({ x: 500, y: -5 })!;
+    graph.setTerminal(shop.id, { ...SINK, side: -1 });
+    const sim = new Simulation(graph);
+    let turns = 0;
+    let stalled = 0;
+    run(sim, 240, () => {
+      for (const car of sim.cars) {
+        const leg = car.legs[car.leg];
+        if (!leg.key.startsWith("in:") || leg.key.endsWith(":rear") === false && !leg.key.startsWith(`in:${shop.id}`)) continue;
+        if (car.s < 1) turns++;
+        // Part way through the turn (still on the road), standing still.
+        if (car.s > 4 && car.s < legLength(leg) - 4 && car.v < 0.5) stalled++;
+      }
+    });
+    expect(turns).toBeGreaterThan(0);
+    expect(stalled).toBe(0);
   });
 });

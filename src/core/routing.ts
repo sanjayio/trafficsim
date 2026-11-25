@@ -1,4 +1,4 @@
-import { effectiveControl, type JunctionControl } from "./junction";
+import { effectiveControl, slipRoad, type JunctionControl } from "./junction";
 import { connectionsAt, hasLaneConnector } from "./lanes";
 import type { NodeId, RoadGraph, SegmentId } from "./roadGraph";
 
@@ -33,6 +33,12 @@ export function findRoute(graph: RoadGraph, from: NodeId, to: NodeId): Route | n
   // Which roads each junction's lane connections lead to from each road in.
   const turns = new Map<NodeId, Set<string>>();
   const allowed = (node: NodeId, into: SegmentId, out: SegmentId) => {
+    // Where a slip road leaves or joins: only on, off or straight through, never a hairpin back.
+    if (slipRoad(graph, node)) {
+      const a = graph.directionAway(graph.segments.get(into)!, node);
+      const b = graph.directionAway(graph.segments.get(out)!, node);
+      return a.x * b.x + a.y * b.y < 0;
+    }
     if (!hasLaneConnector(graph, node)) return true;
     let set = turns.get(node);
     if (!set) turns.set(node, (set = new Set(connectionsAt(graph, node).map((c) => `${c.from.segment}>${c.to.segment}`))));
@@ -55,7 +61,7 @@ export function findRoute(graph: RoadGraph, from: NodeId, to: NodeId): Route | n
 
     const roads = graph.segmentsAt(current.node);
     // Passing through a junction costs its delay; a road's start and end don't.
-    const delay = current.node !== from && roads.length >= 3 ? JUNCTION_DELAY[effectiveControl(graph.junction(current.node))] : 0;
+    const delay = current.node !== from && roads.length >= 3 && !slipRoad(graph, current.node) ? JUNCTION_DELAY[effectiveControl(graph.junction(current.node))] : 0;
     for (const segment of roads) {
       if (segment.spec.oneWay && segment.a !== current.node) continue;
       if (segment.id === current.via) continue;

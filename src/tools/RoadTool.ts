@@ -11,7 +11,7 @@ import {
 } from "../core/curve";
 import { distance, type Vec2 } from "../core/geometry";
 import type { Crossing } from "../core/roadGraph";
-import { roadWidth, type RoadSpec } from "../core/roadSpec";
+import { carriagewayWidth, LANE_WIDTH, roadWidth, type RoadSpec } from "../core/roadSpec";
 import { palette } from "../render/palette";
 import { angleBetween, referenceDirection, snapPoint, type Guide } from "./snapping";
 import type { RoadMode, Tool, ToolContext } from "./Tool";
@@ -41,6 +41,8 @@ interface PlannedRoad {
  */
 export class RoadTool implements Tool {
   private points: Vec2[] = [];
+  /** Where the pointer is, before snapping (which side of a road it's on). */
+  private pointer: Vec2 | null = null;
   /** Continuous mode: direction the chain left off in, once its first road is built. */
   private chainTangent: Vec2 | null = null;
 
@@ -73,6 +75,7 @@ export class RoadTool implements Tool {
   }
 
   onMove(p: Vec2): void {
+    this.pointer = p;
     const { point, guides } = this.snap(p, this.points.length === CLICKS[this.ctx.roadMode()] - 1);
     this.drawPreview(point, guides);
   }
@@ -173,10 +176,20 @@ export class RoadTool implements Tool {
       overlay.guide(g.origin, to, palette.guide, pixel);
     }
 
+    // A one-way road from or to the middle of a road is shown from the lane it would peel off (or join).
+    const shown = points.map((p, i) => this.inLane(p, points[i + 1] ?? points[i - 1] ?? this.pointer, i < points.length - 1 || points.length === 1));
     if (points.length >= 2 && distance(points[0], cursor) > 0) {
       const roads = this.plan(points);
-      for (const road of roads) {
-        if (road.curve) overlay.roadPreview(road.curve, road.spec, road.valid);
+      for (const [i, road] of roads.entries()) {
+        if (!road.curve) continue;
+        const moved = (p: Vec2, q: Vec2) => ({ x: q.x - p.x, y: q.y - p.y });
+        const [start, end] = [moved(points[0], shown[0]), moved(points[points.length - 1], shown[shown.length - 1])];
+        const c = road.curve;
+        const curve =
+          i === 0
+            ? { a: shown[0], c1: { x: c.c1.x + start.x, y: c.c1.y + start.y }, c2: { x: c.c2.x + end.x, y: c.c2.y + end.y }, b: shown[shown.length - 1] }
+            : c;
+        overlay.roadPreview(curve, road.spec, road.valid);
         // Mark where junctions will form.
         for (const c of road.crossings) overlay.dot(c.point, road.valid ? palette.junction : palette.danger);
       }
@@ -198,6 +211,35 @@ export class RoadTool implements Tool {
       overlay.line(points[0], points[1], palette.preview);
       overlay.line(points[points.length - 2], points[points.length - 1], palette.preview);
     }
-    for (const p of points) overlay.dot(p, palette.preview);
+    for (const p of shown) overlay.dot(p, palette.preview);
+  }
+
+  /**
+   * With a one-way road, a point on another (two-way) road's centre line, moved to the middle of
+   * its outside lane on `toward`'s side: where a slip road peels off or joins. Points elsewhere,
+   * or heading across the road (more than about 35° off it), stay as they are.
+   */
+  private inLane(p: Vec2, toward: Vec2 | null, leaving: boolean): Vec2 {
+    if (!this.ctx.roadSpec().oneWay || !toward) return p;
+    const { graph } = this.ctx;
+    const segment = graph.segmentAt(p);
+    if (!segment || segment.spec.oneWay) return p;
+    const { point, s } = graph.path(segment).nearest(p);
+    if (distance(point, p) > 0.5) return p;
+    const along = graph.path(segment).at(s).tangent;
+    const to = { x: toward.x - p.x, y: toward.y - p.y };
+    const length = Math.hypot(to.x, to.y);
+    if (length < 1e-6) return p;
+    const crossing = Math.abs(along.x * to.y - along.y * to.x) / length;
+    // Steeper than ~35° off the road: a normal junction, at the centre line. (A lone point has no heading yet.)
+    if (toward !== this.pointer && crossing > Math.sin((35 * Math.PI) / 180)) return p;
+    const side = along.x * to.y - along.y * to.x >= 0 ? 1 : -1;
+    // Only a lane running the new road's way: leaving, towards `toward`; joining, coming from it.
+    // Traffic keeps right of its way (as `side` measures it) under right-hand traffic.
+    const heading = (along.x * to.x + along.y * to.y >= 0 ? 1 : -1) * (leaving ? 1 : -1);
+    const keep = graph.drivingSide === "right" ? 1 : -1;
+    if (side * heading * keep <= 0 && toward !== this.pointer) return p;
+    const offset = carriagewayWidth(segment.spec) / 2 - LANE_WIDTH / 2;
+    return { x: p.x - along.y * side * offset, y: p.y + along.x * side * offset };
   }
 }

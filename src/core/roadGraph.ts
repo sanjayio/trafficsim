@@ -6,6 +6,7 @@ import {
   isDefaultJunction,
   parseJunctionSettings,
   roundaboutShape,
+  slipShift,
   type JunctionSettings,
 } from "./junction";
 import type { LaneRef } from "./lanes";
@@ -102,6 +103,8 @@ export class RoadGraph {
   private nextId = 1;
   /** Sampled centre line per segment, built when the segment is added. */
   private sampled = new Map<SegmentId, SampledCurve>();
+  /** Drawn curves (see `drawnPath`): they depend on the roads round each end, so any change clears them. */
+  private drawn = new Map<SegmentId, SampledCurve>();
   /** Segments meeting at each node, so finding a junction's roads doesn't scan the whole map. */
   private adjacent = new Map<NodeId, Set<SegmentId>>();
   private listeners = new Set<(e: GraphEvent) => void>();
@@ -323,6 +326,29 @@ export class RoadGraph {
     if (!sampled) {
       sampled = new SampledCurve(this.curveOf(segment));
       this.sampled.set(segment.id, sampled);
+    }
+    return sampled;
+  }
+
+  /**
+   * The road as drawn and driven: its curve, with any end where it's a slip road moved out to the
+   * main road's outside lane (see `slipShift`). Its centre line (`curveOf`) still ends on the node.
+   */
+  drawnCurve(segment: RoadSegment): Curve {
+    const curve = this.curveOf(segment);
+    const start = slipShift(this, segment.a, segment.id);
+    const end = slipShift(this, segment.b, segment.id);
+    if (!start && !end) return curve;
+    const move = (p: Vec2, by: Vec2 | null) => (by ? { x: p.x + by.x, y: p.y + by.y } : p);
+    return { a: move(curve.a, start), c1: move(curve.c1, start), c2: move(curve.c2, end), b: move(curve.b, end) };
+  }
+
+  /** `drawnCurve`, sampled (cached until the network next changes). */
+  drawnPath(segment: RoadSegment): SampledCurve {
+    let sampled = this.drawn.get(segment.id);
+    if (!sampled) {
+      sampled = new SampledCurve(this.drawnCurve(segment));
+      this.drawn.set(segment.id, sampled);
     }
     return sampled;
   }
@@ -688,6 +714,7 @@ export class RoadGraph {
   }
 
   private emit(e: GraphEvent): void {
+    if (e.type !== "terminal-changed") this.drawn.clear();
     for (const listener of this.listeners) listener(e);
   }
 }

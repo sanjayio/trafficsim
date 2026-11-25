@@ -1,5 +1,5 @@
 import { Group, Mesh, type BufferGeometry, type InstancedMesh, type MeshBasicMaterial, type Object3D } from "three";
-import { effectiveControl, kerbRadius, minorRoads, signalApproaches, MAX_CORNER_RADIUS, roundaboutShape, signalLights } from "../core/junction";
+import { effectiveControl, kerbRadius, minorRoads, slipControlAt, slipRoad, signalApproaches, MAX_CORNER_RADIUS, roundaboutShape, signalLights } from "../core/junction";
 import type { GraphEvent, NodeId, RoadGraph, RoadSegment, SegmentId } from "../core/roadGraph";
 import { connectionsAt, hasLaneConnector, turnAt, type Turn } from "../core/lanes";
 import { carriagewayWidth, FOOTPATH_WIDTH, hasMedian, LANE_WIDTH, MEDIAN_WIDTH, roadWidth, type RoadSpec } from "../core/roadSpec";
@@ -20,6 +20,10 @@ const JUNCTION_MARGIN = 2;
 const MIN_CLEARANCE_SINE = 0.35;
 /** Width of a source's or sink's driveway. */
 /** Signs stand this far outside a road without a footpath (on a footpath, they stand mid-path). */
+/** How far from a slip road's node its markings start (clear of the main road it overlaps there). */
+const SLIP_CLEAR = 30;
+/** A give way or stop line at a slip road's end stands this far back from where it meets the main road's kerb. */
+const SLIP_LINE_GAP = 2;
 const SIGN_SETBACK = 3;
 
 
@@ -198,7 +202,8 @@ export class RoadLayer extends Group {
 
   /** The road `segment` as seen leaving node `nodeId`. */
   private armOf(segment: RoadSegment, nodeId: NodeId): JunctionArm {
-    const path = this.graph.path(segment);
+    // As drawn (a slip road's end runs from the main road's outside lane).
+    const path = this.graph.drawnPath(segment);
     const leavesFromStart = segment.a === nodeId;
     return {
       dir: this.graph.directionAway(segment, nodeId),
@@ -224,7 +229,10 @@ export class RoadLayer extends Group {
     const meeting = this.graph.segmentsAt(nodeId);
     if (meeting.length < 3) return;
 
-    const control = effectiveControl(this.graph.junction(nodeId));
+    // Where a slip road joins: its control (give way unless set otherwise); where one leaves, none.
+    const slip = slipRoad(this.graph, nodeId);
+    if (slip && !slip.merge) return;
+    const control = slip ? slipControlAt(this.graph, nodeId) : effectiveControl(this.graph.junction(nodeId));
     if (control === "none") return;
 
     const group = new Group();
@@ -272,6 +280,8 @@ export class RoadLayer extends Group {
 
     const meeting = this.graph.segmentsAt(nodeId);
     const settings = this.graph.junction(nodeId);
+    // A slip road peels off or tapers in: the roads overlap, with no junction surface or corners.
+    if (slipRoad(this.graph, nodeId)) return;
     let meshes: Mesh[];
     if (settings.roundabout && meeting.length >= 3) {
       const shape = roundaboutShape(meeting.map((s) => s.spec));
@@ -331,6 +341,17 @@ export class RoadLayer extends Group {
       return { inset: this.bendLines(nodeId) ? this.bendInset(segment, nodeId) : 0, entry: "none" };
     }
     if (meeting.length === 1) return { inset: carriagewayWidth(segment.spec) / 2, entry: "none", turnaround: true };
+    // At a slip road the main road's markings run straight on; the slip road's start clear of it, with no line.
+    const slip = slipRoad(this.graph, nodeId);
+    if (slip) {
+      // Where it joins: a line across the slip road (give way, or stop for a stop sign or signals);
+      // under signals the main road stops too, a little back from where the slip road meets it.
+      const control = slip.merge ? slipControlAt(this.graph, nodeId) : null;
+      if (segment.id === slip.slip) {
+        return { inset: this.slipClear(segment, nodeId, slip.through), entry: control === null ? "none" : control === "yield" ? "yield" : "stop" };
+      }
+      return control === "signals" ? { inset: SLIP_CLEAR / 2, entry: "stop" } : { inset: 0, entry: "none" };
+    }
 
     // At a roundabout the ring (and any splitter island) decides where this road's markings start.
     const approach = this.roundaboutApproaches.get(nodeId)?.get(segment.id);
@@ -356,6 +377,20 @@ export class RoadLayer extends Group {
     const main = (control === "stop" || control === "yield") && !minorRoads(this.graph, nodeId).has(segment.id);
     const entry = control === "none" || main ? "none" : control === "yield" ? "yield" : "stop";
     return { inset, entry, turns: this.laneTurns(segment, nodeId) };
+  }
+
+  /**
+   * How far along slip road `segment` from `nodeId` it's clear of the main road: where its whole
+   * carriageway has left the main road's (so a line there is just before the lane it joins).
+   */
+  private slipClear(segment: RoadSegment, nodeId: NodeId, through: [SegmentId, SegmentId]): number {
+    const path = this.graph.drawnPath(segment);
+    const main = through.map((id) => this.graph.segments.get(id)!);
+    const reach = Math.max(...main.map((m) => carriagewayWidth(m.spec) / 2)) + carriagewayWidth(segment.spec) / 2;
+    const at = (d: number) => path.at(segment.a === nodeId ? d : path.length - d).p;
+    const clear = (d: number) => main.every((m) => this.graph.path(m).distanceTo(at(d)) >= reach);
+    for (let d = 0; d < path.length; d += 1) if (clear(d)) return d + SLIP_LINE_GAP;
+    return SLIP_CLEAR;
   }
 
   /** Where a road's markings stop short of a bend: where the corner's kerb meets it, and at least half the road's width. */
@@ -426,7 +461,7 @@ export class RoadLayer extends Group {
 
   private addSegment(segment: RoadSegment): void {
     const ends = { start: this.endAt(segment, segment.a), end: this.endAt(segment, segment.b) };
-    const meshes = buildRoadParts(this.graph.path(segment), segment.spec, ends, this.graph.drivingSide).map(
+    const meshes = buildRoadParts(this.graph.drawnPath(segment), segment.spec, ends, this.graph.drivingSide).map(
       ({ part, geometry }) => {
         const mesh = new Mesh(geometry, this.materials[part]);
         mesh.renderOrder = ROAD_PART_STYLE[part].layer;
