@@ -27,6 +27,7 @@ export const CONTROL_GROUPS: ControlGroup[] = [
       { keys: ["1"], action: "Select" },
       { keys: ["2"], action: "Road" },
       { keys: ["3"], action: "Bulldoze" },
+      { keys: ["4"], action: "Traffic: place sources and sinks" },
     ],
   },
   {
@@ -49,6 +50,16 @@ export const CONTROL_GROUPS: ControlGroup[] = [
       { keys: ["Hover"], action: "Show a junction's ⚙ options button (Select tool, or Road tool between roads)" },
       { keys: ["Click"], action: "Select tool: open a junction's options" },
       { keys: ["Esc"], action: "Close junction options" },
+      { keys: ["Click"], action: "Lane connector (in junction options): an incoming lane end, then outgoing lane starts to connect or disconnect" },
+      { keys: ["Right-click"], action: "Lane connector: drop the picked lane" },
+      { keys: ["Esc"], action: "Leave the lane connector" },
+    ],
+  },
+  {
+    title: "Traffic",
+    rows: [
+      { keys: ["Click"], action: "Traffic tool: place a source or sink at a road end, or along a road on the side you click (click again to remove)" },
+      { keys: ["Hover"], action: "Show a source's ⚙ button: on/off, cars per minute, destinations" },
     ],
   },
   {

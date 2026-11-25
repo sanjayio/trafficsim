@@ -1,13 +1,13 @@
-import { Ban, Octagon, RefreshCw, Settings2, Triangle, X, type LucideProps } from "lucide-react";
+import { Ban, GitMerge, Octagon, RefreshCw, Settings2, Triangle, type LucideProps } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { MAX_CORNER_RADIUS, type JunctionControl, type JunctionSettings } from "../core/junction";
 import type { Engine } from "../render/Engine";
 import { gameStore, useGame } from "../state/store";
+import { OptionsPanel, Switch } from "./OptionsPanel";
 import { keepFocusOnGame } from "./Panel";
+import { SourcePanel } from "./SourcePanel";
 
-const PANEL_WIDTH = 264;
-const PANEL_HEIGHT = 250;
-const EDGE = 12;
+const PANEL_HEIGHT = 290;
 
 /** A traffic light, drawn in the lucide style (the set has none). */
 function TrafficLightIcon({ size = 24, strokeWidth = 2, ...props }: LucideProps) {
@@ -39,20 +39,21 @@ const CONTROLS: { id: JunctionControl; label: string; icon: ReactNode }[] = [
 ];
 
 /**
- * Junction options: a ⚙ button beside the hovered junction, and the options panel for the open
- * one. Both follow their junction as the camera moves.
+ * Junction and source options: a ⚙ button beside the hovered junction or source, and the options
+ * panel for the open one. Both follow their node as the camera moves.
  */
 export function JunctionOverlay({ engine }: { engine: Engine | null }) {
   const hover = useGame((s) => s.junctionHover);
   const open = useGame((s) => s.junctionOpen);
   if (!engine) return null;
+  if (open?.kind === "source") return <SourcePanel engine={engine} id={open.id} x={open.x} y={open.y} />;
   if (open) return <JunctionPanel engine={engine} id={open.id} x={open.x} y={open.y} />;
   if (!hover) return null;
   return (
     <button
       type="button"
-      aria-label="Junction options"
-      title="Junction options"
+      aria-label={hover.kind === "source" ? "Source options" : "Junction options"}
+      title={hover.kind === "source" ? "Source options" : "Junction options"}
       onMouseDown={keepFocusOnGame}
       onClick={() => {
         gameStore.getState().setJunctionOpen(hover);
@@ -81,40 +82,8 @@ function useJunctionSettings(engine: Engine, id: number): JunctionSettings {
 function JunctionPanel({ engine, id, x, y }: { engine: Engine; id: number; x: number; y: number }) {
   const settings = useJunctionSettings(engine, id);
   const update = (changes: Partial<JunctionSettings>) => engine.graph.setJunction(id, changes);
-  const close = () => gameStore.getState().setJunctionOpen(null);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") gameStore.getState().setJunctionOpen(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  // Beside the junction, kept inside the window.
-  const left = Math.min(Math.max(EDGE, x + 28), window.innerWidth - PANEL_WIDTH - EDGE);
-  const top = Math.min(Math.max(EDGE, y - PANEL_HEIGHT / 2), window.innerHeight - PANEL_HEIGHT - EDGE);
-
   return (
-    <div
-      role="dialog"
-      aria-label="Junction options"
-      className="absolute flex flex-col gap-3 rounded-xl border border-white/10 bg-neutral-900/95 p-3 shadow-xl shadow-black/40 backdrop-blur"
-      style={{ left, top, width: PANEL_WIDTH }}
-    >
-      <div className="flex items-center justify-between">
-        <h2 className="font-semibold text-white">Junction</h2>
-        <button
-          type="button"
-          aria-label="Close"
-          onClick={close}
-          onMouseDown={keepFocusOnGame}
-          className="grid size-7 place-items-center rounded-lg text-neutral-400 transition-colors duration-100 hover:bg-white/10 hover:text-white"
-        >
-          <X size={15} aria-hidden />
-        </button>
-      </div>
-
+    <OptionsPanel title="Junction" x={x} y={y} height={PANEL_HEIGHT}>
       <fieldset disabled={settings.roundabout} className="flex flex-col gap-1.5 disabled:opacity-40">
         <legend className="mb-1.5 text-xs font-medium uppercase tracking-wide text-neutral-500">
           Control{settings.roundabout ? " (roundabouts give way)" : ""}
@@ -139,28 +108,12 @@ function JunctionPanel({ engine, id, x, y }: { engine: Engine; id: number; x: nu
         </div>
       </fieldset>
 
-      <button
-        type="button"
-        role="switch"
-        aria-checked={settings.roundabout}
-        onClick={() => update({ roundabout: !settings.roundabout })}
-        onMouseDown={keepFocusOnGame}
-        className="flex items-center justify-between rounded-lg px-1 py-1 text-neutral-200 transition-colors duration-100 hover:bg-white/5"
-      >
-        <span className="flex items-center gap-2">
-          <RefreshCw size={15} className="text-neutral-400" aria-hidden />
-          Roundabout
-        </span>
-        <span
-          className={`relative h-4 w-7 rounded-full transition-colors duration-150 ${settings.roundabout ? "bg-sky-500" : "bg-white/20"}`}
-        >
-          <span
-            className={`absolute left-0.5 top-0.5 size-3 rounded-full bg-white shadow transition-transform duration-150 ${
-              settings.roundabout ? "translate-x-3" : ""
-            }`}
-          />
-        </span>
-      </button>
+      <Switch
+        label="Roundabout"
+        icon={<RefreshCw size={15} className="text-neutral-400" aria-hidden />}
+        checked={settings.roundabout}
+        onChange={(roundabout) => update({ roundabout })}
+      />
 
       <label className="flex flex-col gap-1.5 px-1">
         <span className="flex justify-between text-neutral-200">
@@ -182,6 +135,60 @@ function JunctionPanel({ engine, id, x, y }: { engine: Engine; id: number; x: nu
           className="w-full accent-sky-500"
         />
       </label>
+
+      <button
+        type="button"
+        disabled={settings.roundabout}
+        onClick={() => {
+          gameStore.getState().setJunctionOpen(null);
+          gameStore.getState().setLaneEditNode(id);
+        }}
+        onMouseDown={keepFocusOnGame}
+        className="flex items-center justify-between rounded-lg px-1 py-1 text-neutral-200 transition-colors duration-100 hover:bg-white/5 disabled:opacity-40 disabled:hover:bg-transparent"
+      >
+        <span className="flex items-center gap-2">
+          <GitMerge size={15} className="text-neutral-400" aria-hidden />
+          Lane connector
+        </span>
+        <span className="text-xs text-neutral-500">
+          {settings.roundabout ? "Not for roundabouts" : settings.connections ? "Custom" : "Default"}
+        </span>
+      </button>
+    </OptionsPanel>
+  );
+}
+
+/** Shown while connecting a junction's lanes: how it works, Reset (back to the defaults) and Done. */
+export function LaneEditBar({ engine }: { engine: Engine | null }) {
+  const id = useGame((s) => s.laneEditNode);
+  if (!engine || id === null) return null;
+  const button = "rounded-lg px-2.5 py-1 font-medium transition-colors duration-100 text-neutral-200 hover:bg-white/10 hover:text-white";
+  return (
+    <div
+      role="dialog"
+      aria-label="Lane connector"
+      className="absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-3 rounded-xl border border-white/10 bg-neutral-900/95 py-1.5 pl-3 pr-1.5 shadow-xl shadow-black/40 backdrop-blur"
+    >
+      <span className="text-neutral-300">
+        <span className="font-semibold text-white">Lane connector:</span> click an amber lane end, then green lane starts to
+        connect or disconnect them.
+      </span>
+      <button
+        type="button"
+        onClick={() => engine.graph.setJunction(id, { connections: undefined })}
+        onMouseDown={keepFocusOnGame}
+        className={button}
+      >
+        Reset
+      </button>
+      <button
+        type="button"
+        onClick={() => gameStore.getState().setLaneEditNode(null)}
+        onMouseDown={keepFocusOnGame}
+        className={`${button} bg-sky-500/90 text-white hover:bg-sky-500`}
+      >
+        Done
+      </button>
     </div>
   );
 }

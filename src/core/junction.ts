@@ -1,3 +1,5 @@
+import type { LaneConnection } from "./lanes";
+import type { NodeId, RoadGraph, SegmentId } from "./roadGraph";
 import { LANE_WIDTH, type RoadSpec } from "./roadSpec";
 
 /** How traffic entering a junction is controlled. */
@@ -10,6 +12,8 @@ export interface JunctionSettings {
   roundabout: boolean;
   /** Corner smoothness, 0 (sharp) to MAX_CORNER_RADIUS; see `kerbRadius` for the radius it gives. */
   cornerRadius: number;
+  /** Lane connections set with the lane connector (absent: the defaults, see `defaultConnections`). */
+  connections?: LaneConnection[];
 }
 
 export const MAX_CORNER_RADIUS = 40;
@@ -54,14 +58,25 @@ export function parseJunctionSettings(raw: unknown): JunctionSettings {
   ) {
     throw new Error("Invalid junction settings in map file");
   }
-  return { control, roundabout, cornerRadius };
+  if (s.connections === undefined) return { control, roundabout, cornerRadius };
+  const ref = (r: unknown) =>
+    !!r && Number.isSafeInteger((r as { segment: unknown }).segment) && Number.isSafeInteger((r as { lane: unknown }).lane);
+  if (!Array.isArray(s.connections) || !s.connections.every((c) => ref(c?.from) && ref(c?.to))) {
+    throw new Error("Invalid lane connections in map file");
+  }
+  const connections = s.connections.map((c) => ({
+    from: { segment: c.from.segment, lane: c.from.lane },
+    to: { segment: c.to.segment, lane: c.to.lane },
+  }));
+  return { control, roundabout, cornerRadius, connections };
 }
 
 export function isDefaultJunction(s: JunctionSettings): boolean {
   return (
     s.control === DEFAULT_JUNCTION.control &&
     s.roundabout === DEFAULT_JUNCTION.roundabout &&
-    s.cornerRadius === DEFAULT_JUNCTION.cornerRadius
+    s.cornerRadius === DEFAULT_JUNCTION.cornerRadius &&
+    s.connections === undefined
   );
 }
 
@@ -80,6 +95,23 @@ export function roundaboutShape(specs: RoadSpec[]): RoundaboutShape {
   const ring = lanes * LANE_WIDTH + 4;
   const island = Math.max(14, ring);
   return { island, outer: island + ring, lanes };
+}
+
+/**
+ * The roads whose traffic enters junction `nodeId`, in the order signal phases go round them
+ * (by the direction each leaves the junction). `signalLights` gives the light for each.
+ */
+export function signalApproaches(graph: RoadGraph, nodeId: NodeId): SegmentId[] {
+  const angle = (s: SegmentId) => {
+    const d = graph.directionAway(graph.segments.get(s)!, nodeId);
+    return Math.atan2(d.y, d.x);
+  };
+  return graph
+    .segmentsAt(nodeId)
+    // One-way roads leading away from the junction have no traffic entering here.
+    .filter((s) => !s.spec.oneWay || s.b === nodeId)
+    .map((s) => s.id)
+    .sort((p, q) => angle(p) - angle(q));
 }
 
 /** Seconds of green and of yellow per signal phase. */

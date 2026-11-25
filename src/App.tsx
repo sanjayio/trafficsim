@@ -3,7 +3,7 @@ import type { Engine } from "./render/Engine";
 import { ControlsDialog } from "./ui/ControlsDialog";
 import { CursorHint } from "./ui/CursorHint";
 import { GameCanvas } from "./ui/GameCanvas";
-import { JunctionOverlay } from "./ui/JunctionOverlay";
+import { JunctionOverlay, LaneEditBar } from "./ui/JunctionOverlay";
 import { MainMenu } from "./ui/MainMenu";
 import { SettingsDialog } from "./ui/SettingsDialog";
 import { StatusBar } from "./ui/StatusBar";
@@ -19,6 +19,7 @@ export default function App() {
       <GameCanvas onEngine={setEngine} />
       <CursorHint />
       <JunctionOverlay engine={engine} />
+      <LaneEditBar engine={engine} />
       <Toolbar />
       <MainMenu
         engine={engine}

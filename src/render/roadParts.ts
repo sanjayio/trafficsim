@@ -10,6 +10,7 @@ import {
   roadWidth,
   type RoadSpec,
 } from "../core/roadSpec";
+import { laneOffsets, type Turn } from "../core/lanes";
 import { convexGeometry, FlatLayer } from "./flat";
 import { palette } from "./palette";
 
@@ -29,6 +30,11 @@ export interface RoadEnd {
    * turnaround, and the centre line or median runs to its middle. `inset` is then unused.
    */
   turnaround?: boolean;
+  /**
+   * At a junction, the turns each lane arriving here may make (by lane index for the direction of
+   * travel towards this end), painted as arrows just before the line.
+   */
+  turns?: Turn[][];
 }
 
 export const ROAD_PART_STYLE: Record<RoadPart, { color: number; layer: number }> = {
@@ -127,11 +133,13 @@ export function buildRoadParts(
     const markLength = s1 - s0;
     const count = Math.max(1, Math.floor(markLength / ARROW_SPACING));
     const span = ARROW_SHAFT_LENGTH + ARROW_HEAD_LENGTH;
+    // Keep clear of the turn arrows by the far end.
+    const last = end.turns ? s1 - TURN_ARROW_BACK - TURN_ARROW_LENGTH - 4 : s1;
     for (let lane = 0; lane < spec.lanes; lane++) {
       const offset = left + (lane + 0.5) * LANE_WIDTH;
       for (let i = 0; i < count; i++) {
         const tail = s0 + ((i + 0.5) * markLength) / count - span / 2;
-        if (tail < s0 || tail + span > s1) continue;
+        if (tail < s0 || tail + span > last) continue;
         arrows.push(...arrow(path, offset, tail));
       }
     }
@@ -156,7 +164,53 @@ export function buildRoadParts(
   }
   if (laneLines.length) parts.push({ part: "laneLine", geometry: convexGeometry(laneLines) });
 
+  // Turn arrows on the lanes arriving at each junction end. Lane offsets are right of the direction
+  // of travel: along the path towards the end (b), against it towards the start (a).
+  const turnArrows: Vec2[][] = [];
+  const offsets = laneOffsets(spec, side);
+  const kerbRight = side === "right";
+  for (const [ends, s, forward] of [[end, s1 - TURN_ARROW_BACK, true], [start, s0 + TURN_ARROW_BACK, false]] as const) {
+    if (!ends.turns || (spec.oneWay && !forward) || s1 - s0 < TURN_ARROW_LENGTH + TURN_ARROW_BACK * 2) continue;
+    const f = path.at(s);
+    const sign = forward ? 1 : -1;
+    const travel = { x: f.tangent.x * sign, y: f.tangent.y * sign };
+    const right = { x: f.normal.x * sign, y: f.normal.y * sign };
+    ends.turns.forEach((turns, lane) => {
+      if (!turns.length) return;
+      const tip = { x: f.p.x + right.x * offsets[lane], y: f.p.y + right.y * offsets[lane] };
+      const kinds = new Set(turns.map((t) => (t === "straight" ? 0 : (t === "kerb") === kerbRight ? 1 : -1)));
+      turnArrows.push(...turnArrow(tip, travel, right, kinds));
+    });
+  }
+  if (turnArrows.length) parts.push({ part: "arrow", geometry: convexGeometry(turnArrows) });
+
   return parts;
+}
+
+/** Turn arrows stand this far before the stop line, and are this long. */
+const TURN_ARROW_BACK = 4;
+const TURN_ARROW_LENGTH = 11;
+
+/**
+ * A painted lane arrow with its tip at `tip`, pointing along `travel`: a shaft, a head straight on
+ * (kind 0), and a branch with a head to the right (1) or left (-1) for each turn allowed.
+ */
+function turnArrow(tip: Vec2, travel: Vec2, right: Vec2, kinds: Set<number>): Vec2[][] {
+  // Local coordinates: u along travel (0 at the tip, negative behind), v to the right.
+  const at = (u: number, v: number) => ({ x: tip.x + travel.x * u + right.x * v, y: tip.y + travel.y * u + right.y * v });
+  const w = ARROW_SHAFT_WIDTH / 2;
+  const tail = -TURN_ARROW_LENGTH;
+  const straight = kinds.has(0);
+  const shaftEnd = straight ? -4 : -4.5;
+  const shapes: Vec2[][] = [[at(tail, -w), at(shaftEnd, -w), at(shaftEnd, w), at(tail, w)]];
+  if (straight) shapes.push([at(-4.5, -2.6), at(0, 0), at(-4.5, 2.6)]);
+  for (const side of [1, -1]) {
+    if (!kinds.has(side)) continue;
+    // A bar out of the shaft's upper part, then a head pointing sideways.
+    shapes.push([at(-6.2, side * w), at(-4.8, side * w), at(-4.8, side * 2.6), at(-6.2, side * 2.6)]);
+    shapes.push([at(-8.2, side * 2.6), at(-2.8, side * 2.6), at(-5.5, side * 5.4)]);
+  }
+  return shapes;
 }
 
 /** A full-width road surface with rounded ends, as convex polygons. */

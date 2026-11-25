@@ -1,5 +1,8 @@
 import {
   ArrowBigUp,
+  ArrowDownToDot,
+  ArrowUpFromDot,
+  Car,
   ChevronLeft,
   ChevronRight,
   Equal,
@@ -21,13 +24,14 @@ import {
 import { MAX_LANES } from "../core/roadSpec";
 import { useEffect, type ReactNode } from "react";
 import { gameStore, isSnapping, useGame, type SimSpeed, type ToolId } from "../state/store";
-import type { BulldozeMode, RoadMode } from "../tools/Tool";
+import type { BulldozeMode, RoadMode, TrafficMode } from "../tools/Tool";
 import { IconButton, keepFocusOnGame, Panel, PanelButton, PanelDivider } from "./Panel";
 
 const TOOLS: { id: ToolId; label: string; key: string; icon: LucideIcon }[] = [
   { id: "select", label: "Select", key: "1", icon: MousePointer2 },
   { id: "road", label: "Road", key: "2", icon: Road },
   { id: "bulldoze", label: "Bulldoze", key: "3", icon: Tractor },
+  { id: "traffic", label: "Traffic", key: "4", icon: Car },
 ];
 
 const SPEEDS: { speed: SimSpeed; label: string }[] = [
@@ -92,6 +96,7 @@ export function Toolbar() {
       <div className="flex flex-col items-start gap-2">
         {tool === "road" && <RoadOptions />}
         {tool === "bulldoze" && <BulldozeOptions />}
+        {tool === "traffic" && <TrafficOptions />}
         <Panel>
           {TOOLS.map(({ id, label, icon: Icon }) => (
             <IconButton
@@ -133,6 +138,25 @@ function BulldozeOptions() {
     <Panel>
       {BULLDOZE_MODES.map(({ id, label, icon: Icon }) => (
         <IconButton key={id} label={label} pressed={mode === id} onClick={() => gameStore.getState().setBulldozeMode(id)}>
+          <Icon size={ICON_SIZE} strokeWidth={2} aria-hidden />
+        </IconButton>
+      ))}
+    </Panel>
+  );
+}
+
+const TRAFFIC_MODES: { id: TrafficMode; label: string; icon: LucideIcon }[] = [
+  { id: "source", label: "Source: cars start here", icon: ArrowUpFromDot },
+  { id: "sink", label: "Sink: cars head here", icon: ArrowDownToDot },
+];
+
+/** Second-level options shown while the Traffic tool is active. */
+function TrafficOptions() {
+  const mode = useGame((s) => s.trafficMode);
+  return (
+    <Panel>
+      {TRAFFIC_MODES.map(({ id, label, icon: Icon }) => (
+        <IconButton key={id} label={label} pressed={mode === id} onClick={() => gameStore.getState().setTrafficMode(id)}>
           <Icon size={ICON_SIZE} strokeWidth={2} aria-hidden />
         </IconButton>
       ))}

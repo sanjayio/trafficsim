@@ -1,14 +1,18 @@
 import { Fog, Scene, WebGLRenderer } from "three";
 import { WORLD_SIZE } from "../core/constants";
 import type { Vec2 } from "../core/geometry";
-import { RoadGraph, type SavedMap } from "../core/roadGraph";
+import { hasLaneConnector } from "../core/lanes";
+import { RoadGraph, type RoadSegment, type SavedMap } from "../core/roadGraph";
 import { SIM_DT, Simulation } from "../core/simulation";
+import { LaneTool } from "../tools/LaneTool";
+import { TrafficTool } from "../tools/TrafficTool";
+import { CarLayer } from "./CarLayer";
 import { openMapFile, saveMapFile } from "../platform";
-import { gameStore, isSnapping, type ToolId } from "../state/store";
+import { gameStore, isSnapping, type NodeAnchor, type ToolId } from "../state/store";
 import { BulldozeTool } from "../tools/BulldozeTool";
 import { RoadTool } from "../tools/RoadTool";
 import { SelectTool } from "../tools/SelectTool";
-import type { Tool } from "../tools/Tool";
+import type { Tool, ToolContext } from "../tools/Tool";
 import { Camera } from "./Camera";
 import { Grid } from "./Grid";
 import { OverlayLayer } from "./OverlayLayer";
@@ -26,6 +30,8 @@ export const HINT_OFFSET = 18;
 const CLICK_SLOP_PX = 5;
 /** Cap on real time fed to the simulation per frame, so a stall doesn't trigger a catch-up spiral. */
 const MAX_FRAME_MS = 250;
+/** How close (world units) the cursor must be to a source's road end to offer its options. */
+const SOURCE_HOVER_RADIUS = 16;
 /** Fog range as multiples of the camera's focus distance: only the far edge of a tilted view fades. */
 const FOG_NEAR = 1.6;
 const FOG_FAR = 5;
@@ -36,16 +42,19 @@ const FOG_FAR = 5;
  */
 export class Engine {
   readonly graph = new RoadGraph();
-  readonly sim = new Simulation(this.graph);
+  // Cars stop on the painted lines, which the road layer knows (it's created below, before any car spawns).
+  readonly sim = new Simulation(this.graph, (segment, node) => this.roads.stopLineAt(segment, node), Date.now());
 
   private renderer!: WebGLRenderer;
   private scene = new Scene();
   private fog = new Fog(palette.ground, 1, 2);
   private grid = new Grid();
   private roads = new RoadLayer(this.graph);
+  private cars = new CarLayer();
   private overlay = new OverlayLayer();
   private camera!: Camera;
   private tools!: Record<ToolId, Tool>;
+  private ctx!: ToolContext;
   private tool!: Tool;
   /** Last pointer position in canvas pixels, so tools can track the cursor while the camera moves under it. */
   private pointer: Vec2 | null = null;
@@ -72,9 +81,10 @@ export class Engine {
     host.appendChild(canvas);
 
     this.scene.fog = this.fog;
-    this.scene.add(this.grid, this.roads, this.overlay);
+    this.scene.add(this.grid, this.roads, this.cars, this.overlay);
 
-    this.camera = new Camera(canvas, () => gameStore.getState().tool === "select");
+    // Left-drag pans with the Select tool, except in the lane connector, which needs left clicks.
+    this.camera = new Camera(canvas, () => gameStore.getState().tool === "select" && gameStore.getState().laneEditNode === null);
     const resize = () => {
       renderer.setSize(host.clientWidth, host.clientHeight);
       this.camera.setViewport(host.clientWidth, host.clientHeight);
@@ -103,6 +113,8 @@ export class Engine {
       snapTolerance: () => SNAP_PIXELS / this.camera.zoom,
       worldPerPixel: () => 1 / this.camera.zoom,
       bulldozeMode: () => gameStore.getState().bulldozeMode,
+      trafficMode: () => gameStore.getState().trafficMode,
+      stopLineAt: (segment: RoadSegment, node: number) => this.roads.stopLineAt(segment, node),
       screenRect: (a: Vec2, b: Vec2) => {
         const sa = this.camera.worldToScreen(a);
         const sb = this.camera.worldToScreen(b);
@@ -122,15 +134,28 @@ export class Engine {
           .setHint(text && pointer ? { text, x: pointer.x + HINT_OFFSET, y: pointer.y + HINT_OFFSET } : null);
       },
     };
-    this.tools = { select: new SelectTool(ctx), road: new RoadTool(ctx), bulldoze: new BulldozeTool(ctx) };
+    this.tools = {
+      select: new SelectTool(ctx),
+      road: new RoadTool(ctx),
+      bulldoze: new BulldozeTool(ctx),
+      traffic: new TrafficTool(ctx),
+    };
     this.tool = this.tools[gameStore.getState().tool];
+    this.ctx = ctx;
     this.cleanups.push(
       gameStore.subscribe((state, prev) => {
         if (state.drivingSide !== prev.drivingSide) this.graph.setDrivingSide(state.drivingSide);
-        if (state.tool !== prev.tool || state.roadMode !== prev.roadMode || state.bulldozeMode !== prev.bulldozeMode) {
+        if (state.highlightNode !== prev.highlightNode) this.showHighlight(state.highlightNode);
+        if (
+          state.tool !== prev.tool ||
+          state.roadMode !== prev.roadMode ||
+          state.bulldozeMode !== prev.bulldozeMode ||
+          state.trafficMode !== prev.trafficMode ||
+          state.laneEditNode !== prev.laneEditNode
+        ) {
           // A road in progress can't carry over to a mode with a different number of clicks.
           this.tool.cancel();
-          this.tool = this.tools[state.tool];
+          this.tool = state.laneEditNode !== null ? new LaneTool(this.ctx, state.laneEditNode) : this.tools[state.tool];
           this.refreshPreview();
           this.updateJunctionHover(this.pointer);
         } else if (
@@ -154,7 +179,9 @@ export class Engine {
     this.listen(canvas, "pointerleave", () => gameStore.getState().setHint(null));
     this.listen(canvas, "contextmenu", (e: Event) => e.preventDefault());
     this.listen(window, "keydown", (e: KeyboardEvent) => {
-      if (e.key === "Escape") this.tool.cancel();
+      // Esc leaves the lane connector; otherwise it cancels what the tool is doing.
+      if (e.key === "Escape" && gameStore.getState().laneEditNode !== null) gameStore.getState().setLaneEditNode(null);
+      else if (e.key === "Escape") this.tool.cancel();
       if (e.key === "Alt") {
         // Stops Windows/Linux from moving focus to the menu bar.
         e.preventDefault();
@@ -193,6 +220,8 @@ export class Engine {
     for (const cleanup of this.cleanups) cleanup();
     this.camera.destroy();
     this.roads.dispose();
+    this.cars.dispose();
+    this.sim.dispose();
     this.overlay.dispose();
     this.grid.dispose();
     this.renderer.dispose();
@@ -230,18 +259,14 @@ export class Engine {
     this.grid.minor.visible = this.camera.zoom >= MINOR_GRID_MIN_ZOOM;
 
     this.roads.updateSignals(this.sim.time);
+    this.cars.update(this.sim);
     this.trackJunctionPositions();
     this.renderer.render(this.scene, this.camera.camera);
 
     this.statsFrames++;
     this.statsElapsed += deltaMS;
     if (this.statsElapsed >= STATS_INTERVAL_MS) {
-      setStats({
-        fps: Math.round((this.statsFrames * 1000) / this.statsElapsed),
-        nodes: this.graph.nodes.size,
-        segments: this.graph.segments.size,
-        simTime: this.sim.time,
-      });
+      setStats({ fps: Math.round((this.statsFrames * 1000) / this.statsElapsed) });
       this.statsElapsed = 0;
       this.statsFrames = 0;
     }
@@ -263,18 +288,35 @@ export class Engine {
     if (this.pointer && !this.camera.isPanning) this.toolMove(this.pointer);
   }
 
-  /** Junction options are offered with the Select tool, and with the Road tool between roads. */
+  /** Junction and source options are offered with the Select and Traffic tools, and with the Road tool between roads. */
   private junctionHoverAllowed(): boolean {
-    const { tool } = gameStore.getState();
-    return tool === "select" || (tool === "road" && !this.tool.busy?.());
+    const { tool, laneEditNode } = gameStore.getState();
+    if (laneEditNode !== null) return false;
+    return tool === "select" || tool === "traffic" || (tool === "road" && !this.tool.busy?.());
+  }
+
+  /** The junction, or failing that the source, at a ground point. */
+  private anchorAt(world: Vec2): NodeAnchor | null {
+    const junction = this.graph.junctionAt(world);
+    const source = junction ? undefined : this.graph.sourceAt(world, SOURCE_HOVER_RADIUS);
+    const node = junction ?? source;
+    return node ? { id: node.id, kind: junction ? "junction" : "source", ...this.camera.worldToScreen(node) } : null;
   }
 
   private updateJunctionHover(s: Vec2 | null): void {
     const { junctionHover, setJunctionHover } = gameStore.getState();
     const world = s && this.junctionHoverAllowed() && !this.camera.isPanning ? this.camera.screenToWorld(s) : null;
-    const node = world ? this.graph.junctionAt(world) : undefined;
-    if ((node?.id ?? null) === (junctionHover?.id ?? null)) return;
-    setJunctionHover(node ? { id: node.id, ...this.camera.worldToScreen(node) } : null);
+    const anchor = world ? this.anchorAt(world) : null;
+    if ((anchor?.id ?? null) === (junctionHover?.id ?? null)) return;
+    setJunctionHover(anchor);
+  }
+
+  /** Points out a sink (hovered in a source's panel) by outlining its road. */
+  private showHighlight(nodeId: number | null): void {
+    this.overlay.clear();
+    const [segment] = nodeId === null ? [] : this.graph.segmentsAt(nodeId);
+    if (segment) this.overlay.highlight(this.graph.curveOf(segment), 40, palette.sink, 0.5);
+    else this.refreshPreview();
   }
 
   /**
@@ -283,13 +325,19 @@ export class Engine {
    */
   private trackJunctionPositions(): void {
     const state = gameStore.getState();
-    const follow = (j: { id: number; x: number; y: number } | null) => {
+    const follow = (j: NodeAnchor | null) => {
       if (!j) return j;
       const node = this.graph.nodes.get(j.id);
-      if (!node || this.graph.segmentsAt(j.id).length < 3) return null;
+      const valid =
+        j.kind === "junction" ? this.graph.segmentsAt(j.id).length >= 3 : this.graph.terminal(j.id)?.kind === "source";
+      if (!node || !valid) return null;
       const at = this.camera.worldToScreen(node);
-      return Math.abs(at.x - j.x) < 0.5 && Math.abs(at.y - j.y) < 0.5 ? j : { id: j.id, ...at };
+      return Math.abs(at.x - j.x) < 0.5 && Math.abs(at.y - j.y) < 0.5 ? j : { ...j, ...at };
     };
+    // The lane connector ends if its junction stops having one (bulldozed, or made a roundabout).
+    if (state.laneEditNode !== null && !(this.graph.nodes.has(state.laneEditNode) && hasLaneConnector(this.graph, state.laneEditNode))) {
+      state.setLaneEditNode(null);
+    }
     const hover = follow(state.junctionHover);
     const open = follow(state.junctionOpen);
     if (hover !== state.junctionHover) state.setJunctionHover(hover);
@@ -329,11 +377,10 @@ export class Engine {
       const up = this.toCanvas(e);
       const isClick = Math.hypot(up.x - this.leftDownAt.x, up.y - this.leftDownAt.y) < CLICK_SLOP_PX;
       this.leftDownAt = null;
-      // A click on the map closes the junction panel; with the Select tool, a click on a junction opens it.
-      if (isClick) {
+      // A click on the map closes the options panel; with the Select tool, a click on a junction or source opens it.
+      if (isClick && gameStore.getState().laneEditNode === null) {
         const world = gameStore.getState().tool === "select" ? this.camera.screenToWorld(up) : null;
-        const node = world ? this.graph.junctionAt(world) : undefined;
-        gameStore.getState().setJunctionOpen(node ? { id: node.id, ...this.camera.worldToScreen(node) } : null);
+        gameStore.getState().setJunctionOpen(world ? this.anchorAt(world) : null);
       }
     }
     if (e.button === 2 && this.rightDownAt) {

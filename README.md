@@ -17,7 +17,7 @@ In the app: ☰ menu (top right) → **Controls**. That list is generated from `
 
 | Input | Action |
 | --- | --- |
-| `1` / `2` / `3` | Select / Road / Bulldoze |
+| `1` / `2` / `3` / `4` | Select / Road / Bulldoze / Traffic |
 | Road → Straight / Curve / Complex curve | Click start → end; start → bend → end; or start → bend → bend → end. A preview follows the cursor; it turns red if the bend is too tight for the road |
 | Road → Continuous | Click start → end, then each further click extends the road with a smooth curve. Right-click or `Esc` ends it |
 | Road → magnet toggle | Snap onto road ends, onto roads (making a T-junction), to guidelines (road extensions and perpendiculars, 45° steps from your start) and their crossings. A readout by the cursor shows length and angle |
@@ -27,7 +27,10 @@ In the app: ☰ menu (top right) → **Controls**. That list is generated from `
 | Road → snap-to-grid toggle (grid icon) | Snap endpoints to the grid (default) or place them freely. Either way, clicking near an existing road end attaches to it |
 | Hold `Alt` / `Option` (Road) | Place freely: flips grid snapping and turns off guides and angles |
 | Bulldoze → one by one / area | Click a road to remove it, or drag a rectangle to remove every road it touches (`Esc` / right-click abandons the drag) |
-| Hover a junction → ⚙ (or click it with Select) | Junction options: control (none / give way / stop / signals), roundabout, corner smoothness. Saved with the map |
+| Traffic → Source / Sink, click a road | Places a source (cars come out of a building) or a sink (cars drive into one): at a road end, or anywhere along a road, with the building on the side you click. Cars use its driveway. Click it again to remove. Saved with the map |
+| Hover a source → ⚙ (or click it with Select) | Source options: on/off, cars per minute, and destinations (any sink, or chosen sinks) |
+| Hover a junction → ⚙ (or click it with Select) | Junction options: control (none / give way / stop / signals), roundabout, corner smoothness, lane connector. Saved with the map |
+| Junction options → Lane connector | Click an incoming lane's end (amber), then outgoing lanes' starts (green) to connect or disconnect them; cars only drive connected lanes, and the painted lane arrows follow. Reset restores the defaults; `Esc` or Done leaves. Changing a road at the junction resets it |
 | ☰ → Settings → Driving side | Right- or left-hand traffic (decides which lanes get stop lines, and later which lanes cars use). Saved with the map |
 | Crossing or ending on a road | Forms a junction: both roads are split there. Too-shallow crossings (< 20°) or ones leaving tiny road pieces show red and can't be built |
 | Click (Bulldoze) | Remove the highlighted road |
@@ -44,7 +47,7 @@ In the app: ☰ menu (top right) → **Controls**. That list is generated from `
 
 ```
 src/
-  core/       Pure simulation + data: RoadGraph, Simulation (fixed 60 Hz step). No three.js, no Tauri.
+  core/       Pure simulation + data: RoadGraph, routing, car tracks, Simulation (fixed 60 Hz step). No three.js, no Tauri.
   render/     three.js: Engine (renderer, loop, input routing), Camera (orbit + ground ray casts), RoadLayer, Grid, OverlayLayer.
   tools/      Build tools (Road, Bulldoze, Select) — turn world-space pointer input into graph edits.
               Renderer-agnostic: previews go through the `Overlay` interface.

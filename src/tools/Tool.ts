@@ -1,6 +1,6 @@
 import type { Curve } from "../core/curve";
 import type { Vec2 } from "../core/geometry";
-import type { RoadGraph } from "../core/roadGraph";
+import type { NodeId, RoadGraph, RoadSegment } from "../core/roadGraph";
 import type { RoadSpec } from "../core/roadSpec";
 
 /** Transient previews and highlights drawn above the road network. Implemented by the renderer. */
@@ -28,6 +28,9 @@ export interface Overlay {
  */
 export type RoadMode = "straight" | "curve" | "complex" | "continuous";
 
+/** Traffic tool: place sources (cars appear) or sinks (cars head there) on road ends. */
+export type TrafficMode = "source" | "sink";
+
 /** Bulldoze one road per click, or every road in a dragged rectangle. */
 export type BulldozeMode = "single" | "area";
 
@@ -49,11 +52,14 @@ export interface ToolContext {
   /** Size of one screen pixel in world units at the current zoom. */
   worldPerPixel: () => number;
   bulldozeMode: () => BulldozeMode;
+  trafficMode: () => TrafficMode;
   /**
    * The ground area under the screen rectangle spanned by two ground points (as a convex quad).
    * Screen-aligned, so it matches what the player sees even when the camera is rotated or tilted.
    */
   screenRect: (a: Vec2, b: Vec2) => Vec2[];
+  /** Where cars stop on `segment` before junction `node` (the painted line), as a distance from the node. */
+  stopLineAt: (segment: RoadSegment, node: NodeId) => number;
   /** Short readout shown next to the cursor (null hides it). */
   setHint: (text: string | null) => void;
 }

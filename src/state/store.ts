@@ -2,20 +2,25 @@ import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 import type { DrivingSide } from "../core/roadGraph";
 import { DEFAULT_ROAD_SPEC, type RoadSpec } from "../core/roadSpec";
-import type { BulldozeMode, RoadMode } from "../tools/Tool";
+import type { BulldozeMode, RoadMode, TrafficMode } from "../tools/Tool";
 
 /** Parallel road offset limits and step, centre to centre, in world units. */
 export const PARALLEL_OFFSET_STEP = 8;
 export const PARALLEL_OFFSET_MAX = 512;
 
-export type ToolId = "select" | "road" | "bulldoze";
+export type ToolId = "select" | "road" | "bulldoze" | "traffic";
+
+/** A junction or source offering its ⚙ button or options panel, at its screen position in canvas pixels. */
+export interface NodeAnchor {
+  id: number;
+  kind: "junction" | "source";
+  x: number;
+  y: number;
+}
 export type SimSpeed = 0 | 1 | 2 | 4;
 
 export interface Stats {
   fps: number;
-  nodes: number;
-  segments: number;
-  simTime: number;
 }
 
 interface GameState {
@@ -31,6 +36,7 @@ interface GameState {
   roadSpec: RoadSpec;
   roadMode: RoadMode;
   bulldozeMode: BulldozeMode;
+  trafficMode: TrafficMode;
   /** Road tool: snap onto roads, guidelines and angles. */
   guideSnapping: boolean;
   /** Short readout next to the cursor (road length and angle while drawing), in canvas pixels. */
@@ -42,11 +48,15 @@ interface GameState {
   stats: Stats;
   message: string | null;
   /**
-   * The junction under the cursor (offering its ⚙ button) and the junction whose options panel is
-   * open, each with its current screen position in canvas pixels (kept up to date by the engine).
+   * The junction or source under the cursor (offering its ⚙ button) and the one whose options
+   * panel is open, each kept at its current screen position by the engine.
    */
-  junctionHover: { id: number; x: number; y: number } | null;
-  junctionOpen: { id: number; x: number; y: number } | null;
+  junctionHover: NodeAnchor | null;
+  junctionOpen: NodeAnchor | null;
+  /** A sink to point out on the map (hovered in a source's panel). */
+  highlightNode: number | null;
+  /** The junction whose lanes are being connected with the lane connector (replacing the current tool). */
+  laneEditNode: number | null;
   /** Mirrors the map's driving side (the road network owns it and saves it with the map). */
   drivingSide: DrivingSide;
   setTool: (tool: ToolId) => void;
@@ -56,6 +66,9 @@ interface GameState {
   updateRoadSpec: (changes: Partial<RoadSpec>) => void;
   setRoadMode: (mode: RoadMode) => void;
   setBulldozeMode: (mode: BulldozeMode) => void;
+  setTrafficMode: (mode: TrafficMode) => void;
+  setHighlightNode: (id: number | null) => void;
+  setLaneEditNode: (id: number | null) => void;
   setGuideSnapping: (guideSnapping: boolean) => void;
   setHint: (hint: GameState["hint"]) => void;
   setParallel: (parallel: boolean) => void;
@@ -82,22 +95,29 @@ export const gameStore = createStore<GameState>()((set, get) => ({
   roadSpec: { ...DEFAULT_ROAD_SPEC },
   roadMode: "straight",
   bulldozeMode: "single",
+  trafficMode: "source",
+  highlightNode: null,
+  laneEditNode: null,
   guideSnapping: true,
   hint: null,
   parallel: false,
   parallelOffset: 64,
-  stats: { fps: 0, nodes: 0, segments: 0, simTime: 0 },
+  stats: { fps: 0 },
   message: null,
   drivingSide: "right",
   junctionHover: null,
   junctionOpen: null,
-  setTool: (tool) => set({ tool }),
+  // Picking a tool ends any lane connecting.
+  setTool: (tool) => set({ tool, laneEditNode: null }),
   setSpeed: (speed) => set(speed === 0 ? { speed } : { speed, lastSpeed: speed }),
   setSnapToGrid: (snapToGrid) => set({ snapToGrid }),
   setSnapInverted: (snapInverted) => set({ snapInverted }),
   updateRoadSpec: (changes) => set((s) => ({ roadSpec: { ...s.roadSpec, ...changes } })),
   setRoadMode: (roadMode) => set({ roadMode }),
   setBulldozeMode: (bulldozeMode) => set({ bulldozeMode }),
+  setTrafficMode: (trafficMode) => set({ trafficMode }),
+  setHighlightNode: (highlightNode) => set({ highlightNode }),
+  setLaneEditNode: (laneEditNode) => set({ laneEditNode }),
   setGuideSnapping: (guideSnapping) => set({ guideSnapping }),
   setHint: (hint) => set({ hint }),
   setParallel: (parallel) => set({ parallel }),

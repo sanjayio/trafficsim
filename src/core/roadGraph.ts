@@ -1,13 +1,16 @@
 import { MIN_CROSSING_ANGLE, MIN_ROAD_LENGTH, NODE_MERGE_DIST, NODE_SNAP_RADIUS } from "./constants";
-import { isStraight, SampledCurve, splitCurve, straightCurve, type Curve } from "./curve";
+import { isStraight, rightNormal, SampledCurve, splitCurve, straightCurve, type Curve } from "./curve";
 import { distance, pointInConvexPolygon, segmentsIntersect, type Vec2 } from "./geometry";
 import {
   DEFAULT_JUNCTION,
+  kerbRadius,
   isDefaultJunction,
   parseJunctionSettings,
   roundaboutShape,
   type JunctionSettings,
 } from "./junction";
+import type { LaneRef } from "./lanes";
+import { DRIVEWAY_BLEND, LOT_DEPTH, LOT_LENGTH, LOT_SETBACK, parseTerminal, type Lot, type Terminal } from "./terminal";
 import { carriagewayWidth, DEFAULT_ROAD_SPEC, normalizeRoadSpec, parseRoadSpec, roadWidth, type RoadSpec } from "./roadSpec";
 
 export type NodeId = number;
@@ -42,6 +45,8 @@ export interface SavedMap {
   drivingSide?: DrivingSide;
   /** Junctions with non-default settings (absent in older maps). */
   junctions?: ({ node: NodeId } & JunctionSettings)[];
+  /** Traffic sources and sinks (absent in older maps). */
+  terminals?: ({ node: NodeId } & Terminal)[];
   nodes: RoadNode[];
   segments: (Omit<RoadSegment, "spec"> & { spec?: RoadSpec })[];
 }
@@ -73,7 +78,8 @@ export type GraphEvent =
   | { type: "reset" }
   /** A network-wide setting changed (e.g. driving side); everything may need redrawing. */
   | { type: "settings" }
-  | { type: "junction-changed"; nodeId: NodeId };
+  | { type: "junction-changed"; nodeId: NodeId }
+  | { type: "terminal-changed"; nodeId: NodeId };
 
 /**
  * The road network: intersections/endpoints (nodes) joined by segments, each a straight or
@@ -85,6 +91,8 @@ export class RoadGraph {
   private side: DrivingSide = "right";
   /** Settings of junctions that differ from `DEFAULT_JUNCTION`. */
   private junctionSettings = new Map<NodeId, JunctionSettings>();
+  /** Sources and sinks, each on a dead-end node (exactly one road). */
+  private terminals = new Map<NodeId, Terminal>();
   private nextId = 1;
   /** Sampled centre line per segment, built when the segment is added. */
   private sampled = new Map<SegmentId, SampledCurve>();
@@ -117,6 +125,166 @@ export class RoadGraph {
     if (isDefaultJunction(next)) this.junctionSettings.delete(nodeId);
     else this.junctionSettings.set(nodeId, next);
     this.emit({ type: "junction-changed", nodeId });
+  }
+
+  terminal(nodeId: NodeId): Terminal | undefined {
+    return this.terminals.get(nodeId);
+  }
+
+  /** Every source or sink, by node. */
+  allTerminals(): ReadonlyMap<NodeId, Terminal> {
+    return this.terminals;
+  }
+
+  /** Makes a dead end, or a node along a road (two roads joining), a source or sink (null removes it). Ignored at junctions. */
+  setTerminal(nodeId: NodeId, terminal: Terminal | null): void {
+    if (!terminal) return this.dropTerminal(nodeId);
+    const roads = this.segmentsAt(nodeId).length;
+    if (roads < 1 || roads > 2) return;
+    if (this.terminals.get(nodeId)?.kind === "sink" && terminal.kind !== "sink") this.dropTerminal(nodeId);
+    this.terminals.set(nodeId, terminal);
+    this.emit({ type: "terminal-changed", nodeId });
+  }
+
+  /** Road `from` at junction `nodeId` was replaced by `to` (the same lanes, the same way): its lane connections follow. */
+  private renameInConnections(nodeId: NodeId, from: SegmentId, to: SegmentId): void {
+    const connections = this.junctionSettings.get(nodeId)?.connections;
+    if (!connections) return;
+    const rename = (ref: LaneRef) => (ref.segment === from ? { ...ref, segment: to } : ref);
+    this.setJunction(nodeId, { connections: connections.map((c) => ({ from: rename(c.from), to: rename(c.to) })) });
+  }
+
+  /** A junction's roads changed: lane connections set for the old roads no longer apply. */
+  private forgetConnections(nodeIds: NodeId[]): void {
+    for (const nodeId of nodeIds) {
+      if (this.junctionSettings.get(nodeId)?.connections) this.setJunction(nodeId, { connections: undefined });
+    }
+  }
+
+  private dropTerminal(nodeId: NodeId): void {
+    const old = this.terminals.get(nodeId);
+    if (!old) return;
+    this.terminals.delete(nodeId);
+    this.emit({ type: "terminal-changed", nodeId });
+    if (old.kind !== "sink") return;
+    // Sources that listed this sink stop sending cars to it.
+    for (const [id, t] of this.terminals) {
+      if (t.kind === "source" && t.sinks.includes(nodeId)) {
+        this.terminals.set(id, { ...t, sinks: t.sinks.filter((s) => s !== nodeId) });
+        this.emit({ type: "terminal-changed", nodeId: id });
+      }
+    }
+  }
+
+  /**
+   * Where a source's or sink's building stands: beside its road end, on the side traffic leaving
+   * (source) or arriving (sink) drives on, so cars turn straight in or out of it.
+   */
+  terminalLot(nodeId: NodeId): Lot | null {
+    const terminal = this.terminals.get(nodeId);
+    const roads = this.segmentsAt(nodeId);
+    if (!terminal || !roads.length) return null;
+    const node = this.node(nodeId);
+    const along = this.terminalDirection(nodeId);
+    // On a dead end: beside the road end, where leaving (source) or arriving (sink) traffic keeps
+    // (to the right of `along` for a source under right-hand traffic). Along a road: the chosen side.
+    const dead = roads.length === 1;
+    const keep = dead ? (this.side === "right" ? 1 : -1) * (terminal.kind === "source" ? 1 : -1) : (terminal.side ?? 1);
+    const right = rightNormal(along);
+    const out = { x: right.x * keep, y: right.y * keep };
+    const front = Math.max(...roads.map((s) => roadWidth(s.spec))) / 2 + LOT_SETBACK;
+    const back = front + LOT_DEPTH / 2;
+    const at = dead ? LOT_LENGTH / 2 : 0;
+    return {
+      centre: { x: node.x + along.x * at + out.x * back, y: node.y + along.y * at + out.y * back },
+      along,
+      at,
+      out,
+      front,
+    };
+  }
+
+  /**
+   * The direction a source's or sink's side is measured from: away from the node along its road
+   * on a dead end; along a road, the way the road leaving the node (as its `a` end) runs.
+   */
+  terminalDirection(nodeId: NodeId): Vec2 {
+    const roads = this.segmentsAt(nodeId);
+    const leaving = roads.find((s) => s.a === nodeId) ?? roads[0];
+    return this.directionAway(leaving, nodeId);
+  }
+
+  /**
+   * A node on a road at `p` for a source or sink: the road is split there (unless a node is
+   * already close by). Null where a road can't be split (the pieces would be too short).
+   */
+  nodeOnRoad(p: Vec2): RoadNode | null {
+    const segment = this.segmentAt(p);
+    if (!segment || this.nearJunction(p)) return null;
+    const path = this.path(segment);
+    const { point, s } = path.nearest(p);
+    for (const end of [segment.a, segment.b]) {
+      const node = this.node(end);
+      if (distance(node, point) < MIN_ROAD_LENGTH) return node;
+    }
+    if (s < MIN_ROAD_LENGTH || path.length - s < MIN_ROAD_LENGTH) return null;
+    return this.splitAt(point);
+  }
+
+  /**
+   * Whether `p`, on a road, is too close to a junction for a source or sink: its driveway would
+   * join the road past the junction's stop line. Kept clear of the junction, its corners and
+   * the room a driveway takes.
+   */
+  nearJunction(p: Vec2): boolean {
+    const segment = this.segmentAt(p);
+    if (!segment) return false;
+    const path = this.path(segment);
+    const { s } = path.nearest(p);
+    return [
+      [segment.a, s],
+      [segment.b, path.length - s],
+    ].some(([end, along]) => {
+      if (this.segmentsAt(end).length < 3) return false;
+      const corners = this.junction(end).roundabout ? 0 : kerbRadius(this.junction(end).cornerRadius);
+      return along < this.junctionRadius(end) + corners + DRIVEWAY_BLEND + LOT_LENGTH / 2;
+    });
+  }
+
+  /** The corners of a source's or sink's building. */
+  lotCorners(nodeId: NodeId): Vec2[] {
+    const lot = this.terminalLot(nodeId);
+    if (!lot) return [];
+    const { centre, along, out } = lot;
+    const corner = (a: number, o: number) => ({
+      x: centre.x + along.x * a * (LOT_LENGTH / 2) + out.x * o * (LOT_DEPTH / 2),
+      y: centre.y + along.y * a * (LOT_LENGTH / 2) + out.y * o * (LOT_DEPTH / 2),
+    });
+    return [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
+  }
+
+  /** The source or sink whose building covers `p`, if any. */
+  terminalAt(p: Vec2): NodeId | undefined {
+    for (const id of this.terminals.keys()) if (pointInConvexPolygon(p, this.lotCorners(id))) return id;
+    return undefined;
+  }
+
+  /** The source whose building covers `p`, or whose road end is within `radius` of it, if any. */
+  sourceAt(p: Vec2, radius: number): RoadNode | undefined {
+    const covering = this.terminalAt(p);
+    if (covering !== undefined && this.terminals.get(covering)?.kind === "source") return this.nodes.get(covering);
+    let best: RoadNode | undefined;
+    let bestDist = radius;
+    for (const [id, t] of this.terminals) {
+      const node = this.nodes.get(id);
+      if (t.kind !== "source" || !node) continue;
+      const d = distance(node, p);
+      if (d <= bestDist) {
+        best = node;
+        bestDist = d;
+      }
+    }
+    return best;
   }
 
   /** A junction (three or more roads) whose paved area covers `p`, if any. */
@@ -174,7 +342,9 @@ export class RoadGraph {
     const a = this.nodeAt(curve.a);
     const b = this.nodeAt(curve.b);
     if (this.findDuplicate(a.id, b.id, curve)) return null;
-    return this.insertSegment(a.id, b.id, curve, normalizeRoadSpec(spec));
+    const segment = this.insertSegment(a.id, b.id, curve, normalizeRoadSpec(spec));
+    this.forgetConnections([a.id, b.id]);
+    return segment;
   }
 
   /**
@@ -280,8 +450,11 @@ export class RoadGraph {
     this.sampled.delete(segment.id);
     this.unlink(segment);
     this.emit({ type: "segment-removed", segment });
-    this.insertSegment(segment.a, mid.id, first, segment.spec);
-    this.insertSegment(mid.id, segment.b, second, segment.spec);
+    const firstHalf = this.insertSegment(segment.a, mid.id, first, segment.spec);
+    const secondHalf = this.insertSegment(mid.id, segment.b, second, segment.spec);
+    // The junctions at either end keep their lane connections: the half meeting each takes the road's place.
+    this.renameInConnections(segment.a, segment.id, firstHalf.id);
+    this.renameInConnections(segment.b, segment.id, secondHalf.id);
     return mid;
   }
 
@@ -290,6 +463,8 @@ export class RoadGraph {
     if (!isStraight(curve)) segment.controls = [{ ...curve.c1 }, { ...curve.c2 }];
     this.segments.set(segment.id, segment);
     this.link(segment);
+    // A third road joining a source or sink makes it a junction, where they don't go.
+    for (const nodeId of [a, b]) if (this.segmentsAt(nodeId).length > 2) this.dropTerminal(nodeId);
     this.emit({ type: "segment-added", segment });
     return segment;
   }
@@ -321,6 +496,8 @@ export class RoadGraph {
       const left = this.segmentsAt(nodeId).length;
       // Below three roads it's no junction: its settings would linger, unreachable from the panel.
       if (left < 3) this.junctionSettings.delete(nodeId);
+      else this.forgetConnections([nodeId]);
+      if (left === 0) this.dropTerminal(nodeId);
       if (left === 0) this.nodes.delete(nodeId);
     }
     this.emit({ type: "segment-removed", segment });
@@ -384,6 +561,7 @@ export class RoadGraph {
       version: 3,
       drivingSide: this.side,
       junctions: [...this.junctionSettings].map(([node, settings]) => ({ node, ...settings })),
+      terminals: [...this.terminals].map(([node, terminal]) => ({ node, ...terminal })),
       nodes: [...this.nodes.values()],
       segments: [...this.segments.values()],
     };
@@ -420,11 +598,37 @@ export class RoadGraph {
     const junctions = new Map<NodeId, JunctionSettings>();
     for (const j of map.junctions ?? []) {
       if (!nodes.has(j.node)) throw new Error(`Junction settings for missing node ${j.node}`);
-      junctions.set(j.node, parseJunctionSettings(j));
+      const settings = parseJunctionSettings(j);
+      // Lane connections join real lanes of roads meeting at this junction, the right way.
+      const at = (ref: LaneRef, entering: boolean) => {
+        const s = segments.find((seg) => seg.id === ref.segment);
+        if (!s || (s.a !== j.node && s.b !== j.node) || ref.lane < 0 || ref.lane >= s.spec.lanes) return false;
+        return !s.spec.oneWay || (entering ? s.b === j.node : s.a === j.node);
+      };
+      if (settings.connections?.some((c) => !at(c.from, true) || !at(c.to, false))) {
+        throw new Error(`Invalid lane connections at junction ${j.node}`);
+      }
+      junctions.set(j.node, settings);
     }
 
     this.side = map.drivingSide ?? "right";
+    // Sources and sinks sit on dead ends; sources only list real sinks.
+    const ends = new Map<NodeId, number>();
+    for (const s of segments) for (const n of [s.a, s.b]) ends.set(n, (ends.get(n) ?? 0) + 1);
+    const terminals = new Map<NodeId, Terminal>();
+    for (const t of map.terminals ?? []) {
+      const roads = ends.get(t.node) ?? 0;
+      if (roads < 1 || roads > 2 || terminals.has(t.node)) throw new Error(`Invalid source or sink at node ${t.node}`);
+      terminals.set(t.node, parseTerminal(t));
+    }
+    for (const t of terminals.values()) {
+      if (t.kind === "source" && t.sinks.some((id) => terminals.get(id)?.kind !== "sink")) {
+        throw new Error("A source lists a missing sink");
+      }
+    }
+
     this.junctionSettings = junctions;
+    this.terminals = terminals;
     this.nodes.clear();
     this.segments.clear();
     this.sampled.clear();

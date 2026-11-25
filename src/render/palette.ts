@@ -11,4 +11,6 @@ export const palette = {
   guide: 0x67e8f9,
   junction: 0xfbbf24,
   danger: 0xe5484d,
+  source: 0x2fbf71,
+  sink: 0xe5484d,
 } as const;
