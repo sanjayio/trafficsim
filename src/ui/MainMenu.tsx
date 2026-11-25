@@ -1,8 +1,11 @@
-import { FolderOpen, Keyboard, Menu, Save, Settings, type LucideIcon } from "lucide-react";
+import { FolderOpen, Heart, Keyboard, Menu, Save, Settings, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Engine } from "../render/Engine";
 import { gameStore, useGame } from "../state/store";
 import { keepFocusOnGame, Panel } from "./Panel";
+
+/** Where the Support button leads: tips for the game's maker. */
+const SUPPORT_URL = "https://ko-fi.com/sssanjay";
 
 /** Top-right ☰ menu: map file actions, settings and the controls reference. Also shows short status messages. */
 export function MainMenu({
@@ -56,21 +59,35 @@ export function MainMenu({
 
   return (
     <div ref={rootRef} className="pointer-events-none absolute right-3 top-3 flex flex-col items-end gap-2">
-      <Panel>
-        <button
-          type="button"
-          aria-label="Menu"
-          aria-haspopup="menu"
-          aria-expanded={open}
-          onClick={() => setOpen((o) => !o)}
-          onMouseDown={keepFocusOnGame}
-          className={`grid size-9 place-items-center rounded-lg transition-colors duration-100 ${
-            open ? "bg-white/15 text-white" : "text-neutral-300 hover:bg-white/10 hover:text-white"
-          }`}
-        >
-          <Menu size={18} aria-hidden />
-        </button>
-      </Panel>
+      <div className="flex gap-2">
+        <Panel>
+          <a
+            href={SUPPORT_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            onMouseDown={keepFocusOnGame}
+            className="flex h-9 items-center gap-1.5 rounded-lg px-2.5 font-medium text-neutral-300 transition-colors duration-100 hover:bg-white/10 hover:text-white"
+          >
+            <Heart size={16} className="text-rose-400" aria-hidden />
+            Support
+          </a>
+        </Panel>
+        <Panel>
+          <button
+            type="button"
+            aria-label="Menu"
+            aria-haspopup="menu"
+            aria-expanded={open}
+            onClick={() => setOpen((o) => !o)}
+            onMouseDown={keepFocusOnGame}
+            className={`grid size-9 place-items-center rounded-lg transition-colors duration-100 ${
+              open ? "bg-white/15 text-white" : "text-neutral-300 hover:bg-white/10 hover:text-white"
+            }`}
+          >
+            <Menu size={18} aria-hidden />
+          </button>
+        </Panel>
+      </div>
 
       {open && (
         <div
