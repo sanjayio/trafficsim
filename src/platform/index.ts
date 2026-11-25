@@ -7,19 +7,21 @@ export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in
 
 const MAP_FILTER = { name: "Road map", extensions: ["json"] };
 
-/** Prompts for a location and writes the map. Returns false if the user cancelled. */
-export async function saveMapFile(contents: string): Promise<boolean> {
+/** Prompts for a location and writes the map, named after it. Returns false if the user cancelled. */
+export async function saveMapFile(contents: string, name: string): Promise<boolean> {
+  // A file name from the map's name: letters, digits, spaces, dashes and underscores only.
+  const fileName = `${name.replace(/[^\w\- ]+/g, "").trim() || "map"}.json`;
   if (isTauri) {
     const { save } = await import("@tauri-apps/plugin-dialog");
     const { writeTextFile } = await import("@tauri-apps/plugin-fs");
-    const path = await save({ defaultPath: "map.json", filters: [MAP_FILTER] });
+    const path = await save({ defaultPath: fileName, filters: [MAP_FILTER] });
     if (!path) return false;
     await writeTextFile(path, contents);
     return true;
   }
 
   const url = URL.createObjectURL(new Blob([contents], { type: "application/json" }));
-  const link = Object.assign(document.createElement("a"), { href: url, download: "map.json" });
+  const link = Object.assign(document.createElement("a"), { href: url, download: fileName });
   link.click();
   URL.revokeObjectURL(url);
   return true;

@@ -59,6 +59,8 @@ interface GameState {
   highlightNode: number | null;
   /** The junction whose lanes are being connected with the lane connector (replacing the current tool). */
   laneEditNode: number | null;
+  /** Mirrors the map's name (shown by the logo). */
+  mapName: string;
   /** Mirrors the map's driving side (the road network owns it and saves it with the map). */
   drivingSide: DrivingSide;
   setTool: (tool: ToolId) => void;
@@ -81,6 +83,7 @@ interface GameState {
   setAutosave: (autosave: GameState["autosave"]) => void;
   showMessage: (message: string | null) => void;
   setDrivingSide: (side: DrivingSide) => void;
+  setMapName: (name: string) => void;
   setJunctionHover: (hover: GameState["junctionHover"]) => void;
   setJunctionOpen: (open: GameState["junctionOpen"]) => void;
 }
@@ -110,6 +113,7 @@ export const gameStore = createStore<GameState>()((set, get) => ({
   autosave: null,
   message: null,
   drivingSide: "right",
+  mapName: "",
   junctionHover: null,
   junctionOpen: null,
   // Picking a tool ends any lane connecting.
@@ -140,6 +144,7 @@ export const gameStore = createStore<GameState>()((set, get) => ({
   setAutosave: (autosave) => set({ autosave }),
   showMessage: (message) => set({ message }),
   setDrivingSide: (drivingSide) => set({ drivingSide }),
+  setMapName: (mapName) => set({ mapName }),
   setJunctionHover: (junctionHover) => set({ junctionHover }),
   setJunctionOpen: (junctionOpen) => set({ junctionOpen }),
 }));

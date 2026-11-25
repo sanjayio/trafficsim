@@ -3,23 +3,36 @@ import { useEffect, type ReactNode } from "react";
 import { keepFocusOnGame } from "./Panel";
 
 /** Modal dialog over the game: closes on Escape, the × button or a click outside. */
-export function Dialog({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function Dialog({
+  title,
+  onClose,
+  onKey,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  /** Sees the dialog's key presses (they're kept from the game while it's open). */
+  onKey?: (e: KeyboardEvent) => void;
+  children: ReactNode;
+}) {
   // While open, swallow key presses before the game's window listeners see them
   // (camera, tools, pause), and close on Escape. Key releases still pass through,
   // so a key held when the dialog opened doesn't stay stuck.
+  const handle = onKey;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       e.stopImmediatePropagation();
       if (e.key === "Escape") onClose();
+      else handle?.(e);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
+  }, [onClose, handle]);
 
   const titleId = `dialog-${title.toLowerCase().replace(/\s+/g, "-")}`;
   return (
     <div
-      className="absolute inset-0 grid place-items-center bg-black/40 p-4 backdrop-blur-[2px]"
+      className="absolute inset-0 grid place-items-center bg-black/40 p-4 backdrop-blur-sm"
       onPointerDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}

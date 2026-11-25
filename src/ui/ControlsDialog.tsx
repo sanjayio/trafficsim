@@ -13,20 +13,7 @@ export function ControlsDialog({ onClose }: { onClose: () => void }) {
               <div key={row.action} className="flex items-baseline justify-between gap-4">
                 <dt className="text-neutral-300">{row.action}</dt>
                 <dd className="flex shrink-0 items-center gap-1">
-                  {row.keys.map((key, i) =>
-                    CONTROL_SEPARATORS.has(key) ? (
-                      <span key={i} className="px-0.5 text-xs text-neutral-500">
-                        {key}
-                      </span>
-                    ) : (
-                      <kbd
-                        key={i}
-                        className="min-w-6 rounded-md border border-white/15 border-b-white/25 bg-white/5 px-1.5 py-0.5 text-center font-sans text-xs text-neutral-200"
-                      >
-                        {key}
-                      </kbd>
-                    ),
-                  )}
+                  <KeyCombo keys={row.keys} />
                 </dd>
               </div>
             ))}
@@ -34,5 +21,27 @@ export function ControlsDialog({ onClose }: { onClose: () => void }) {
         </section>
       ))}
     </Dialog>
+  );
+}
+
+/** Keys as key caps, with separators ("/", "+", "or") as plain text. */
+export function KeyCombo({ keys }: { keys: string[] }) {
+  return (
+    <>
+      {keys.map((key, i) =>
+        CONTROL_SEPARATORS.has(key) ? (
+          <span key={i} className="px-0.5 text-xs text-neutral-500">
+            {key}
+          </span>
+        ) : (
+          <kbd
+            key={i}
+            className="min-w-6 rounded-md border border-white/15 border-b-white/25 bg-white/5 px-1.5 py-0.5 text-center font-sans text-xs text-neutral-200"
+          >
+            {key}
+          </kbd>
+        ),
+      )}
+    </>
   );
 }

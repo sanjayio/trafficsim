@@ -2,7 +2,7 @@ import { Fog, Scene, WebGLRenderer } from "three";
 import { WORLD_SIZE } from "../core/constants";
 import type { Vec2 } from "../core/geometry";
 import { hasLaneConnector } from "../core/lanes";
-import { RoadGraph, type RoadSegment, type SavedMap } from "../core/roadGraph";
+import { RoadGraph, type DrivingSide, type RoadSegment, type SavedMap } from "../core/roadGraph";
 import { SIM_DT, Simulation } from "../core/simulation";
 import { LaneTool } from "../tools/LaneTool";
 import { TrafficTool } from "../tools/TrafficTool";
@@ -204,14 +204,17 @@ export class Engine {
     // Alt released while the window was in the background never sends keyup.
     this.listen(window, "blur", () => this.setSnapInverted(false));
 
+    // The logo shows the map's name: keep it up to date as maps load (and here, for the first one).
+    gameStore.getState().setMapName(this.graph.name);
+    this.cleanups.push(this.graph.subscribe((e) => e.type === "reset" && gameStore.getState().setMapName(this.graph.name)));
     this.restoreAutosave();
     renderer.setAnimationLoop(this.frame);
   }
 
-  /** Starts an empty map (the last one is gone unless it was saved to a file). */
-  newMap(): void {
+  /** Starts an empty map called `name`, driving on `side` (the last one is gone unless it was saved to a file). */
+  newMap(name: string, side: DrivingSide): void {
     this.tool.cancel();
-    this.graph.load({ version: 3, nodes: [], segments: [] });
+    this.graph.load({ version: 3, name, drivingSide: side, nodes: [], segments: [] });
     gameStore.getState().setDrivingSide(this.graph.drivingSide);
   }
 
@@ -249,7 +252,7 @@ export class Engine {
   }
 
   async saveMap(): Promise<boolean> {
-    return saveMapFile(JSON.stringify(this.graph.toJSON(), null, 2));
+    return saveMapFile(JSON.stringify(this.graph.toJSON(), null, 2), this.graph.name);
   }
 
   async openMap(): Promise<boolean> {

@@ -44,6 +44,16 @@ describe("RoadGraph", () => {
     expect(graph.toJSON().junctions).toEqual([]);
   });
 
+  it("keeps the map's name, with a default and a length limit", () => {
+    const named = new RoadGraph();
+    named.load({ version: 3, name: "Harbour Town", nodes: [], segments: [] });
+    expect(named.toJSON().name).toBe("Harbour Town");
+    const old = new RoadGraph();
+    old.load({ version: 3, nodes: [], segments: [] });
+    expect(old.name).toBe("Untitled map");
+    expect(() => new RoadGraph().load({ version: 3, name: "x".repeat(61), nodes: [], segments: [] })).toThrow();
+  });
+
   it("rejects maps with bad or duplicate ids and coordinates", () => {
     const map = crossroads().toJSON();
     const broken = [

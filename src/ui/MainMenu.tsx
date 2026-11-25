@@ -1,4 +1,4 @@
-import { Coffee, FilePlus, FolderOpen, Heart, Keyboard, Menu, Save, Settings, Star, type LucideIcon } from "lucide-react";
+import { Coffee, FilePlus, FolderOpen, GraduationCap, Heart, Keyboard, Menu, Save, Settings, Star, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Engine } from "../render/Engine";
 import { gameStore, useGame } from "../state/store";
@@ -14,9 +14,13 @@ const SUPPORT_LINKS: { label: string; href: string; icon: LucideIcon }[] = [
 /** Top-right ☰ menu: map file actions, settings and the controls reference. Also shows short status messages. */
 export function MainMenu({
   engine,
+  onNewMap,
   onShowSettings,
   onShowControls,
+  onShowTutorial,
 }: {
+  onShowTutorial: () => void;
+  onNewMap: () => void;
   engine: Engine | null;
   onShowSettings: () => void;
   onShowControls: () => void;
@@ -131,9 +135,7 @@ export function MainMenu({
             icon={FilePlus}
             label="New map"
             disabled={!engine}
-            onSelect={choose(() => {
-              if (window.confirm("Start a new map? The current one is lost unless you've saved it to a file.")) engine!.newMap();
-            })}
+            onSelect={choose(onNewMap)}
           />
           <MenuItem
             icon={FolderOpen}
@@ -150,6 +152,7 @@ export function MainMenu({
           <div role="separator" className="my-1 h-px bg-white/10" />
           <MenuItem icon={Settings} label="Settings" onSelect={choose(onShowSettings)} />
           <MenuItem icon={Keyboard} label="Controls" onSelect={choose(onShowControls)} />
+          <MenuItem icon={GraduationCap} label="Tutorial" onSelect={choose(onShowTutorial)} />
         </div>
       )}
 

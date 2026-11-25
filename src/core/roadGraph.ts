@@ -42,6 +42,8 @@ export interface SavedMap {
   version: 1 | 2 | 3;
   /** Absent in maps saved before it existed: right-hand. */
   drivingSide?: DrivingSide;
+  /** The map's name (absent in older maps). */
+  name?: string;
   /** Junctions with non-default settings (absent in older maps). */
   junctions?: ({ node: NodeId } & JunctionSettings)[];
   /** Traffic sources and sinks (absent in older maps). */
@@ -68,6 +70,10 @@ export interface RoadPlan {
   valid: boolean;
 }
 
+/** What a map is called if it wasn't given a name, and the longest name it can have. */
+export const DEFAULT_MAP_NAME = "Untitled map";
+export const MAX_MAP_NAME = 60;
+
 /** A road endpoint this close to another road's centre line joins it (the tool snaps onto it exactly). */
 const ON_ROAD_TOLERANCE = 0.5;
 
@@ -88,6 +94,7 @@ export class RoadGraph {
   readonly nodes = new Map<NodeId, RoadNode>();
   readonly segments = new Map<SegmentId, RoadSegment>();
   private side: DrivingSide = "right";
+  private title = DEFAULT_MAP_NAME;
   /** Settings of junctions that differ from `DEFAULT_JUNCTION`. */
   private junctionSettings = new Map<NodeId, JunctionSettings>();
   /** Sources and sinks, each on a dead-end node (exactly one road). */
@@ -102,6 +109,11 @@ export class RoadGraph {
   subscribe(listener: (e: GraphEvent) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** The map's name, given when it's made. */
+  get name(): string {
+    return this.title;
   }
 
   get drivingSide(): DrivingSide {
@@ -548,6 +560,7 @@ export class RoadGraph {
   toJSON(): SavedMap {
     return {
       version: 3,
+      name: this.title,
       drivingSide: this.side,
       junctions: [...this.junctionSettings].map(([node, settings]) => ({ node, ...settings })),
       terminals: [...this.terminals].map(([node, terminal]) => ({ node, ...terminal })),
@@ -560,6 +573,9 @@ export class RoadGraph {
   load(map: SavedMap): void {
     if (![1, 2, 3].includes(map?.version) || !Array.isArray(map.nodes) || !Array.isArray(map.segments)) {
       throw new Error("Not a road map file (unsupported version or shape)");
+    }
+    if (map.name !== undefined && (typeof map.name !== "string" || map.name.length > MAX_MAP_NAME)) {
+      throw new Error("Invalid map name in map file");
     }
     if (map.drivingSide !== undefined && map.drivingSide !== "right" && map.drivingSide !== "left") {
       throw new Error("Invalid driving side in map file");
@@ -601,6 +617,7 @@ export class RoadGraph {
     }
 
     this.side = map.drivingSide ?? "right";
+    this.title = map.name?.trim() || DEFAULT_MAP_NAME;
     // Sources and sinks sit on dead ends; sources only list real sinks.
     const ends = new Map<NodeId, number>();
     for (const s of segments) for (const n of [s.a, s.b]) ends.set(n, (ends.get(n) ?? 0) + 1);
