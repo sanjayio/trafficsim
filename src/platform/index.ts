@@ -47,3 +47,25 @@ export async function openMapFile(): Promise<string | null> {
     input.click();
   });
 }
+
+const AUTOSAVE_KEY = "road-builder:map";
+
+/** The map kept in this browser (or desktop app) between visits, if there is one. */
+export function loadAutosave(): string | null {
+  try {
+    return localStorage.getItem(AUTOSAVE_KEY);
+  } catch {
+    // Storage blocked (some private windows): nothing kept.
+    return null;
+  }
+}
+
+/** Keeps the map in this browser for next time. False if it couldn't (storage blocked or full). */
+export function saveAutosave(contents: string): boolean {
+  try {
+    localStorage.setItem(AUTOSAVE_KEY, contents);
+    return true;
+  } catch {
+    return false;
+  }
+}

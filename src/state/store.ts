@@ -46,6 +46,8 @@ interface GameState {
   /** Signed offset of the parallel copy (positive: right of the direction drawn). Never 0. */
   parallelOffset: number;
   stats: Stats;
+  /** Keeping the map in the browser: just changed (saving), kept, or refused (storage blocked or full); null before any change. */
+  autosave: "saving" | "saved" | "failed" | null;
   message: string | null;
   /**
    * The junction or source under the cursor (offering its ⚙ button) and the one whose options
@@ -76,6 +78,7 @@ interface GameState {
   nudgeParallelOffset: (direction: 1 | -1) => void;
   togglePause: () => void;
   setStats: (stats: Stats) => void;
+  setAutosave: (autosave: GameState["autosave"]) => void;
   showMessage: (message: string | null) => void;
   setDrivingSide: (side: DrivingSide) => void;
   setJunctionHover: (hover: GameState["junctionHover"]) => void;
@@ -104,6 +107,7 @@ export const gameStore = createStore<GameState>()((set, get) => ({
   parallel: false,
   parallelOffset: 64,
   stats: { fps: 0 },
+  autosave: null,
   message: null,
   drivingSide: "right",
   junctionHover: null,
@@ -133,6 +137,7 @@ export const gameStore = createStore<GameState>()((set, get) => ({
     set({ speed: speed === 0 ? lastSpeed : 0 });
   },
   setStats: (stats) => set({ stats }),
+  setAutosave: (autosave) => set({ autosave }),
   showMessage: (message) => set({ message }),
   setDrivingSide: (drivingSide) => set({ drivingSide }),
   setJunctionHover: (junctionHover) => set({ junctionHover }),

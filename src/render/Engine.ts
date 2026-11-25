@@ -9,7 +9,7 @@ import { TrafficTool } from "../tools/TrafficTool";
 import { ZoneMap } from "../core/zoning";
 import { CarLayer } from "./CarLayer";
 import { ZoneLayer } from "./ZoneLayer";
-import { openMapFile, saveMapFile } from "../platform";
+import { loadAutosave, openMapFile, saveAutosave, saveMapFile } from "../platform";
 import { gameStore, isSnapping, type NodeAnchor, type ToolId } from "../state/store";
 import { BulldozeTool } from "../tools/BulldozeTool";
 import { RoadTool } from "../tools/RoadTool";
@@ -34,6 +34,8 @@ const CLICK_SLOP_PX = 5;
 const MAX_FRAME_MS = 250;
 /** How close (world units) the cursor must be to a source's road end to offer its options. */
 const SOURCE_HOVER_RADIUS = 16;
+/** The map is kept in the browser this long after the last change. */
+const AUTOSAVE_DELAY_MS = 500;
 /** Fog range as multiples of the camera's focus distance: only the far edge of a tilted view fades. */
 const FOG_NEAR = 1.6;
 const FOG_FAR = 5;
@@ -202,7 +204,48 @@ export class Engine {
     // Alt released while the window was in the background never sends keyup.
     this.listen(window, "blur", () => this.setSnapInverted(false));
 
+    this.restoreAutosave();
     renderer.setAnimationLoop(this.frame);
+  }
+
+  /** Starts an empty map (the last one is gone unless it was saved to a file). */
+  newMap(): void {
+    this.tool.cancel();
+    this.graph.load({ version: 3, nodes: [], segments: [] });
+    gameStore.getState().setDrivingSide(this.graph.drivingSide);
+  }
+
+  /**
+   * Brings back the map kept in the browser from last time, then keeps every change there (a
+   * moment after the last one), so the city is still there next visit without saving a file.
+   */
+  private restoreAutosave(): void {
+    const saved = loadAutosave();
+    if (saved) {
+      try {
+        this.graph.load(JSON.parse(saved) as SavedMap);
+        gameStore.getState().setDrivingSide(this.graph.drivingSide);
+      } catch {
+        gameStore.getState().showMessage("Couldn't restore your last map");
+      }
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let warned = false;
+    const unsubscribe = this.graph.subscribe(() => {
+      clearTimeout(timer);
+      gameStore.getState().setAutosave("saving");
+      timer = setTimeout(() => {
+        const saved = saveAutosave(JSON.stringify(this.graph.toJSON()));
+        gameStore.getState().setAutosave(saved ? "saved" : "failed");
+        if (saved || warned) return;
+        warned = true;
+        gameStore.getState().showMessage("Couldn't keep the map in this browser: use Save map");
+      }, AUTOSAVE_DELAY_MS);
+    });
+    this.cleanups.push(() => {
+      clearTimeout(timer);
+      unsubscribe();
+    });
   }
 
   async saveMap(): Promise<boolean> {

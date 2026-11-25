@@ -1,4 +1,4 @@
-import { FolderOpen, Heart, Keyboard, Menu, Save, Settings, type LucideIcon } from "lucide-react";
+import { FilePlus, FolderOpen, Heart, Keyboard, Menu, Save, Settings, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Engine } from "../render/Engine";
 import { gameStore, useGame } from "../state/store";
@@ -95,6 +95,14 @@ export function MainMenu({
           aria-label="Main menu"
           className="pointer-events-auto flex w-48 origin-top-right flex-col rounded-xl border border-white/10 bg-neutral-900/95 p-1 shadow-xl shadow-black/40 backdrop-blur"
         >
+          <MenuItem
+            icon={FilePlus}
+            label="New map"
+            disabled={!engine}
+            onSelect={choose(() => {
+              if (window.confirm("Start a new map? The current one is lost unless you've saved it to a file.")) engine!.newMap();
+            })}
+          />
           <MenuItem
             icon={FolderOpen}
             label="Open map…"

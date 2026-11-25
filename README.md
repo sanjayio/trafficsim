@@ -41,6 +41,7 @@ In the app: ☰ menu (top right) → **Controls**. That list is generated from `
 | `T` / `G` | Tilt the camera towards 30° (3D view) / back to 90° top-down |
 | Right- or middle-drag (left-drag in Select) | Pan |
 | `Space` | Pause / resume |
+| Autosave | The map is kept in the browser as you build and comes back on your next visit. ☰ → New map starts afresh; Save map / Open map still save and load files |
 | Radio (top middle) | Internet radio from Radio Paradise (Main Mix, Mellow, Rock, Global): play/stop, station and volume. Remembers your station and volume |
 | Right-click / `Esc` | Step back one point / cancel the road in progress |
 
