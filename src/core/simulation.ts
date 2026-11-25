@@ -3,7 +3,7 @@ import type { NodeId, RoadGraph, RoadSegment } from "./roadGraph";
 import { CRUISE_SPEED, findRoute, type Route } from "./routing";
 import { LANE_WIDTH } from "./roadSpec";
 import { connectionsAt, hasLaneConnector, laneOffsets, lanesInnerToKerb, turnAt, type Turn } from "./lanes";
-import { DRIVEWAY_BLEND } from "./terminal";
+import { carPark, DRIVEWAY_BLEND } from "./terminal";
 import { legAt, legLength, TrackBuilder, type Leg } from "./track";
 
 /** Fixed simulation timestep in seconds, so traffic logic never sees a variable dt. */
@@ -29,7 +29,18 @@ const SIGNAL_AHEAD = 60;
 /** On green, turning cars give way to priority traffic this many seconds from the junction. */
 const YIELD_HORIZON = 3;
 
-const CAR_COLORS = [0xe4572e, 0x29b6f6, 0xffc914, 0x76b041, 0xf5f5f5, 0x9c6ade, 0x2e4057, 0xd81159];
+/** Top speed in a car park bay (driving in or backing out). */
+const PARK_SPEED = 8;
+/** How long a car stays parked at a shop or office, in seconds: somewhere between these. */
+const PARK_MIN = 20;
+const PARK_MAX = 100;
+/** Paint, roughly as common as on real roads: mostly white, black, silver and grey, a few colours. */
+const CAR_COLORS = [
+  0xf2f2f0, 0xf2f2f0, 0xf2f2f0, 0x1c1d20, 0x1c1d20, 0x1c1d20, 0xb9bdc2, 0xb9bdc2, 0x6c7178, 0x6c7178,
+  0x1f3a5f, 0x9b1c1c, 0x2f5d50, 0x8a6f4e, 0xc9a227, 0x3f7fbf,
+];
+export const CAR_TYPES = ["sedan", "hatch", "suv"] as const;
+export type CarType = (typeof CAR_TYPES)[number];
 
 /** How entry to a leg is controlled: a junction's rule, "merge" for a lane change, null at a plain bend where two roads meet. */
 type Rule = JunctionControl | "roundabout" | "merge" | null;
@@ -50,12 +61,19 @@ export interface Car {
   s: number;
   v: number;
   color: number;
+  type: CarType;
   /** Allowed into the junction at the end of its current road leg. */
   cleared: boolean;
   /** When it reached the front of the queue at an all-way junction (null until then). */
   arrival: number | null;
   /** Seconds standing at the stop line. */
   stopped: number;
+  /** The source it set off from, and drives back to after parking. */
+  home: NodeId;
+  /** The bay it holds at a shop or office (its index in `carPark`'s bays), from setting off until it has backed out. */
+  parking: { sink: NodeId; bay: number } | null;
+  /** Parked: the simulation time it leaves. */
+  leaveAt: number | null;
 }
 
 /** Small seeded random generator (mulberry32), so runs can be repeated. */
@@ -91,8 +109,14 @@ export class Simulation {
   time = 0;
   ticks = 0;
   cars: Car[] = [];
-  /** Cars that have reached their sink. */
+  /** Cars that have reached their sink (parked, unless `parking` is off). */
   delivered = 0;
+  /**
+   * Cars park in a free bay at their shop or office, stay a while and drive home; a shop with no
+   * free bay gets no more until one leaves. Off, they vanish on arriving (traffic tests use this
+   * for steady flow through junctions).
+   */
+  parking = true;
 
   private tracks: TrackBuilder;
   private routes = new Map<string, Route | null>();
@@ -111,7 +135,11 @@ export class Simulation {
     this.random = seeded(seed);
     this.unsubscribe = graph.subscribe((e) => {
       this.routes.clear();
-      if (e.type === "terminal-changed") return;
+      if (e.type === "terminal-changed") {
+        // A shop or office removed or rebuilt: its bays (and cars in or heading for them) go too.
+        this.cars = this.cars.filter((c) => c.parking?.sink !== e.nodeId);
+        return;
+      }
       this.tracks.clear();
       // shortcut: cars driving through a changed part of the network just vanish; reroute them when it matters.
       if (e.type === "reset" || e.type === "settings") this.cars = [];
@@ -132,13 +160,15 @@ export class Simulation {
     this.time += dt;
     this.ticks++;
     this.spawn(dt);
+    const arrived = new Set<Car>();
+    for (const car of this.cars) if (car.leaveAt !== null && this.time >= car.leaveAt && !this.leave(car)) arrived.add(car);
 
     const lanes = this.byLane();
     const acceleration = new Map<Car, number>();
-    for (const car of this.cars) acceleration.set(car, this.accelerate(car, lanes));
+    for (const car of this.cars) if (car.leaveAt === null) acceleration.set(car, this.accelerate(car, lanes));
 
-    const arrived = new Set<Car>();
     for (const car of this.cars) {
+      if (car.leaveAt !== null) continue;
       car.v = Math.max(0, car.v + acceleration.get(car)! * dt);
       const before = car.s;
       car.s += car.v * dt;
@@ -147,9 +177,21 @@ export class Simulation {
       if (next?.rule && !car.cleared) car.s = Math.min(car.s, Math.max(before, legLength(car.legs[car.leg]) - CAR_LENGTH / 2));
       while (car.s >= legLength(car.legs[car.leg])) {
         if (car.leg === car.legs.length - 1) {
-          arrived.add(car);
+          if (car.parking && car.legs[car.leg].key.startsWith("bay:")) {
+            // In its bay: stays a while.
+            car.s = legLength(car.legs[car.leg]);
+            car.v = 0;
+            car.leaveAt = this.time + PARK_MIN + this.random() * (PARK_MAX - PARK_MIN);
+            this.delivered++;
+          } else {
+            arrived.add(car);
+            // At its sink (with parking on, cars only vanish once home again).
+            if (!car.parking && !this.parking) this.delivered++;
+          }
           break;
         }
+        // Backed out of its bay: the bay is free for the next car.
+        if (car.legs[car.leg].reverse) car.parking = null;
         car.s -= legLength(car.legs[car.leg]);
         car.leg++;
         car.cleared = false;
@@ -160,10 +202,7 @@ export class Simulation {
       // Standing at the line: the front bumper (half a car ahead) within a few units of it.
       car.stopped = car.v < 0.5 && toLine - CAR_LENGTH / 2 < 6 ? car.stopped + dt : 0;
     }
-    if (arrived.size) {
-      this.delivered += arrived.size;
-      this.cars = this.cars.filter((c) => !arrived.has(c));
-    }
+    if (arrived.size) this.cars = this.cars.filter((c) => !arrived.has(c));
   }
 
   /**
@@ -192,8 +231,9 @@ export class Simulation {
 
   /** Position and heading of a car, for drawing it. */
   pose(car: Car): { x: number; y: number; heading: number } {
-    const f = legAt(car.legs[car.leg], car.s);
-    return { x: f.p.x, y: f.p.y, heading: Math.atan2(f.tangent.y, f.tangent.x) };
+    const leg = car.legs[car.leg];
+    const f = legAt(leg, car.s);
+    return { x: f.p.x, y: f.p.y, heading: Math.atan2(f.tangent.y, f.tangent.x) + (leg.reverse ? Math.PI : 0) };
   }
 
   private dropCarsAt(nodes: NodeId[]): void {
@@ -216,10 +256,14 @@ export class Simulation {
       const due = Math.min(1, (this.due.get(source) ?? 0) + (t.rate / 60) * dt);
       this.due.set(source, due);
       if (due < 1) continue;
-      const reachable = (t.sinks.length ? t.sinks : sinks).filter((sink) => sink !== source && this.route(source, sink));
+      // Only to shops and offices with a free bay: when they're all full, the source waits.
+      const reachable = (t.sinks.length ? t.sinks : sinks).filter(
+        (sink) => sink !== source && (!this.parking || this.freeBay(sink) !== null) && this.route(source, sink),
+      );
       if (!reachable.length) continue;
-      const route = this.route(source, reachable[Math.floor(this.random() * reachable.length)])!;
-      const legs = this.legsFor(route);
+      const sink = reachable[Math.floor(this.random() * reachable.length)];
+      const bay = this.parking ? this.freeBay(sink) : null;
+      const legs = this.legsFor(this.route(source, sink)!, bay === null ? {} : { parkAt: bay });
       // Not while the last car is still at the door or near the top of the driveway (either way out).
       const blocked = this.cars.some((c) => c.legs[c.leg].key === legs[0].key || this.nearDoor(c, source));
       if (blocked) continue;
@@ -232,15 +276,37 @@ export class Simulation {
         // Out of the building's door, from a standstill.
         v: 0,
         color: CAR_COLORS[Math.floor(this.random() * CAR_COLORS.length)],
+        type: CAR_TYPES[Math.floor(this.random() * CAR_TYPES.length)],
         cleared: false,
         arrival: null,
         stopped: 0,
+        home: source,
+        parking: bay === null ? null : { sink, bay },
+        leaveAt: null,
       });
     }
   }
 
+  /** A bay at shop or office `sink` no car holds, or null when they're all taken. */
+  private freeBay(sink: NodeId): number | null {
+    const lot = this.graph.terminalLot(sink);
+    if (!lot) return null;
+    const taken = new Set(this.cars.filter((c) => c.parking?.sink === sink).map((c) => c.parking!.bay));
+    const free = carPark(lot).bays.findIndex((_, i) => !taken.has(i));
+    return free < 0 ? null : free;
+  }
+
+  /** A parked car sets off home, backing out of its bay. False if it can't get there (it just goes). */
+  private leave(car: Car): boolean {
+    const { sink, bay } = car.parking!;
+    const route = this.graph.terminal(car.home)?.kind === "source" ? this.route(sink, car.home) : null;
+    if (!route) return false;
+    Object.assign(car, { legs: this.legsFor(route, { leaveFrom: bay }), leg: 0, s: 0, v: 0, leaveAt: null, cleared: false, arrival: null, stopped: 0 });
+    return true;
+  }
+
   /** The legs driving `route`: a lane on each road (by the turn at its end), and the junctions between. */
-  private legsFor(route: Route): Movement[] {
+  private legsFor(route: Route, bays: { parkAt?: number; leaveFrom?: number } = {}): Movement[] {
     const { graph } = this;
     const segments = route.segments.map((id) => graph.segments.get(id)!);
     const turns: (Turn | null)[] = segments.map((s, i) =>
@@ -348,13 +414,26 @@ export class Simulation {
     });
     // Out of the source's building and down its driveway (waiting at the door for a gap), and at
     // the far end off the road down the sink's driveway to its door.
-    const [door, driveway] = this.tracks.drivewayOut(source, sourceLot, legs[0]);
-    return [
-      { ...door, rule: null },
-      { ...driveway, rule: "merge" },
-      ...legs,
-      { ...this.tracks.drivewayIn(sink, sinkLot, legs[legs.length - 1]), rule: null },
-    ];
+    // From a car park, instead: backing out of the bay, then onto the road; to one, into a bay.
+    const last = legs.length - 1;
+    let start: Movement[];
+    if (bays.leaveFrom === undefined) {
+      const [door, driveway] = this.tracks.drivewayOut(source, sourceLot, legs[0]);
+      start = [{ ...door, rule: null }, { ...driveway, rule: "merge" }];
+    } else {
+      const { road, legs: out } = this.tracks.parkOut(source, sourceLot, bays.leaveFrom, legs[0]);
+      // The last leg joins the road: it waits for a gap there.
+      start = out.map((leg, i) => ({ ...leg, rule: i === out.length - 1 ? "merge" : null }));
+      legs[0] = { ...legs[0], ...road };
+    }
+    let end: Movement[];
+    if (bays.parkAt === undefined) end = [{ ...this.tracks.drivewayIn(sink, sinkLot, legs[last]), rule: null }];
+    else {
+      const { road, legs: into } = this.tracks.parkIn(sink, sinkLot, bays.parkAt, legs[last]);
+      legs[last] = { ...legs[last], ...road };
+      end = into.map((leg) => ({ ...leg, rule: null }));
+    }
+    return [...start, ...legs, ...end];
   }
 
   /**
@@ -405,7 +484,8 @@ export class Simulation {
 
     if (gap <= 0) return -BRAKE * 4;
     const desired = MIN_GAP + car.v * HEADWAY + (car.v * (car.v - speed)) / (2 * Math.sqrt(ACCEL * BRAKE));
-    const a = ACCEL * (1 - (car.v / CRUISE_SPEED) ** 4 - (Math.max(0, desired) / gap) ** 2);
+    const limit = leg.key.startsWith("bay:") ? PARK_SPEED : CRUISE_SPEED;
+    const a = ACCEL * (1 - (car.v / limit) ** 4 - (Math.max(0, desired) / gap) ** 2);
     return Math.max(a, -BRAKE * 4);
   }
 

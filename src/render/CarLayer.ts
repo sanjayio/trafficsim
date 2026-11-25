@@ -1,9 +1,23 @@
-import { BoxGeometry, Color, Group, InstancedMesh, Matrix4, MeshBasicMaterial, Quaternion, Vector3 } from "three";
-import { CAR_LENGTH, CAR_WIDTH, type Simulation } from "../core/simulation";
+import { BoxGeometry, Color, Float32BufferAttribute, Group, InstancedMesh, Matrix4, MeshBasicMaterial, Quaternion, Vector3 } from "three";
+import { CAR_LENGTH, CAR_WIDTH, type CarType, type Simulation } from "../core/simulation";
 
-const BODY_HEIGHT = 3;
-const CABIN = { length: CAR_LENGTH * 0.5, width: CAR_WIDTH * 0.85, height: 2.2 };
-const CABIN_COLOR = 0x1f2933;
+/**
+ * Each type's shape: overall length, body height (above the wheels' clearance), and the glass
+ * greenhouse's length, offset back from the middle, and height. All fit the simulation's
+ * CAR_LENGTH × CAR_WIDTH, which spaces cars.
+ */
+const SHAPES: Record<CarType, { length: number; body: number; cabin: number; back: number; glass: number }> = {
+  sedan: { length: CAR_LENGTH, body: 2.4, cabin: 6.4, back: 0.6, glass: 1.9 },
+  hatch: { length: CAR_LENGTH * 0.88, body: 2.6, cabin: 6.6, back: 1.6, glass: 2.1 },
+  suv: { length: CAR_LENGTH, body: 3.4, cabin: 8.6, back: 1.4, glass: 2.4 },
+};
+/** Body height off the ground (the wheels show below it), and the wheels' size. */
+const CLEARANCE = 0.9;
+const WHEEL = { length: 2.8, height: 2.2, inset: 2.6 };
+const GLASS_COLOR = 0x26323f;
+const WHEEL_COLOR = 0x141518;
+const DRL_COLOR = 0xf4f8ff;
+const TAIL_COLOR = 0xb3121c;
 /** Indicator lamps: size, colour, and flashes per second (on the simulation clock, so they pause with it). */
 const LAMP = { length: 1.6, height: 1.2, width: 1.4 };
 const LAMP_COLOR = 0xffa31a;
@@ -11,89 +25,120 @@ const BLINK_HZ = 1.5;
 /** Cars draw after the flat road layers, with normal depth testing. */
 const CAR_ORDER = 20;
 
+type Part = "body" | "glass" | "roof" | "wheels" | "drl" | "tail" | "lamps";
+/** Boxes of each part per car (lamps: up to two, on the side signalling). */
+const PER_CAR: Record<Part, number> = { body: 1, glass: 1, roof: 1, wheels: 2, drl: 2, tail: 2, lamps: 2 };
+
 /**
- * Draws every car as two instanced boxes (body and cabin), plus flashing indicator lamps at the
- * front and rear corners on the side it's signalling, updated from the simulation each frame.
+ * Draws every car from a few instanced unit boxes, stretched per car to its type (sedan, hatch,
+ * SUV): body and roof in its paint, glass, wheels, daytime running lights, tail lights, and
+ * flashing indicators on the side it's signalling. One draw call per part, however many cars.
  */
 export class CarLayer extends Group {
-  private bodyGeometry = new BoxGeometry(CAR_LENGTH, BODY_HEIGHT, CAR_WIDTH);
-  private cabinGeometry = new BoxGeometry(CABIN.length, CABIN.height, CABIN.width);
-  private bodyMaterial = new MeshBasicMaterial();
-  private cabinMaterial = new MeshBasicMaterial({ color: CABIN_COLOR });
-  private lampGeometry = new BoxGeometry(LAMP.length, LAMP.height, LAMP.width);
-  private lampMaterial = new MeshBasicMaterial({ color: LAMP_COLOR });
-  private lamps: InstancedMesh | null = null;
-  private body: InstancedMesh | null = null;
-  private cabin: InstancedMesh | null = null;
+  private box = shadedBox();
+  private materials: Record<Part, MeshBasicMaterial> = {
+    body: shaded(0xffffff),
+    glass: shaded(GLASS_COLOR),
+    roof: shaded(0xffffff),
+    wheels: shaded(WHEEL_COLOR),
+    // Lights glow: the same from every side.
+    drl: new MeshBasicMaterial({ color: DRL_COLOR }),
+    tail: new MeshBasicMaterial({ color: TAIL_COLOR }),
+    lamps: new MeshBasicMaterial({ color: LAMP_COLOR }),
+  };
+  private meshes: Partial<Record<Part, InstancedMesh>> = {};
+  private capacity = 0;
   private tmpMatrix = new Matrix4();
   private tmpPosition = new Vector3();
   private tmpRotation = new Quaternion();
-  private tmpScale = new Vector3(1, 1, 1);
+  private tmpScale = new Vector3();
   private tmpUp = new Vector3(0, 1, 0);
   private tmpColor = new Color();
 
   update(sim: Simulation): void {
     const cars = sim.cars;
-    if (!this.body || this.body.instanceMatrix.count < cars.length) this.grow(Math.max(64, cars.length * 2));
-    const body = this.body!;
-    const cabin = this.cabin!;
-    const lamps = this.lamps!;
+    if (!this.meshes.body || this.capacity < cars.length) this.grow(Math.max(64, cars.length * 2));
+    const m = this.meshes as Record<Part, InstancedMesh>;
+    const counts: Record<Part, number> = { body: 0, glass: 0, roof: 0, wheels: 0, drl: 0, tail: 0, lamps: 0 };
     const lit = Math.floor(sim.time * BLINK_HZ * 2) % 2 === 0;
-    let lampCount = 0;
-    cars.forEach((car, i) => {
+    for (const car of cars) {
       const { x, y, heading } = sim.pose(car);
-      // World (x, y) is three.js (x, 0, y); turning by -heading about y points the box's length along travel.
-      this.tmpRotation.setFromAxisAngle(this.tmpUp, -heading);
-      this.tmpPosition.set(x, BODY_HEIGHT / 2, y);
-      body.setMatrixAt(i, this.tmpMatrix.compose(this.tmpPosition, this.tmpRotation, this.tmpScale));
-      body.setColorAt(i, this.tmpColor.setHex(car.color));
-      this.tmpPosition.set(x, BODY_HEIGHT + CABIN.height / 2, y);
-      cabin.setMatrixAt(i, this.tmpMatrix.compose(this.tmpPosition, this.tmpRotation, this.tmpScale));
-
-      const side = lit ? sim.signal(car) : 0;
-      if (!side) return;
-      // Front and rear corners on the signalling side (+1: right of travel, which is world +y when heading +x).
+      const shape = SHAPES[car.type];
       const cos = Math.cos(heading);
       const sin = Math.sin(heading);
-      const across = side * (CAR_WIDTH / 2);
-      for (const along of [CAR_LENGTH / 2 - LAMP.length / 2, -(CAR_LENGTH / 2 - LAMP.length / 2)]) {
-        this.tmpPosition.set(x + cos * along - sin * across, BODY_HEIGHT * 0.65, y + sin * along + cos * across);
-        lamps.setMatrixAt(lampCount++, this.tmpMatrix.compose(this.tmpPosition, this.tmpRotation, this.tmpScale));
+      // World (x, y) is three.js (x, 0, y); turning by -heading about y points a box's length along travel.
+      this.tmpRotation.setFromAxisAngle(this.tmpUp, -heading);
+      // A box of (length, height, width) centred `along` ahead of the car's middle, `across` to its right, from height `base` up.
+      const put = (part: Part, along: number, across: number, base: number, length: number, height: number, width: number) => {
+        this.tmpPosition.set(x + cos * along - sin * across, base + height / 2, y + sin * along + cos * across);
+        this.tmpScale.set(length, height, width);
+        m[part].setMatrixAt(counts[part]++, this.tmpMatrix.compose(this.tmpPosition, this.tmpRotation, this.tmpScale));
+      };
+      const half = shape.length / 2;
+      const top = CLEARANCE + shape.body;
+      this.tmpColor.setHex(car.color);
+      m.body.setColorAt(counts.body, this.tmpColor);
+      m.roof.setColorAt(counts.roof, this.tmpColor);
+      put("body", 0, 0, CLEARANCE, shape.length, shape.body, CAR_WIDTH);
+      // Glass all round the cabin, with a slightly smaller roof in the paint on top: windows show at the sides, front and back.
+      put("glass", -shape.back, 0, top, shape.cabin, shape.glass, CAR_WIDTH * 0.86);
+      put("roof", -shape.back, 0, top + shape.glass, shape.cabin - 1.2, 0.35, CAR_WIDTH * 0.8);
+      for (const along of [half - WHEEL.inset, -(half - WHEEL.inset)]) put("wheels", along, 0, 0, WHEEL.length, WHEEL.height, CAR_WIDTH + 0.3);
+      for (const side of [1, -1]) {
+        put("drl", half + 0.05, side * (CAR_WIDTH / 2 - 1.1), top - 1, 0.3, 0.45, 1.8);
+        put("tail", -half - 0.05, side * (CAR_WIDTH / 2 - 1.1), top - 1.1, 0.3, 0.7, 1.6);
       }
-    });
-    body.count = cabin.count = cars.length;
-    lamps.count = lampCount;
-    body.instanceMatrix.needsUpdate = cabin.instanceMatrix.needsUpdate = lamps.instanceMatrix.needsUpdate = true;
-    if (body.instanceColor) body.instanceColor.needsUpdate = true;
+      const side = lit ? sim.signal(car) : 0;
+      if (!side) continue;
+      // Front and rear corners on the signalling side (+1: right of travel, which is world +y when heading +x).
+      for (const along of [half - LAMP.length / 2, -(half - LAMP.length / 2)]) {
+        put("lamps", along, side * (CAR_WIDTH / 2), top - 1.4, LAMP.length, LAMP.height, LAMP.width);
+      }
+    }
+    for (const part of Object.keys(counts) as Part[]) {
+      m[part].count = counts[part];
+      m[part].instanceMatrix.needsUpdate = true;
+      if (m[part].instanceColor) m[part].instanceColor!.needsUpdate = true;
+    }
   }
 
   private grow(capacity: number): void {
-    for (const mesh of [this.body, this.cabin, this.lamps]) {
-      if (!mesh) continue;
-      this.remove(mesh);
-      mesh.dispose();
-    }
-    this.body = new InstancedMesh(this.bodyGeometry, this.bodyMaterial, capacity);
-    this.cabin = new InstancedMesh(this.cabinGeometry, this.cabinMaterial, capacity);
-    this.lamps = new InstancedMesh(this.lampGeometry, this.lampMaterial, capacity * 2);
-    this.body.setColorAt(0, this.tmpColor.setHex(0xffffff));
-    for (const mesh of [this.body, this.cabin, this.lamps]) {
+    this.capacity = capacity;
+    for (const part of Object.keys(PER_CAR) as Part[]) {
+      const old = this.meshes[part];
+      if (old) {
+        this.remove(old);
+        old.dispose();
+      }
+      const mesh = new InstancedMesh(this.box, this.materials[part], capacity * PER_CAR[part]);
+      // Painted parts take their colour per car.
+      if (part === "body" || part === "roof") mesh.setColorAt(0, this.tmpColor.setHex(0xffffff));
       mesh.renderOrder = CAR_ORDER;
       // Instances move every frame; their combined bounds aren't worth recomputing.
       mesh.frustumCulled = false;
+      this.meshes[part] = mesh;
       this.add(mesh);
     }
   }
 
   dispose(): void {
-    this.body?.dispose();
-    this.cabin?.dispose();
-    this.lamps?.dispose();
-    this.lampGeometry.dispose();
-    this.lampMaterial.dispose();
-    this.bodyGeometry.dispose();
-    this.cabinGeometry.dispose();
-    this.bodyMaterial.dispose();
-    this.cabinMaterial.dispose();
+    for (const mesh of Object.values(this.meshes)) mesh.dispose();
+    for (const material of Object.values(this.materials)) material.dispose();
+    this.box.dispose();
   }
+}
+
+/** A material whose colour is darkened per face by the box's vertex colours (the scene has no lights). */
+function shaded(color: number): MeshBasicMaterial {
+  return new MeshBasicMaterial({ color, vertexColors: true });
+}
+
+/** A unit box with light from above baked into its vertex colours: top lit, ends a step darker, sides darker still. */
+function shadedBox(): BoxGeometry {
+  const box = new BoxGeometry(1, 1, 1);
+  // BoxGeometry's faces, 4 vertices each, in order: +x, -x, +y, -y, +z, -z.
+  const tones = [0.82, 0.82, 1, 0.5, 0.68, 0.68];
+  const colors = tones.flatMap((t) => Array(12).fill(t) as number[]);
+  box.setAttribute("color", new Float32BufferAttribute(colors, 3));
+  return box;
 }

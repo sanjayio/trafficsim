@@ -5,7 +5,7 @@ import { RoadGraph, type NodeId } from "./roadGraph";
 import { findRoute } from "./routing";
 import { DEFAULT_ROAD_SPEC, LANE_WIDTH, type RoadSpec } from "./roadSpec";
 import { CAR_LENGTH, CAR_WIDTH, SIM_DT, Simulation, type Car } from "./simulation";
-import { BUILDING_SIZE, DEFAULT_SOURCE, newTerminal, parseTerminal, SINK } from "./terminal";
+import { BUILDING_SIZE, DEFAULT_SOURCE, carPark, newTerminal, parseTerminal, SINK } from "./terminal";
 import { lanesInnerToKerb } from "./lanes";
 import { TrackBuilder } from "./track";
 
@@ -84,8 +84,58 @@ describe("Simulation", () => {
     graph.setTerminal(at(graph, 0, 0), { ...DEFAULT_SOURCE, rate: 30 });
     graph.setTerminal(at(graph, 400, 0), SINK);
     const sim = new Simulation(graph);
+    sim.parking = false;
     run(sim, 30, () => noOverlap(sim));
     expect(sim.delivered).toBeGreaterThan(5);
+  });
+
+  it("parks cars in a shop's bays, holds the rest back while it's full, and sends them home after", () => {
+    const graph = new RoadGraph();
+    road(graph, 0, 0, 400, 0);
+    const home = at(graph, 0, 0);
+    const shop = at(graph, 400, 0);
+    graph.setTerminal(home, { ...DEFAULT_SOURCE, rate: 60 });
+    graph.setTerminal(shop, SINK);
+    const bays = carPark(graph.terminalLot(shop)!).bays.length;
+    expect(bays).toBeGreaterThan(0);
+    const sim = new Simulation(graph);
+    let homeward = 0;
+    run(sim, 200, () => {
+      noOverlap(sim);
+      // Never more cars after the shop than it has bays, and never two in one bay.
+      const held = sim.cars.filter((c) => c.parking).map((c) => c.parking!.bay);
+      expect(new Set(held).size).toBe(held.length);
+      expect(held.length).toBeLessThanOrEqual(bays);
+      for (const car of sim.cars) {
+        if (car.leaveAt !== null) expect(car.leaveAt - sim.time).toBeLessThanOrEqual(100);
+        if (car.legs[car.legs.length - 1].key === `in:${home}`) homeward++;
+      }
+    });
+    // Over 200 s, bays emptied (stays are 20–100 s) and took more cars, and cars drove home.
+    expect(sim.delivered).toBeGreaterThan(bays);
+    expect(homeward).toBeGreaterThan(0);
+  });
+
+  it("parks cars behind a large office too, up its side path, and brings them out again", () => {
+    const graph = new RoadGraph();
+    road(graph, 0, 0, 400, 0);
+    graph.setTerminal(at(graph, 0, 0), { ...DEFAULT_SOURCE, rate: 60 });
+    const office = at(graph, 400, 0);
+    graph.setTerminal(office, newTerminal("largeOffice"));
+    const { bays } = carPark(graph.terminalLot(office)!);
+    expect(bays.some((b) => b.rear) && bays.some((b) => !b.rear)).toBe(true);
+    const sim = new Simulation(graph);
+    const used = new Set<number>();
+    let pathUp = 0;
+    run(sim, 200, () => {
+      noOverlap(sim);
+      for (const car of sim.cars) {
+        if (car.leaveAt !== null) used.add(car.parking!.bay);
+        if (car.legs[car.leg].key === `path:${office}`) pathUp++;
+      }
+    });
+    expect([...used].some((i) => bays[i].rear)).toBe(true);
+    expect(pathUp).toBeGreaterThan(0);
   });
 
   it("only sends cars to the sinks a source lists", () => {
@@ -94,6 +144,7 @@ describe("Simulation", () => {
     graph.setTerminal(at(graph, -300, 0), { ...DEFAULT_SOURCE, rate: 40, sinks: [east] });
     graph.setTerminal(at(graph, 0, -300), { ...DEFAULT_SOURCE, enabled: false });
     const sim = new Simulation(graph);
+    sim.parking = false;
     run(sim, 40, () => {
       for (const car of sim.cars) expect(car.legs[car.legs.length - 1].segment).toBe(graph.segmentsAt(east)[0].id);
     });
@@ -104,6 +155,7 @@ describe("Simulation", () => {
     it(`never lets crossing movements share an all-way ${control} junction`, () => {
       const { graph, centre } = crossroads({ control });
       const sim = new Simulation(graph);
+      sim.parking = false;
       const tracks = (sim as unknown as { tracks: { conflicts: (a: unknown, b: unknown) => boolean } }).tracks;
       run(sim, 120, () => {
         noOverlap(sim);
@@ -128,6 +180,7 @@ describe("Simulation", () => {
     graph.setTerminal(at(graph, 0, 0), { ...DEFAULT_SOURCE, rate: 60 });
     graph.setTerminal(at(graph, 700, 120), SINK);
     const sim = new Simulation(graph);
+    sim.parking = false;
     run(sim, 120, () => {
       for (const a of sim.cars) {
         for (const b of sim.cars) {
@@ -154,6 +207,7 @@ describe("Simulation", () => {
       const { graph, centre } = crossroads({ control: "signals" });
       graph.setDrivingSide(side);
       const sim = new Simulation(graph);
+      sim.parking = false;
       const approaches = signalApproaches(graph, centre);
       const leg = new Map<Car, number>();
       run(sim, 120, () => {
@@ -188,6 +242,7 @@ describe("Simulation", () => {
       for (const [x, y] of [[-300, 0], [0, -300]]) graph.setTerminal(at(graph, x, y), { ...DEFAULT_SOURCE, rate: 40 });
       for (const [x, y] of [[300, 0], [0, 300]]) graph.setTerminal(at(graph, x, y), SINK);
       const sim = new Simulation(graph);
+      sim.parking = false;
       run(sim, 300, () => {
         noOverlap(sim);
         const ring = sim.cars.filter((c) => {
@@ -260,6 +315,7 @@ describe("roundabout lanes", () => {
     const inner = island + 2 + LANE_WIDTH / 2;
     const outer = inner + LANE_WIDTH;
     const sim = new Simulation(graph);
+    sim.parking = false;
     const tracks = (sim as unknown as { tracks: TrackBuilder }).tracks;
     const seen = new Set<string>();
     run(sim, 120, () => {
@@ -309,6 +365,7 @@ describe("lane changes", () => {
     const { island } = roundaboutShape([spec]);
     const inner = island + 2 + LANE_WIDTH / 2;
     const sim = new Simulation(graph);
+    sim.parking = false;
     const tracks = (sim as unknown as { tracks: TrackBuilder }).tracks;
     const order = lanesInnerToKerb(spec, graph.drivingSide);
     run(sim, 180, () => {
@@ -363,6 +420,7 @@ describe("sources and sinks along a road", () => {
     expect(graph.terminalLot(middle.id)!.centre.y).toBeLessThan(0);
 
     const sim = new Simulation(graph);
+    sim.parking = false;
     const headings = new Set<string>();
     run(sim, 90, () => {
       noOverlap(sim);

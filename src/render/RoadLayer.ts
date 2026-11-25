@@ -1,8 +1,9 @@
-import { Group, Mesh, type BufferGeometry, type MeshBasicMaterial } from "three";
+import { Group, Mesh, type BufferGeometry, type MeshBasicMaterial, type Object3D } from "three";
 import { effectiveControl, kerbRadius, signalApproaches, MAX_CORNER_RADIUS, roundaboutShape, signalLights } from "../core/junction";
 import type { GraphEvent, NodeId, RoadGraph, RoadSegment, SegmentId } from "../core/roadGraph";
 import { connectionsAt, hasLaneConnector, turnAt, type Turn } from "../core/lanes";
 import { carriagewayWidth, FOOTPATH_WIDTH, hasMedian, LANE_WIDTH, MEDIAN_WIDTH, roadWidth, type RoadSpec } from "../core/roadSpec";
+import { carPark, DRIVEWAY_WIDTH, isSourceBuilding, SIDE_PATH } from "../core/terminal";
 import { bridge } from "../core/track";
 import { BuildingKit } from "./buildings";
 import { convexGeometry, flatMaterial } from "./flat";
@@ -18,7 +19,6 @@ const JUNCTION_MARGIN = 2;
 /** Roads meeting at less than ~20° to each other (sin < this) carry on rather than cross. */
 const MIN_CLEARANCE_SINE = 0.35;
 /** Width of a source's or sink's driveway. */
-const DRIVEWAY_WIDTH = 14;
 /** Signs stand this far outside a road without a footpath (on a footpath, they stand mid-path). */
 const SIGN_SETBACK = 3;
 
@@ -124,9 +124,17 @@ export class RoadLayer extends Group {
     // from the building's front to the carriageway's edge, across any footpath.
     const at = (a: number, o: number) => ({ x: door.x + along.x * a - out.x * o, y: door.y + along.y * a - out.y * o });
     const toFront = front - carriagewayWidth(segment.spec) / 2;
-    const half = DRIVEWAY_WIDTH / 2;
+    const strip = (middle: number, width: number) => [
+      at(middle - width / 2, 0),
+      at(middle + width / 2, 0),
+      at(middle + width / 2, toFront),
+      at(middle - width / 2, toFront),
+    ];
+    // A second one where the side path to a car park behind the building meets the road.
+    const { path } = isSourceBuilding(lot.building) ? { path: null } : carPark(lot);
+    const doorAt = (door.x - lot.centre.x) * along.x + (door.y - lot.centre.y) * along.y;
     const driveway = new Mesh(
-      convexGeometry([[at(-half, 0), at(half, 0), at(half, toFront), at(-half, toFront)]]),
+      convexGeometry([strip(0, DRIVEWAY_WIDTH), ...(path === null ? [] : [strip(path - doorAt, SIDE_PATH)])]),
       this.materials.asphalt,
     );
     driveway.renderOrder = ROAD_PART_STYLE.asphalt.layer;
@@ -135,6 +143,11 @@ export class RoadLayer extends Group {
     this.markers.set(nodeId, { driveway, building });
   }
 
+
+  /** Source and sink buildings with their plots, by node, for picking with the pointer. */
+  buildingGroups(): Map<Object3D, NodeId> {
+    return new Map([...this.markers].map(([id, m]) => [m.building, id]));
+  }
 
   /** Switches every junction's signals to the lights for simulation time `time`. */
   updateSignals(time: number): void {

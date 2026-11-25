@@ -270,24 +270,6 @@ export class RoadGraph {
     return undefined;
   }
 
-  /** The source whose building covers `p`, or whose road end is within `radius` of it, if any. */
-  sourceAt(p: Vec2, radius: number): RoadNode | undefined {
-    const covering = this.terminalAt(p);
-    if (covering !== undefined && this.terminals.get(covering)?.kind === "source") return this.nodes.get(covering);
-    let best: RoadNode | undefined;
-    let bestDist = radius;
-    for (const [id, t] of this.terminals) {
-      const node = this.nodes.get(id);
-      if (t.kind !== "source" || !node) continue;
-      const d = distance(node, p);
-      if (d <= bestDist) {
-        best = node;
-        bestDist = d;
-      }
-    }
-    return best;
-  }
-
   /** A junction (three or more roads) whose paved area covers `p`, if any. */
   junctionAt(p: Vec2): RoadNode | undefined {
     let best: RoadNode | undefined;

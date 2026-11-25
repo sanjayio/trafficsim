@@ -47,6 +47,7 @@ describe("lane connections", () => {
     graph.setTerminal(at(300, 0), SINK);
     graph.setTerminal(at(0, 300), SINK);
     const sim = new Simulation(graph);
+    sim.parking = false;
     // A stop sign at the junction: cars go through one at a time.
     for (let i = 0; i < 80 / SIM_DT; i++) {
       sim.step(SIM_DT);

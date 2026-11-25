@@ -1,4 +1,4 @@
-import { PerspectiveCamera, Plane, Raycaster, Vector2, Vector3 } from "three";
+import { PerspectiveCamera, Plane, Raycaster, Vector2, Vector3, type Object3D } from "three";
 import type { Vec2 } from "../core/geometry";
 
 const FOV_DEGREES = 45;
@@ -128,6 +128,13 @@ export class Camera {
     this.raycaster.setFromCamera(this.ndc, this.camera);
     const hit = this.raycaster.ray.intersectPlane(this.ground, this.hit);
     return hit ? { x: hit.x, y: hit.z } : null;
+  }
+
+  /** The nearest of `objects` (or their children) under screen point `s`. */
+  pick(s: Vec2, objects: Object3D[]): Object3D | null {
+    this.ndc.set((s.x / this.width) * 2 - 1, -(s.y / this.height) * 2 + 1);
+    this.raycaster.setFromCamera(this.ndc, this.camera);
+    return this.raycaster.intersectObjects(objects)[0]?.object ?? null;
   }
 
   /** Screen position (canvas pixels) of ground point `w`. */

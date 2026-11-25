@@ -2,7 +2,7 @@ import { Fog, Scene, WebGLRenderer } from "three";
 import { WORLD_SIZE } from "../core/constants";
 import type { Vec2 } from "../core/geometry";
 import { hasLaneConnector } from "../core/lanes";
-import { RoadGraph, type DrivingSide, type RoadSegment, type SavedMap } from "../core/roadGraph";
+import { RoadGraph, type DrivingSide, type NodeId, type RoadSegment, type SavedMap } from "../core/roadGraph";
 import { SIM_DT, Simulation } from "../core/simulation";
 import { LaneTool } from "../tools/LaneTool";
 import { TrafficTool } from "../tools/TrafficTool";
@@ -33,7 +33,6 @@ const CLICK_SLOP_PX = 5;
 /** Cap on real time fed to the simulation per frame, so a stall doesn't trigger a catch-up spiral. */
 const MAX_FRAME_MS = 250;
 /** How close (world units) the cursor must be to a source's road end to offer its options. */
-const SOURCE_HOVER_RADIUS = 16;
 /** The map is kept in the browser this long after the last change. */
 const AUTOSAVE_DELAY_MS = 500;
 /** Fog range as multiples of the camera's focus distance: only the far edge of a tilted view fades. */
@@ -349,18 +348,27 @@ export class Engine {
     return tool === "select" || tool === "traffic" || (tool === "road" && !this.tool.busy?.());
   }
 
-  /** The junction, or failing that the source, at a ground point. */
-  private anchorAt(world: Vec2): NodeAnchor | null {
-    const junction = this.graph.junctionAt(world);
-    const source = junction ? undefined : this.graph.sourceAt(world, SOURCE_HOVER_RADIUS);
-    const node = junction ?? source;
-    return node ? { id: node.id, kind: junction ? "junction" : "source", ...this.camera.worldToScreen(node) } : null;
+  /** The junction under screen point `s`, or failing that the source whose building (or plot) is. */
+  private anchorAt(s: Vec2): NodeAnchor | null {
+    const world = this.camera.screenToWorld(s);
+    const junction = world && this.graph.junctionAt(world);
+    if (junction) return { id: junction.id, kind: "junction", ...this.camera.worldToScreen(junction) };
+    const buildings = this.roads.buildingGroups();
+    let hit = this.camera.pick(s, [...buildings.keys()]);
+    while (hit && !buildings.has(hit)) hit = hit.parent;
+    const id = hit ? buildings.get(hit)! : undefined;
+    if (id === undefined || this.graph.terminal(id)?.kind !== "source") return null;
+    return { id, kind: "source", ...this.camera.worldToScreen(this.anchorPoint(id, "source")!) };
+  }
+
+  /** Where a junction's or source's options button sits: on the junction, or on the source's building. */
+  private anchorPoint(id: NodeId, kind: NodeAnchor["kind"]): Vec2 | null {
+    return kind === "junction" ? (this.graph.nodes.get(id) ?? null) : (this.graph.terminalLot(id)?.centre ?? null);
   }
 
   private updateJunctionHover(s: Vec2 | null): void {
     const { junctionHover, setJunctionHover } = gameStore.getState();
-    const world = s && this.junctionHoverAllowed() && !this.camera.isPanning ? this.camera.screenToWorld(s) : null;
-    const anchor = world ? this.anchorAt(world) : null;
+    const anchor = s && this.junctionHoverAllowed() && !this.camera.isPanning ? this.anchorAt(s) : null;
     if ((anchor?.id ?? null) === (junctionHover?.id ?? null)) return;
     setJunctionHover(anchor);
   }
@@ -381,11 +389,11 @@ export class Engine {
     const state = gameStore.getState();
     const follow = (j: NodeAnchor | null) => {
       if (!j) return j;
-      const node = this.graph.nodes.get(j.id);
+      const point = this.anchorPoint(j.id, j.kind);
       const valid =
         j.kind === "junction" ? this.graph.segmentsAt(j.id).length >= 3 : this.graph.terminal(j.id)?.kind === "source";
-      if (!node || !valid) return null;
-      const at = this.camera.worldToScreen(node);
+      if (!point || !valid) return null;
+      const at = this.camera.worldToScreen(point);
       return Math.abs(at.x - j.x) < 0.5 && Math.abs(at.y - j.y) < 0.5 ? j : { ...j, ...at };
     };
     // The lane connector ends if its junction stops having one (bulldozed, or made a roundabout).
@@ -433,8 +441,7 @@ export class Engine {
       this.leftDownAt = null;
       // A click on the map closes the options panel; with the Select tool, a click on a junction or source opens it.
       if (isClick && gameStore.getState().laneEditNode === null) {
-        const world = gameStore.getState().tool === "select" ? this.camera.screenToWorld(up) : null;
-        gameStore.getState().setJunctionOpen(world ? this.anchorAt(world) : null);
+        gameStore.getState().setJunctionOpen(gameStore.getState().tool === "select" ? this.anchorAt(up) : null);
       }
     }
     if (e.button === 2 && this.rightDownAt) {

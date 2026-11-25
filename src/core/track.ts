@@ -4,7 +4,7 @@ import { roundaboutShape } from "./junction";
 import type { DrivingSide, NodeId, RoadGraph, RoadSegment, SegmentId } from "./roadGraph";
 import { laneOffsets, lanesInnerToKerb, scaleRank, type Turn } from "./lanes";
 import { LANE_WIDTH } from "./roadSpec";
-import type { Lot } from "./terminal";
+import { carPark, LOT_SETBACK, lotPoint, PARKING_DEPTH, type Bay, type Lot } from "./terminal";
 
 /** A drivable line made of curve pieces joined end to end, walked by distance. */
 export class Track {
@@ -56,6 +56,8 @@ export interface Leg {
   joinAt?: number;
   shift?: 1 | -1;
   turn?: Turn;
+  /** Driven backwards (backing out of a parking bay). */
+  reverse?: boolean;
   /** Roundabout legs: the ring's centre, the radius cars circulate at, and the angles they join and leave it. */
   ring?: { centre: Vec2; radius: number; entry: number; exit: number; direction: 1 | -1 };
 }
@@ -178,6 +180,99 @@ export class TrackBuilder {
     return { track: driveway, from: 0, to: driveway.length, key: `in:${node}`, segment: road.segment, shift: turn > 0 ? 1 : -1 };
   }
 
+  /**
+   * Into bay `index` of a shop's or office's car park (see `carPark`), off `last` (the last road
+   * leg, returned cut to end where the car turns off). A front bay: over into the front yard,
+   * along it and a quarter turn in. A rear bay: a turn off the road up the side path, then along
+   * the lane behind the building and in. Nose to the building (front) or to the back fence (rear).
+   */
+  parkIn(node: NodeId, lot: Lot, index: number, last: Leg): { road: Leg; legs: Leg[] } {
+    const park = carPark(lot);
+    const bay = park.bays[index];
+    const centre = lotPoint(lot, bay.a, bay.z);
+    const end = legAt(last, legLength(last));
+    const along = alongWith(lot, end.tangent);
+    // Where the car leaves the road for the lot, and how far before it the road leg stops.
+    const [target, heading, before] =
+      park.path !== null && bay.rear
+        ? [lotPoint(lot, park.path, -lot.depth / 2), lot.out, TURN_IN]
+        : [lotPoint(lot, bay.a - sign(lot, along) * AISLE_TURN, bay.z - AISLE_TURN), along, YARD_RUN];
+    const ahead = (target.x - end.p.x) * end.tangent.x + (target.y - end.p.y) * end.tangent.y;
+    const road = { ...last, to: Math.min(last.track.length, Math.max(last.from + 1, last.to + ahead - before)) };
+    const leave = legAt(road, legLength(road));
+    const off = new Track(bridge(leave.p, leave.tangent, target, heading));
+    const turn = leave.tangent.x * lot.out.y - leave.tangent.y * lot.out.x;
+    const curves = bay.rear ? this.rearWay(lot, park, bay, false) : bridge(target, heading, centre, lot.out);
+    const into = new Track(curves);
+    return {
+      road,
+      legs: [
+        { track: off, from: 0, to: off.length, key: bay.rear ? `in:${node}:rear` : `in:${node}`, segment: road.segment, shift: turn > 0 ? 1 : -1 },
+        { track: into, from: 0, to: into.length, key: `bay:${node}:${index}` },
+      ],
+    };
+  }
+
+  /**
+   * Out of bay `index` onto `first` (the first road leg, returned cut to start where the car
+   * joins it): backing out with a quarter turn (`reverse` marks that leg), then forward, through
+   * the front yard or up the side path, and onto the road's lane like a lane change (the last leg).
+   */
+  parkOut(node: NodeId, lot: Lot, index: number, first: Leg): { road: Leg; legs: Leg[] } {
+    const park = carPark(lot);
+    const bay = park.bays[index];
+    const centre = lotPoint(lot, bay.a, bay.z);
+    const start = legAt(first, 0);
+    const toPath = park.path !== null && bay.rear;
+    // Backing out along the yard (or lane) away from where the car heads next: with the traffic, or to the path.
+    const forward = toPath ? alongToward(lot, park.path! - bay.a) : alongWith(lot, start.tangent);
+    const back = toPath ? Math.min(AISLE_TURN, Math.max(4, lot.length / 2 - Math.abs(bay.a) - 3)) : AISLE_TURN;
+    const backTo = lotPoint(lot, bay.a - sign(lot, forward) * back, toPath ? park.aisle : bay.z - AISLE_TURN);
+    const reverse = new Track(bridge(centre, neg(lot.out), backTo, neg(forward)));
+    const legs: Leg[] = [{ track: reverse, from: 0, to: reverse.length, key: `bay:${node}:${index}`, reverse: true }];
+    let from = backTo;
+    let heading = forward;
+    if (toPath) {
+      // Along the lane, round the corner and up the side path to the road.
+      from = lotPoint(lot, park.path!, -lot.depth / 2);
+      heading = neg(lot.out);
+      const up = new Track(this.rearWay(lot, park, bay, true, backTo));
+      legs.push({ track: up, from: 0, to: up.length, key: `path:${node}` });
+    }
+    const ahead = (from.x - start.p.x) * start.tangent.x + (from.y - start.p.y) * start.tangent.y;
+    const road = { ...first, from: Math.max(0, Math.min(first.to - 1, first.from + ahead + (toPath ? TURN_IN : YARD_RUN))) };
+    const join = legAt(road, 0);
+    const merge = new Track(bridge(from, heading, join.p, join.tangent));
+    const turn = heading.x * join.tangent.y - heading.y * join.tangent.x;
+    legs.push({
+      track: merge,
+      from: 0,
+      to: merge.length,
+      key: `out:${node}:${road.key}`,
+      segment: road.segment,
+      outKey: road.key,
+      joinAt: road.from,
+      shift: turn > 0 ? 1 : -1,
+    });
+    return { road, legs };
+  }
+
+  /**
+   * Between the side path's start (at the front of the lot) and rear bay `bay`: down the path,
+   * a turn along the lane behind the building, and a turn into the bay; or, leaving (`out`), from
+   * `from` in the lane along it and up the path.
+   */
+  private rearWay(lot: Lot, park: ReturnType<typeof carPark>, bay: Bay, out: boolean, from?: Vec2): Curve[] {
+    const top = lotPoint(lot, park.path!, -lot.depth / 2);
+    const towardBay = alongToward(lot, bay.a - park.path!);
+    if (out) {
+      const mid = lotPoint(lot, park.path!, (park.aisle - lot.depth / 2) / 2);
+      return [...bridge(from!, neg(towardBay), mid, neg(lot.out)), ...bridge(mid, neg(lot.out), top, neg(lot.out))];
+    }
+    const lane = lotPoint(lot, (park.path! + bay.a) / 2, park.aisle);
+    return [...bridge(top, lot.out, lane, towardBay), ...bridge(lane, towardBay, lotPoint(lot, bay.a, bay.z), lot.out)];
+  }
+
   /** Whether `node` is drawn (and driven) as a roundabout. */
   isRoundabout(node: NodeId): boolean {
     return this.graph.junction(node).roundabout && this.graph.segmentsAt(node).length >= 3;
@@ -279,6 +374,20 @@ export interface RoadEnds {
 
 /** The stretch a new car waits on at a building's door. */
 const DOOR_LENGTH = 1;
+/** From a bay's middle to the middle of the front yard in front of it: the radius of the turn in or out. */
+const AISLE_TURN = PARKING_DEPTH / 2 + LOT_SETBACK / 2;
+/** How far along the road a car takes to cross between its lane and the front yard. */
+const YARD_RUN = 20;
+/** How far along the road a car takes to turn between its lane and a side path. */
+const TURN_IN = 12;
+
+const neg = (v: Vec2): Vec2 => ({ x: -v.x, y: -v.y });
+/** +1 if `v` points along the lot's road direction, -1 if against it. */
+const sign = (lot: Lot, v: Vec2) => (v.x * lot.along.x + v.y * lot.along.y >= 0 ? 1 : -1);
+/** The way along the lot's road that goes with `traffic`. */
+const alongWith = (lot: Lot, traffic: Vec2): Vec2 => ({ x: lot.along.x * sign(lot, traffic), y: lot.along.y * sign(lot, traffic) });
+/** The way along the lot's road towards an offset `delta` along it. */
+const alongToward = (lot: Lot, delta: number): Vec2 => (delta >= 0 ? lot.along : neg(lot.along));
 
 /** A straight piece from a to b, as a cubic. */
 function straight(a: Vec2, b: Vec2): Curve {
