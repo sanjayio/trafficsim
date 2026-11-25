@@ -589,6 +589,36 @@ describe("terminals", () => {
 });
 
 describe("stop and give way junctions", () => {
+  it("keep cars going through a junction when its control or its shape changes", () => {
+    const { graph, centre } = crossroads({ control: "stop" });
+    const sim = new Simulation(graph);
+    sim.parking = false;
+    run(sim, 20);
+    const through = () => sim.cars.filter((c) => c.legs.some((l) => l.node === centre)).length;
+    const before = through();
+    expect(before).toBeGreaterThan(0);
+    graph.setJunction(centre, { control: "yield" });
+    expect(through()).toBe(before);
+    graph.setJunction(centre, { major: 1 });
+    expect(through()).toBe(before);
+    graph.setJunction(centre, { control: "signals" });
+    expect(through()).toBe(before);
+    // Cars keep moving under the new rules.
+    const delivered = sim.delivered;
+    run(sim, 30);
+    expect(sim.delivered).toBeGreaterThan(delivered);
+    // Made a roundabout: their trips are planned again on it, and they carry on.
+    const all = sim.cars.length;
+    graph.setJunction(centre, { roundabout: true });
+    expect(sim.cars.length).toBeGreaterThanOrEqual(Math.ceil(all * 0.8));
+    const after = sim.delivered;
+    run(sim, 40, () => noOverlap(sim));
+    expect(sim.delivered).toBeGreaterThan(after);
+    graph.setJunction(centre, { cornerRadius: 30, roundabout: false });
+    expect(sim.cars.length).toBeGreaterThan(0);
+    run(sim, 20, () => noOverlap(sim));
+  });
+
   it("put the signs on the side road at a T, and on one opposite pair (swappable) at a crossroads", () => {
     const t = new RoadGraph();
     road(t, -300, 0, 300, 0);

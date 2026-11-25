@@ -1,5 +1,5 @@
 import { effectiveControl, minorRoads, roundaboutShape, slipControlAt, slipRoad, signalApproaches, signalLights, type JunctionControl } from "./junction";
-import type { NodeId, RoadGraph, RoadSegment } from "./roadGraph";
+import type { NodeId, RoadGraph, RoadSegment, SegmentId } from "./roadGraph";
 import { CRUISE_SPEED, findRoute, type Route } from "./routing";
 import { LANE_WIDTH } from "./roadSpec";
 import { connectionsAt, hasLaneConnector, laneOffsets, lanesInnerToKerb, turnAt, type Turn } from "./lanes";
@@ -76,6 +76,8 @@ export interface Car {
   stopped: number;
   /** The source it set off from, and drives back to after parking. */
   home: NodeId;
+  /** The trip being driven: from and to which buildings, and the parking bay at either end (to plan it again, see `replan`). */
+  trip: Trip;
   /** The bay it holds at a shop or office (its index in `carPark`'s bays), from setting off until it has backed out. */
   parking: { sink: NodeId; bay: number } | null;
   /** Parked: the simulation time it leaves. */
@@ -85,6 +87,12 @@ export interface Car {
 /** A shop's or office's footprint: what its bays depend on. Null for a home or no building. */
 function lotKey(t: Terminal | undefined): string | null {
   return t?.kind === "sink" ? `${t.building}:${t.side ?? ""}:${t.offset ?? ""}:${t.wide ?? 0}` : null;
+}
+
+interface Trip {
+  from: NodeId;
+  to: NodeId;
+  bays: { parkAt?: number; leaveFrom?: number };
 }
 
 /** Small seeded random generator (mulberry32), so runs can be repeated. */
@@ -134,6 +142,8 @@ export class Simulation {
   private tracks: TrackBuilder;
   /** Each shop's and office's footprint when its bays were last handed out (see `lotKey`). */
   private lotKeys = new Map<NodeId, string>();
+  /** Each junction's shape when cars' paths through it were made (see `junctionChanged`). */
+  private junctionShapes = new Map<NodeId, string>();
   /** Bays held at each shop or office, counted once a step (see `spawn`). */
   private held = new Map<NodeId, Set<number>>();
   private routes = new Map<string, Route | null>();
@@ -162,11 +172,14 @@ export class Simulation {
         else this.lotKeys.set(e.nodeId, after);
         return;
       }
-      if (e.type === "reset") this.lotKeys.clear();
+      if (e.type === "reset") {
+        this.lotKeys.clear();
+        this.junctionShapes.clear();
+      }
       this.tracks.clear();
       // shortcut: cars driving through a changed part of the network just vanish; reroute them when it matters.
       if (e.type === "reset" || e.type === "settings") this.cars = [];
-      else if (e.type === "junction-changed") this.dropCarsAt([e.nodeId]);
+      else if (e.type === "junction-changed") this.junctionChanged(e.nodeId);
       else {
         const { id, a, b } = e.segment;
         this.cars = this.cars.filter((c) => !c.legs.some((l) => l.segment === id));
@@ -265,6 +278,85 @@ export class Simulation {
     return { x: f.p.x, y: f.p.y, heading: Math.atan2(f.tangent.y, f.tangent.x) + (leg.reverse ? Math.PI : 0) };
   }
 
+  /** How traffic arriving at junction `node` on road `into` is controlled. */
+  private ruleAt(node: NodeId, into: SegmentId): Rule {
+    const { graph } = this;
+    const settings = graph.junction(node);
+    // A slip road gives way to the main road where it joins; under stop or give way, the main
+    // road's traffic has priority and the others stop or give way to it.
+    const slip = slipRoad(graph, node);
+    const control = slip ? (slip.merge ? slipControlAt(graph, node) : "yield") : effectiveControl(settings);
+    // At a slip road, only traffic joining from it gives way (or stops), unless it's under signals:
+    // nothing else crosses there, so nothing else waits.
+    const free = slip !== null && control !== "signals" && into !== slip.slip;
+    const minor = control === "stop" || control === "yield" ? minorRoads(graph, node) : null;
+    if (graph.segmentsAt(node).length < 3 || free) return null;
+    if (settings.roundabout) return "roundabout";
+    return minor && !minor.has(into) ? "priority" : control;
+  }
+
+  /**
+   * Junction `node`'s settings changed. Only its control (stop, give way, signals, which roads have
+   * them): cars keep their routes and take up the new rules. Its shape (a roundabout, its corners,
+   * its lane connections): cars through it go (their paths no longer fit).
+   */
+  private junctionChanged(node: NodeId): void {
+    const shape = this.shapeOf(node);
+    const before = this.junctionShapes.get(node);
+    this.junctionShapes.set(node, shape);
+    if (before !== undefined && before !== shape) {
+      // Its shape changed: plan the trips through it again on the new one.
+      this.cars = this.cars.filter((c) => !c.legs.some((l) => l.node === node) || this.replan(c, node));
+      return;
+    }
+    for (const car of this.cars) {
+      car.legs.forEach((leg, i) => {
+        if (leg.node !== node || i === 0) return;
+        leg.rule = this.ruleAt(node, car.legs[i - 1].segment!);
+        // Not past it yet: asks again under the new rule.
+        if (i > car.leg) {
+          car.cleared = false;
+          car.arrival = null;
+        }
+      });
+    }
+  }
+
+  /**
+   * Plans `car`'s trip again after junction `node` changed shape, carrying on from where it is:
+   * on its new path at the same spot if it hasn't reached the junction, or (part way through it)
+   * finishing its old curve and joining its new path beyond. False if it can't be placed on its
+   * new path (its lane or road isn't on it any more).
+   */
+  private replan(car: Car, node: NodeId): boolean {
+    if (car.leaveAt !== null) return true;
+    const route = this.route(car.trip.from, car.trip.to);
+    if (!route) return false;
+    const fresh = this.legsFor(route, car.trip.bays);
+    const current = car.legs[car.leg];
+    if (current.node === node) {
+      const next = car.legs[car.leg + 1];
+      const k = next ? fresh.findIndex((l) => l.key === next.key) : -1;
+      if (k < 0) return false;
+      car.legs = [current, ...fresh.slice(k)];
+      car.leg = 0;
+      return true;
+    }
+    const j = fresh.findIndex((l) => l.key === current.key);
+    if (j < 0) return false;
+    const along = current.from + car.s;
+    car.legs = fresh;
+    car.leg = j;
+    car.s = Math.max(0, Math.min(legLength(fresh[j]), along - fresh[j].from));
+    return true;
+  }
+
+  /** What cars' paths through junction `node` depend on (see `junctionChanged`). */
+  private shapeOf(node: NodeId): string {
+    const s = this.graph.junction(node);
+    return `${s.roundabout}:${s.cornerRadius}:${JSON.stringify(s.connections ?? null)}`;
+  }
+
   private dropCarsAt(nodes: NodeId[]): void {
     this.cars = this.cars.filter((c) => !c.legs.some((l) => l.node !== undefined && nodes.includes(l.node)));
   }
@@ -320,6 +412,7 @@ export class Simulation {
         arrival: null,
         stopped: 0,
         home: source,
+        trip: { from: source, to: sink, bays: bay === null ? {} : { parkAt: bay } },
         parking: bay === null ? null : { sink, bay },
         leaveAt: null,
       });
@@ -353,7 +446,17 @@ export class Simulation {
       car.leaveAt = this.time + 1;
       return true;
     }
-    Object.assign(car, { legs, leg: 0, s: 0, v: 0, leaveAt: null, cleared: false, arrival: null, stopped: 0 });
+    Object.assign(car, {
+      legs,
+      leg: 0,
+      s: 0,
+      v: 0,
+      leaveAt: null,
+      cleared: false,
+      arrival: null,
+      stopped: 0,
+      trip: { from: sink, to: car.home, bays: { leaveFrom: bay } },
+    });
     // Out of an underground car park (no backing out of a bay): its space is free once it sets off.
     if (!legs.some((l) => l.reverse)) car.parking = null;
     return true;
@@ -448,24 +551,8 @@ export class Simulation {
       const node = route.nodes[i + 1];
       const into = pieces[pieces.length - 1];
       const junction = this.tracks.junctionLeg(node, into, roads[i + 1][0], exitLanes[i], entryLanes[i + 1], turns[i]!);
-      const settings = graph.junction(node);
-      // A slip road gives way to the main road where it joins; under stop or give way, the main
-      // road's traffic has priority and the others stop or give way to it.
-      const slip = slipRoad(graph, node);
-      const control = slip ? (slip.merge ? slipControlAt(graph, node) : "yield") : effectiveControl(settings);
-      // At a slip road, only traffic joining from it gives way (or stops), unless it's under signals:
-      // nothing else crosses there, so nothing else waits.
-      const free = slip !== null && control !== "signals" && segments[i].id !== slip.slip;
-      const minor = control === "stop" || control === "yield" ? minorRoads(graph, node) : null;
-      const rule: Rule =
-        graph.segmentsAt(node).length < 3 || free
-          ? null
-          : settings.roundabout
-            ? "roundabout"
-            : minor && !minor.has(segments[i].id)
-              ? "priority"
-              : control;
-      const movement: Movement = { ...junction, rule };
+      const movement: Movement = { ...junction, rule: this.ruleAt(node, segments[i].id) };
+      if (!this.junctionShapes.has(node)) this.junctionShapes.set(node, this.shapeOf(node));
       if (junction.ring) {
         movement.exit = this.tracks.exitNumber(node, segments[i], segments[i + 1]);
         // Find where along the leg the car joins and leaves the ring.
