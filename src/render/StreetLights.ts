@@ -14,6 +14,7 @@ import {
 import type { RoadGraph } from "../core/roadGraph";
 import { carriagewayWidth, FOOTPATH_WIDTH, hasTrees, roadWidth } from "../core/roadSpec";
 import { LEAVES, swayMaterial } from "./buildings";
+import { carPark, DRIVEWAY_WIDTH, isSourceBuilding, lotPoint, SIDE_PATH } from "../core/terminal";
 
 /** Distance between lights along a road (they alternate sides), and clearance from a road's ends. */
 const SPACING = 55;
@@ -82,6 +83,22 @@ export class StreetLights extends Group {
     const up = new Vector3(0, 1, 0);
     const box = (x: number, y: number, z: number, sx: number, sy: number, sz: number, angle: number) =>
       new Matrix4().compose(new Vector3(x, y, z), q.setFromAxisAngle(up, -angle).clone(), new Vector3(sx, sy, sz));
+    // Where every driveway crosses the footpath: its middle, which way it runs off the road, and half its width.
+    const driveways: { at: { x: number; y: number }; out: { x: number; y: number }; along: { x: number; y: number }; half: number }[] = [];
+    for (const id of this.graph.allTerminals().keys()) {
+      const lot = this.graph.terminalLot(id);
+      if (!lot) continue;
+      const path = isSourceBuilding(lot.building) ? null : carPark(lot).path;
+      const at = path === null ? lot.door : lotPoint(lot, path, -lot.depth / 2);
+      driveways.push({ at, out: lot.out, along: lot.along, half: (path === null ? DRIVEWAY_WIDTH : SIDE_PATH) / 2 });
+    }
+    /** Whether something `size` across at `p` would stand on a driveway (on its side of the road). */
+    const onDriveway = (p: { x: number; y: number }, size: number) =>
+      driveways.some(({ at, out, along, half }) => {
+        const d = { x: p.x - at.x, y: p.y - at.y };
+        const across = d.x * out.x + d.y * out.y;
+        return across < 1 && across > -FOOTPATH_WIDTH * 3 && Math.abs(d.x * along.x + d.y * along.y) < half + size / 2 + 1;
+      });
     for (const segment of this.graph.segments.values()) {
       if (!segment.spec.footpath) continue;
       // As drawn (a slip road's end runs from the main road's outside lane).
@@ -110,7 +127,7 @@ export class StreetLights extends Group {
           const f = path.at(d);
           for (const side of [1, -1]) {
             const at = { x: f.p.x + f.normal.x * side * kerb, y: f.p.y + f.normal.y * side * kerb };
-            if (onRoad(at)) continue;
+            if (onRoad(at) || onDriveway(at, PLANTER)) continue;
             const angle = Math.atan2(f.tangent.y, f.tangent.x);
             planters.push(box(at.x, 0.4, at.y, PLANTER, 0.8, PLANTER, angle));
             soil.push(box(at.x, 0.82, at.y, PLANTER - 0.8, 0.05, PLANTER - 0.8, angle));
@@ -132,7 +149,7 @@ export class StreetLights extends Group {
         const angle = Math.atan2(-out.y, -out.x);
         const arm = { x: at.x - out.x * (ARM / 2), y: at.y - out.y * (ARM / 2) };
         const head = { x: at.x - out.x * ARM, y: at.y - out.y * ARM };
-        if (onRoad(at)) continue;
+        if (onRoad(at) || onDriveway(at, POLE.width)) continue;
         poles.push(box(at.x, POLE.height / 2, at.y, POLE.width, POLE.height, POLE.width, angle));
         arms.push(box(arm.x, POLE.height - 0.3, arm.y, ARM, 0.5, 0.5, angle));
         heads.push(box(head.x, POLE.height - 0.6, head.y, 2.4, 0.5, 1.4, angle));
