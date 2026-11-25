@@ -197,7 +197,8 @@ export class BuildingKit {
         }
       }
     }
-    group.add(...this.plantTrees());
+    const trees = this.plantTrees();
+    if (trees.length) group.add(...trees);
     return group;
   }
 

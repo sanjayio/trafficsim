@@ -69,6 +69,8 @@ export function buildRoadParts(
   /** How markings finish at each end. Defaults to a dead end at both. */
   ends?: { start: RoadEnd; end: RoadEnd },
   side: DrivingSide = "right",
+  /** Round off each end (start, end): left square where a bridge or tunnel meets a road it's drawn over. */
+  caps: [boolean, boolean] = [true, true],
 ): { part: RoadPart; geometry: BufferGeometry }[] {
   const parts: { part: RoadPart; geometry: BufferGeometry }[] = [];
   const carriageway = carriagewayWidth(spec);
@@ -76,8 +78,8 @@ export function buildRoadParts(
   const deadEnd: RoadEnd = { inset: carriageway / 2, entry: "none", turnaround: true };
   const { start, end } = ends ?? { start: deadEnd, end: deadEnd };
 
-  if (spec.footpath) parts.push({ part: "footpath", geometry: convexGeometry(surface(path, roadWidth(spec))) });
-  parts.push({ part: "asphalt", geometry: convexGeometry(surface(path, carriageway)) });
+  if (spec.footpath) parts.push({ part: "footpath", geometry: convexGeometry(surface(path, roadWidth(spec), caps)) });
+  parts.push({ part: "asphalt", geometry: convexGeometry(surface(path, carriageway, caps)) });
 
   // Markings stop short of junctions so they don't run through them. At a two-way dead end they
   // run to the end, where lane lines loop round (one-way roads have no turnaround).
@@ -240,11 +242,11 @@ function turnArrow(tip: Vec2, travel: Vec2, right: Vec2, kinds: Set<number>): Ve
 }
 
 /** A full-width road surface with rounded ends, as convex polygons. */
-export function surface(path: SampledCurve, width: number): Vec2[][] {
+export function surface(path: SampledCurve, width: number, caps: [boolean, boolean] = [true, true]): Vec2[][] {
   return [
-    halfDisc(path.at(0), width / 2, -1),
+    ...(caps[0] ? [halfDisc(path.at(0), width / 2, -1)] : []),
     ...ribbon(path, 0, width, 0, path.length),
-    halfDisc(path.at(path.length), width / 2, 1),
+    ...(caps[1] ? [halfDisc(path.at(path.length), width / 2, 1)] : []),
   ];
 }
 

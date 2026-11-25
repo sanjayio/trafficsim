@@ -1,4 +1,4 @@
-import { CanvasTexture, Color, Float32BufferAttribute, Mesh, MeshBasicMaterial, PlaneGeometry, RepeatWrapping, SRGBColorSpace } from "three";
+import { CanvasTexture, NotEqualStencilFunc, Color, Float32BufferAttribute, Mesh, MeshBasicMaterial, PlaneGeometry, RepeatWrapping, SRGBColorSpace } from "three";
 import { WORLD_SIZE } from "../core/constants";
 import { palette } from "./palette";
 
@@ -36,7 +36,22 @@ export class Ground extends Mesh<PlaneGeometry, MeshBasicMaterial> {
     texture.colorSpace = SRGBColorSpace;
     // Seen at a low angle, keep the far grass from blurring into one smear.
     texture.anisotropy = 8;
-    super(geometry, new MeshBasicMaterial({ map: texture, vertexColors: true, depthWrite: false }));
+    super(
+      geometry,
+      new MeshBasicMaterial({
+        map: texture,
+        vertexColors: true,
+        // Solid: hides what's under the ground (a tunnel), pushed back a touch so roads and markings
+        // lying on it still draw over it. Not drawn over a tunnel's open ramps (see `trenchMask`).
+        depthWrite: true,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 4,
+        stencilWrite: true,
+        stencilRef: 1,
+        stencilFunc: NotEqualStencilFunc,
+      }),
+    );
     this.renderOrder = renderOrder;
   }
 

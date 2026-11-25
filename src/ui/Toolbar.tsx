@@ -41,6 +41,27 @@ const TOOLS: { id: ToolId; label: string; key: string; icon: LucideIcon }[] = [
   { id: "traffic", label: "Traffic", key: "4", icon: Car },
 ];
 
+/** A bridge, drawn in the lucide style: a deck on two arches. */
+function BridgeIcon({ size = 24, strokeWidth = 2, ...props }: LucideProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M2 9h20" />
+      <path d="M4 9v10M20 9v10M12 9v10" />
+      <path d="M4 19a4 4 0 0 1 8 0M12 19a4 4 0 0 1 8 0" />
+    </svg>
+  );
+}
+
+/** A tunnel portal, drawn in the lucide style: an arch into a hillside. */
+function TunnelIcon({ size = 24, strokeWidth = 2, ...props }: LucideProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M2 20 9 6l5 5 3-3 5 12z" />
+      <path d="M9 20v-4a3 3 0 0 1 6 0v4" />
+    </svg>
+  );
+}
+
 const SPEEDS: { speed: SimSpeed; label: string }[] = [
   { speed: 0, label: "❚❚" },
   { speed: 1, label: "1×" },
@@ -267,6 +288,12 @@ function RoadOptions() {
         onClick={() => update({ trees: !spec.trees })}
       >
         <TreeDeciduous size={ICON_SIZE} strokeWidth={2} aria-hidden />
+      </IconButton>
+      <IconButton label="Bridge" pressed={(spec.level ?? 0) > 0} onClick={() => update({ level: (spec.level ?? 0) > 0 ? undefined : 1 })}>
+        <BridgeIcon size={ICON_SIZE} strokeWidth={2} aria-hidden />
+      </IconButton>
+      <IconButton label="Tunnel" pressed={(spec.level ?? 0) < 0} onClick={() => update({ level: (spec.level ?? 0) < 0 ? undefined : -1 })}>
+        <TunnelIcon size={ICON_SIZE} strokeWidth={2} aria-hidden />
       </IconButton>
       <PanelDivider />
       {/* Holding Alt/Option switches guides off, and the button shows it. */}

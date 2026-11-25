@@ -146,7 +146,7 @@ export class RoadTool implements Tool {
     return curves.map((curve) => {
       if (!curve) return { curve, spec, valid: false, crossings: [] };
       const path = new SampledCurve(curve);
-      const junctions = this.ctx.graph.planRoad(curve);
+      const junctions = this.ctx.graph.planRoad(curve, spec);
       // Too short, folded over itself on a tight bend, overlapping its parallel copy, or making a bad junction.
       const valid =
         path.length >= MIN_ROAD_LENGTH && path.minRadius >= width / 2 && !overlapping && junctions.valid;

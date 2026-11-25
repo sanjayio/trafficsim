@@ -12,6 +12,7 @@ import {
   Vector3,
 } from "three";
 import type { RoadGraph } from "../core/roadGraph";
+import { rampLength } from "../core/grade";
 import { carriagewayWidth, FOOTPATH_WIDTH, hasTrees, roadWidth } from "../core/roadSpec";
 import { LEAVES, swayMaterial } from "./buildings";
 import { carPark, DRIVEWAY_WIDTH, isSourceBuilding, lotPoint, SIDE_PATH } from "../core/terminal";
@@ -27,8 +28,8 @@ const POOL = 30;
 const TREE_SPACING = 24;
 const PLANTER = 4;
 const HEAD_COLOR = { day: 0x5c6168, night: 0xffe2a0 };
-/** Light pools draw after the road layers, before cars and buildings. */
-const POOL_ORDER = 15;
+/** Light pools draw after the road layers (bridges' too), before cars and buildings. */
+const POOL_ORDER = 16;
 const LIGHT_ORDER = 20;
 
 /**
@@ -99,8 +100,20 @@ export class StreetLights extends Group {
         const across = d.x * out.x + d.y * out.y;
         return across < 1 && across > -FOOTPATH_WIDTH * 3 && Math.abs(d.x * along.x + d.y * along.y) < half + size / 2 + 1;
       });
+    // No light where its pool would reach onto a ramp (a flat pool can't follow the slope).
+    const ramps = [...this.graph.segments.values()].filter((g) => g.spec.level);
+    const nearRamp = (p: { x: number; y: number }) =>
+      ramps.some((g) => {
+        const path = this.graph.drawnPath(g);
+        const { distance, s } = path.nearest(p);
+        if (distance > roadWidth(g.spec) / 2 + POOL / 2) return false;
+        const ramp = rampLength(g.spec.level!, this.graph.path(g).length) / (this.graph.path(g).length / (path.length || 1));
+        return s < ramp + POOL / 2 || s > path.length - ramp - POOL / 2;
+      });
     for (const segment of this.graph.segments.values()) {
-      if (!segment.spec.footpath) continue;
+      // Along footpaths, and on bridges (at the parapet if there's no footpath); not in tunnels.
+      const bridge = (segment.spec.level ?? 0) > 0;
+      if ((!segment.spec.footpath && !bridge) || (segment.spec.level ?? 0) < 0) continue;
       // As drawn (a slip road's end runs from the main road's outside lane).
       const path = this.graph.drawnPath(segment);
       // Roads joining this one at its ends: no light where it would stand on one (where a slip road overlaps).
@@ -116,8 +129,11 @@ export class StreetLights extends Group {
       if (to <= from) continue;
       const count = Math.max(1, Math.floor((to - from) / SPACING) + 1);
       const step = count > 1 ? (to - from) / (count - 1) : 0;
-      const kerb = roadWidth(segment.spec) / 2 - FOOTPATH_WIDTH / 2;
-      if (hasTrees(segment.spec)) {
+      const kerb = segment.spec.footpath ? roadWidth(segment.spec) / 2 - FOOTPATH_WIDTH / 2 : carriagewayWidth(segment.spec) / 2 + 0.4;
+      // Up on the deck, as high as the bridge where it stands (0 on the ground).
+      const scale = this.graph.path(segment).length / (path.length || 1);
+      const lift = (d: number) => (bridge ? this.graph.heightAt(segment, d * scale) : 0);
+      if (hasTrees(segment.spec) && !bridge) {
         seed = (segment.id * 7919) % 2147483646 || 1;
         // Both sides, staggered between the lights (which stand at multiples of `step`).
         const trees = Math.max(1, Math.floor((to - from) / TREE_SPACING));
@@ -141,7 +157,9 @@ export class StreetLights extends Group {
         }
       }
       for (let i = 0; i < count; i++) {
-        const f = path.at(count > 1 ? from + step * i : (from + to) / 2);
+        const d = count > 1 ? from + step * i : (from + to) / 2;
+        const f = path.at(d);
+        const y = lift(d);
         const side = i % 2 === 0 ? 1 : -1;
         const out = { x: f.normal.x * side, y: f.normal.y * side };
         const at = { x: f.p.x + out.x * kerb, y: f.p.y + out.y * kerb };
@@ -149,11 +167,13 @@ export class StreetLights extends Group {
         const angle = Math.atan2(-out.y, -out.x);
         const arm = { x: at.x - out.x * (ARM / 2), y: at.y - out.y * (ARM / 2) };
         const head = { x: at.x - out.x * ARM, y: at.y - out.y * ARM };
-        if (onRoad(at) || onDriveway(at, POLE.width)) continue;
-        poles.push(box(at.x, POLE.height / 2, at.y, POLE.width, POLE.height, POLE.width, angle));
-        arms.push(box(arm.x, POLE.height - 0.3, arm.y, ARM, 0.5, 0.5, angle));
-        heads.push(box(head.x, POLE.height - 0.6, head.y, 2.4, 0.5, 1.4, angle));
-        pools.push(box(head.x, 0.06, head.y, POOL, 1, POOL, angle));
+        // Off the slopes: a bridge's lights stand on its level span, and none stand by a ramp.
+        if (onRoad(at) || onDriveway(at, POLE.width) || nearRamp(head)) continue;
+        poles.push(box(at.x, y + POLE.height / 2, at.y, POLE.width, POLE.height, POLE.width, angle));
+        arms.push(box(arm.x, y + POLE.height - 0.3, arm.y, ARM, 0.5, 0.5, angle));
+        heads.push(box(head.x, y + POLE.height - 0.6, head.y, 2.4, 0.5, 1.4, angle));
+        // On a bridge, just over its deck's markings.
+        pools.push(box(head.x, y + (bridge ? 0.3 : 0.06), head.y, POOL, 1, POOL, angle));
       }
     }
     const make = (geometry: BoxGeometry | PlaneGeometry, material: MeshBasicMaterial, matrices: Matrix4[], order: number, shadow: boolean) => {

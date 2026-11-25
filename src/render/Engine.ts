@@ -103,7 +103,8 @@ export class Engine {
   private cleanups: (() => void)[] = [];
 
   mount(host: HTMLElement): void {
-    const renderer = new WebGLRenderer({ antialias: true });
+    // A stencil buffer, for the openings in the ground over tunnels' ramps (see `trenchMask`).
+    const renderer = new WebGLRenderer({ antialias: true, stencil: true });
     renderer.setPixelRatio(window.devicePixelRatio || 1);
     renderer.setClearColor(palette.ground);
     // Scales the scene's brightness for the time of day and weather; lights opt out (toneMapped: false).

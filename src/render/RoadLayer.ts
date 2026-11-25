@@ -6,7 +6,8 @@ import { carriagewayWidth, FOOTPATH_WIDTH, hasMedian, LANE_WIDTH, MEDIAN_WIDTH, 
 import { carPark, defaultName, DRIVEWAY_WIDTH, isSourceBuilding, SIDE_PATH } from "../core/terminal";
 import { bridge } from "../core/track";
 import { BuildingKit } from "./buildings";
-import { convexGeometry, flatMaterial } from "./flat";
+import { concreteMaterial, gradeStructure, liftGeometry, trenchMask } from "./grade";
+import { convexGeometry, FlatLayer, flatMaterial } from "./flat";
 import { FurnitureKit, type FurnitureSpot } from "./furniture";
 import { buildJunctionParts, type JunctionArm } from "./junctionParts";
 import { buildRoundaboutParts } from "./roundaboutParts";
@@ -22,6 +23,8 @@ const MIN_CLEARANCE_SINE = 0.35;
 /** Signs stand this far outside a road without a footpath (on a footpath, they stand mid-path). */
 /** How far from a slip road's node its markings start (clear of the main road it overlaps there). */
 const SLIP_CLEAR = 30;
+/** Bridges and tunnels draw after the ground's road layers (and before cars and buildings). */
+const GRADED_ORDER = 12;
 /** A give way or stop line at a slip road's end stands this far back from where it meets the main road's kerb. */
 const SLIP_LINE_GAP = 2;
 const SIGN_SETBACK = 3;
@@ -39,6 +42,9 @@ export class RoadLayer extends Group {
     Object.entries(ROAD_PART_STYLE).map(([part, style]) => [part, flatMaterial(style.color)]),
   ) as Record<RoadPart, MeshBasicMaterial>;
   private views = new Map<SegmentId, Mesh[]>();
+  private graded = new Map<RoadPart, MeshBasicMaterial>();
+  private over = new Map<RoadPart, MeshBasicMaterial>();
+  private concrete = concreteMaterial();
   /** Rounded corners at each node where roads meet. */
   private junctions = new Map<NodeId, Mesh[]>();
   /** Per node, how far its paved corners reach along each road meeting there. */
@@ -316,9 +322,14 @@ export class RoadLayer extends Group {
       this.cornerReach.set(nodeId, new Map(meeting.map((segment, i) => [segment.id, reach[i]])));
       const bend = this.bendLines(nodeId);
       const all: { part: RoadPart; geometry: BufferGeometry }[] = [...parts, ...(bend ? buildBendMarkings(bend) : [])];
-      meshes = all.map(({ part, geometry }) => {
-        const mesh = new Mesh(geometry, this.materials[part]);
-        mesh.renderOrder = ROAD_PART_STYLE[part].layer;
+      // Where a bridge or tunnel meets a road round a bend, the markings carried round it go over the
+      // bridge's (or tunnel's) surface, which is drawn after the ground's.
+      const graded = meeting.some((s) => s.spec.level);
+      meshes = all.map(({ part, geometry }, i) => {
+        const over = graded && i >= parts.length;
+        if (over) this.liftOntoGraded(geometry, meeting);
+        const mesh = new Mesh(geometry, over ? this.overMaterial(part) : this.materials[part]);
+        mesh.renderOrder = over ? GRADED_ORDER + ROAD_PART_STYLE[part].layer + 0.5 : ROAD_PART_STYLE[part].layer;
         return mesh;
       });
     }
@@ -461,21 +472,79 @@ export class RoadLayer extends Group {
 
   private addSegment(segment: RoadSegment): void {
     const ends = { start: this.endAt(segment, segment.a), end: this.endAt(segment, segment.b) };
-    const meshes = buildRoadParts(this.graph.drawnPath(segment), segment.spec, ends, this.graph.drivingSide).map(
-      ({ part, geometry }) => {
-        const mesh = new Mesh(geometry, this.materials[part]);
-        mesh.renderOrder = ROAD_PART_STYLE[part].layer;
-        return mesh;
-      },
-    );
+    const path = this.graph.drawnPath(segment);
+    const graded = !!segment.spec.level;
+    // Heights by distance along the drawn road, as the graph has them along its centre line.
+    const scale = this.graph.path(segment).length / (path.length || 1);
+    const height = (s: number) => this.graph.heightAt(segment, s * scale);
+    // A bridge or tunnel is drawn over the roads it meets: no rounded end lying on top of them there.
+    const joined = (node: NodeId) => !graded || this.graph.segmentsAt(node).length < 2;
+    const caps: [boolean, boolean] = [joined(segment.a), joined(segment.b)];
+    const meshes: Mesh[] = buildRoadParts(path, segment.spec, ends, this.graph.drivingSide, caps).map(({ part, geometry }) => {
+      const layer = ROAD_PART_STYLE[part].layer;
+      // A bridge or tunnel: lifted (or sunk) to its height, drawn with depth so it hides (and is
+      // hidden by) what it passes over or under.
+      if (graded) liftGeometry(geometry, path, height, layer);
+      const mesh = new Mesh(geometry, graded ? this.gradedMaterial(part) : this.materials[part]);
+      mesh.renderOrder = graded ? GRADED_ORDER + layer : layer;
+      // A bridge's deck shades what's under it.
+      if (graded && (segment.spec.level ?? 0) > 0) mesh.castShadow = true;
+      return mesh;
+    });
+    const width = carriagewayWidth(segment.spec) + (segment.spec.footpath ? 2 * FOOTPATH_WIDTH : 0);
+    if (graded) meshes.push(...gradeStructure(path, width, height, this.concrete));
+    // A tunnel: an opening in the ground over its ramps (drawn just before the ground).
+    if ((segment.spec.level ?? 0) < 0) meshes.push(trenchMask(path, width, height, FlatLayer.ground - 0.5));
     this.add(...meshes);
     this.views.set(segment.id, meshes);
+  }
+
+  /** Points of markings round a bend lying on a bridge's or tunnel's ramp (nearer it than the other road): up (or down) to it. */
+  private liftOntoGraded(geometry: BufferGeometry, meeting: RoadSegment[]): void {
+    const position = geometry.getAttribute("position");
+    for (let i = 0; i < position.count; i++) {
+      const p = { x: position.getX(i), y: position.getZ(i) };
+      let best = { d: Infinity, h: 0 };
+      for (const segment of meeting) {
+        const path = this.graph.drawnPath(segment);
+        const { distance, s } = path.nearest(p);
+        if (distance < best.d) best = { d: distance, h: this.graph.heightAt(segment, s * (this.graph.path(segment).length / (path.length || 1))) };
+      }
+      position.setY(i, best.h + 0.2);
+    }
+    position.needsUpdate = true;
+  }
+
+  /** A marking drawn over a bridge's or tunnel's surface where it meets the ground: not hidden by it. */
+  private overMaterial(part: RoadPart): MeshBasicMaterial {
+    let material = this.over.get(part);
+    if (!material) {
+      material = this.materials[part].clone();
+      material.depthTest = false;
+      this.over.set(part, material);
+    }
+    return material;
+  }
+
+  /** A road part's material for bridges and tunnels: as on the ground, but writing depth. */
+  private gradedMaterial(part: RoadPart): MeshBasicMaterial {
+    let material = this.graded.get(part);
+    if (!material) {
+      material = this.materials[part].clone();
+      material.depthWrite = true;
+      this.graded.set(part, material);
+    }
+    return material;
   }
 
   private removeSegment(id: SegmentId): void {
     for (const mesh of this.views.get(id) ?? []) {
       this.remove(mesh);
-      mesh.geometry.dispose();
+      // A bridge's or tunnel's concrete shares its box; it owns only its instances.
+      if ((mesh as InstancedMesh).isInstancedMesh) (mesh as InstancedMesh).dispose();
+      else mesh.geometry.dispose();
+      // A tunnel's opening in the ground has its own material.
+      if (mesh.userData.own) (mesh.material as MeshBasicMaterial).dispose();
     }
     this.views.delete(id);
   }

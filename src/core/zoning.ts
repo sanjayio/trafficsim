@@ -199,6 +199,9 @@ export class ZoneMap {
     // Every tile that could be zoned beside its own road.
     const candidates: Tile[] = [];
     for (const segment of segments) {
+      // No buildings along a bridge or tunnel. (Tiles beside other roads still keep clear of them:
+      // shortcut: ground over a covered tunnel can't be zoned; allow it if tunnels under towns matter.)
+      if (segment.spec.level) continue;
       const path = graph.path(segment);
       const edge = roadWidth(segment.spec) / 2;
       // A road split at a tile boundary can come out a hair short of it.

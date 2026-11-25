@@ -1,4 +1,5 @@
 import { AdditiveBlending, BoxGeometry, CanvasTexture, Color, Float32BufferAttribute, Group, InstancedMesh, Matrix4, MeshBasicMaterial, PlaneGeometry, Quaternion, Vector3 } from "three";
+import { COVERED } from "../core/grade";
 import { CAR_LENGTH, CAR_WIDTH, type CarType, type Simulation } from "../core/simulation";
 
 /**
@@ -86,6 +87,9 @@ export class CarLayer extends Group {
       // Parked underground: out of sight.
       if (car.leaveAt !== null && car.legs[car.leg].underground) continue;
       const { x, y, heading } = sim.pose(car);
+      // Up on a bridge or down in a tunnel; out of sight where the tunnel's covered.
+      const lift = sim.heightOf(car);
+      if (lift < COVERED) continue;
       const shape = SHAPES[car.type];
       const cos = Math.cos(heading);
       const sin = Math.sin(heading);
@@ -93,7 +97,7 @@ export class CarLayer extends Group {
       this.tmpRotation.setFromAxisAngle(this.tmpUp, -heading);
       // A box of (length, height, width) centred `along` ahead of the car's middle, `across` to its right, from height `base` up.
       const put = (part: Part, along: number, across: number, base: number, length: number, height: number, width: number) => {
-        this.tmpPosition.set(x + cos * along - sin * across, base + height / 2, y + sin * along + cos * across);
+        this.tmpPosition.set(x + cos * along - sin * across, lift + base + height / 2, y + sin * along + cos * across);
         this.tmpScale.set(length, height, width);
         m[part].setMatrixAt(counts[part]++, this.tmpMatrix.compose(this.tmpPosition, this.tmpRotation, this.tmpScale));
       };

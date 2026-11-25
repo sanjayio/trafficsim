@@ -1,3 +1,4 @@
+import { rampLength } from "../core/grade";
 import { GRID_SIZE, NODE_SNAP_RADIUS } from "../core/constants";
 import { rightNormal, SampledCurve, straightCurve } from "../core/curve";
 import { distance, snapToGrid, type Vec2 } from "../core/geometry";
@@ -60,7 +61,18 @@ export function snapPoint(p: Vec2, o: SnapOptions): SnapResult {
 
     if (o.isRoadEnd) {
       const segment = o.graph.segmentAt(p);
-      if (segment) return snapOntoRoad(p, o.graph.path(segment), near, o);
+      if (segment && !segment.spec.level) return snapOntoRoad(p, o.graph.path(segment), near, o);
+      // A bridge or tunnel can only be joined at its ends: over either ramp, to that end.
+      if (segment) {
+        const path = o.graph.path(segment);
+        const s = path.nearest(p).s;
+        const ramp = rampLength(segment.spec.level!, path.length);
+        const end = s <= ramp ? segment.a : path.length - s <= ramp ? segment.b : null;
+        if (end !== null) {
+          const node = o.graph.node(end);
+          return { point: { x: node.x, y: node.y }, guides: [] };
+        }
+      }
     }
 
     let best: SnapResult | null = null;

@@ -1,3 +1,5 @@
+import { MAX_LEVEL } from "./grade";
+
 /** How a road is built. Stored per segment; the simulation will read lanes and direction from it. */
 export interface RoadSpec {
   /** Lanes in each direction of travel (for a one-way road, its total lane count). */
@@ -10,6 +12,11 @@ export interface RoadSpec {
   footpath: boolean;
   /** Trees in planters along the footpaths. Roads with footpaths only. */
   trees?: boolean;
+  /**
+   * A bridge (above 0) or tunnel (below) at that level, see `core/grade`. In the road tool, 1 or -1
+   * asks for a bridge or tunnel; building it picks the level over (or under) whatever it crosses.
+   */
+  level?: number;
 }
 
 export const MAX_LANES = 3;
@@ -45,8 +52,8 @@ export function hasTrees(spec: RoadSpec): boolean {
 
 /** Drops settings that don't apply (a median on a one-way road, trees without footpaths), so each road stores what it really is. */
 export function normalizeRoadSpec(spec: RoadSpec): RoadSpec {
-  const { trees: _, ...rest } = spec;
-  return { ...rest, median: hasMedian(spec), ...(hasTrees(spec) ? { trees: true } : {}) };
+  const { trees: _, level, ...rest } = spec;
+  return { ...rest, median: hasMedian(spec), ...(hasTrees(spec) ? { trees: true } : {}), ...(level ? { level } : {}) };
 }
 
 /** Validates a spec read from a saved map. */
@@ -60,9 +67,10 @@ export function parseRoadSpec(raw: unknown): RoadSpec {
     typeof s.oneWay !== "boolean" ||
     typeof s.median !== "boolean" ||
     typeof s.footpath !== "boolean" ||
-    (s.trees !== undefined && typeof s.trees !== "boolean")
+    (s.trees !== undefined && typeof s.trees !== "boolean") ||
+    (s.level !== undefined && (!Number.isInteger(s.level) || Math.abs(s.level) > MAX_LEVEL))
   ) {
     throw new Error("Invalid road settings in map file");
   }
-  return normalizeRoadSpec({ lanes: s.lanes!, oneWay: s.oneWay, median: s.median, footpath: s.footpath, trees: s.trees });
+  return normalizeRoadSpec({ lanes: s.lanes!, oneWay: s.oneWay, median: s.median, footpath: s.footpath, trees: s.trees, level: s.level });
 }

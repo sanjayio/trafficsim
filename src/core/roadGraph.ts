@@ -11,6 +11,7 @@ import {
 } from "./junction";
 import type { LaneRef } from "./lanes";
 import { buildingSize, LEVEL_NEEDS, levelOf, LOT_SETBACK, MAX_LEVEL, parseTerminal, type Lot, type Terminal } from "./terminal";
+import { CLEARANCE, heightAlong, MAX_LEVEL as MAX_GRADE, minGradedLength } from "./grade";
 import { carriagewayWidth, DEFAULT_ROAD_SPEC, normalizeRoadSpec, parseRoadSpec, roadWidth, type RoadSpec } from "./roadSpec";
 
 export type NodeId = number;
@@ -69,6 +70,8 @@ export interface Crossing {
 export interface RoadPlan {
   crossings: Crossing[];
   valid: boolean;
+  /** The level it would be built at: 0, or a bridge's (or tunnel's) over (or under) what it crosses. */
+  level: number;
 }
 
 /** What a map is called if it wasn't given a name, and the longest name it can have. */
@@ -246,6 +249,8 @@ export class RoadGraph {
     if (!segment) return null;
     const path = this.path(segment);
     const { point, s } = path.nearest(p);
+    // Nothing along a bridge or tunnel.
+    if (segment.spec.level) return null;
     for (const end of [segment.a, segment.b]) {
       const node = this.node(end);
       if (distance(node, point) < MIN_ROAD_LENGTH) return node;
@@ -378,9 +383,12 @@ export class RoadGraph {
    * Where a road along `curve` would meet the network, and whether it can be built: crossings
    * must not be too shallow, and no piece of either road may end up shorter than the minimum.
    */
-  planRoad(curve: Curve): RoadPlan {
+  planRoad(curve: Curve, spec?: RoadSpec): RoadPlan {
     const path = new SampledCurve(curve);
     const crossings: Crossing[] = [];
+    const level = this.levelFor(path, spec?.level ?? 0);
+    const height = (s: number) => heightAlong(level, s, path.length);
+    let valid = path.length >= minGradedLength(level);
     const add = (c: Crossing) => {
       // Several hits at one spot (e.g. through an existing junction) are one crossing; prefer the node.
       const same = crossings.findIndex((o) => distance(o.point, c.point) < 1);
@@ -394,6 +402,8 @@ export class RoadGraph {
       for (const segment of this.segments.values()) {
         const nearest = this.path(segment).nearest(end);
         if (nearest.distance <= ON_ROAD_TOLERANCE) {
+          // Not onto a bridge or into a tunnel part way along: only at their ends, on the ground.
+          if (this.heightAt(segment, nearest.s) !== 0) valid = false;
           add({ point: nearest.point, t, segment, angle: 90 });
           break;
         }
@@ -404,6 +414,15 @@ export class RoadGraph {
     for (const segment of this.segments.values()) {
       for (const hit of path.intersections(this.path(segment))) {
         if (distance(hit.point, curve.a) < 1 || distance(hit.point, curve.b) < 1) continue;
+        // Over or under it (a bridge or tunnel, or a road under or over one): no junction. Too close
+        // in height to pass, and not both on the ground (on a ramp): it can't be built.
+        const mine = height(path.nearest(hit.point).s);
+        const theirs = this.heightAt(segment, this.path(segment).nearest(hit.point).s);
+        if (Math.abs(mine - theirs) >= CLEARANCE) continue;
+        if (mine !== 0 || theirs !== 0) {
+          valid = false;
+          continue;
+        }
         const angle = (Math.acos(Math.min(1, Math.abs(hit.tangentA.x * hit.tangentB.x + hit.tangentA.y * hit.tangentB.y))) * 180) / Math.PI;
         // Crossing right next to one of the segment's ends: use that junction instead of splitting.
         const end = [this.node(segment.a), this.node(segment.b)].find((n) => distance(n, hit.point) <= NODE_SNAP_RADIUS);
@@ -412,7 +431,6 @@ export class RoadGraph {
     }
     crossings.sort((p, q) => p.t - q.t);
 
-    let valid = true;
     // Pieces of the new road between consecutive junctions.
     const stations = [0, ...crossings.map((c) => path.nearest(c.point).s), path.length];
     for (let i = 1; i < stations.length; i++) {
@@ -428,7 +446,28 @@ export class RoadGraph {
       const s = segmentPath.nearest(c.point).s;
       if (s < MIN_ROAD_LENGTH || segmentPath.length - s < MIN_ROAD_LENGTH) valid = false;
     }
-    return { crossings, valid };
+    return { crossings, valid, level };
+  }
+
+  /**
+   * The level a road along `path` asked to be at `wanted` (1 a bridge, -1 a tunnel, 0 the ground)
+   * goes at: a bridge one above the highest bridge it crosses (a tunnel one below the deepest).
+   */
+  private levelFor(path: SampledCurve, wanted: number): number {
+    if (!wanted) return 0;
+    const sign = Math.sign(wanted);
+    let level = sign;
+    for (const segment of this.segments.values()) {
+      const other = segment.spec.level ?? 0;
+      if (Math.sign(other) !== sign) continue;
+      if (path.intersections(this.path(segment)).length) level = sign * Math.max(Math.abs(level), Math.abs(other) + 1);
+    }
+    return Math.max(-MAX_GRADE, Math.min(MAX_GRADE, level));
+  }
+
+  /** Height of `segment`'s road `s` along its centre line: 0 on the ground, up on a bridge, down in a tunnel. */
+  heightAt(segment: RoadSegment, s: number): number {
+    return heightAlong(segment.spec.level ?? 0, s, this.path(segment).length);
   }
 
   /**
@@ -437,10 +476,11 @@ export class RoadGraph {
    * Returns the new segments (empty if the plan isn't valid).
    */
   buildRoad(curve: Curve, spec: RoadSpec): RoadSegment[] {
-    const plan = this.planRoad(curve);
+    const plan = this.planRoad(curve, spec);
     if (!plan.valid) return [];
+    spec = { ...spec, level: plan.level || undefined };
 
-    const joints = plan.crossings.map((c) => ({ t: c.t, node: c.node ?? this.splitAt(c.point) }));
+    const joints = plan.crossings.map((c) => ({ t: c.t, node: c.node ?? this.splitAt(c.point, c.segment) }));
     const pieces: Curve[] = [];
     let rest = curve;
     let consumed = 0;
@@ -459,10 +499,10 @@ export class RoadGraph {
     return pieces.map((piece) => this.addRoad(piece, spec)).filter((s): s is RoadSegment => s !== null);
   }
 
-  /** Splits whichever segment passes through `point` there, returning the new junction node. */
-  private splitAt(point: Vec2): RoadNode {
+  /** Splits `only` (or whichever segment passes through `point`) there, returning the new junction node. */
+  private splitAt(point: Vec2, only?: RoadSegment): RoadNode {
     let best: { segment: RoadSegment; t: number; distance: number } | null = null;
-    for (const segment of this.segments.values()) {
+    for (const segment of only && this.segments.has(only.id) ? [only] : this.segments.values()) {
       const nearest = this.path(segment).nearest(point);
       if (!best || nearest.distance < best.distance) best = { segment, t: nearest.t, distance: nearest.distance };
     }

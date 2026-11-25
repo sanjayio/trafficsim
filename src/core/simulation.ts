@@ -271,6 +271,15 @@ export class Simulation {
     return next && legLength(leg) - car.s < SIGNAL_AHEAD ? approach(next) : 0;
   }
 
+  /** How high a car is: up on a bridge, down in a tunnel, else 0. */
+  heightOf(car: Car): number {
+    const id = car.legs[car.leg].segment;
+    const segment = id === undefined ? undefined : this.graph.segments.get(id);
+    if (!segment?.spec.level) return 0;
+    const { x, y } = this.pose(car);
+    return this.graph.heightAt(segment, this.graph.path(segment).nearest({ x, y }).s);
+  }
+
   /** Position and heading of a car, for drawing it. */
   pose(car: Car): { x: number; y: number; heading: number } {
     const leg = car.legs[car.leg];
