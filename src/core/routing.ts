@@ -1,8 +1,9 @@
 import { effectiveControl, slipRoad, type JunctionControl } from "./junction";
-import { connectionsAt, hasLaneConnector } from "./lanes";
+import { connectionsAt, hasLaneConnector, turnAt } from "./lanes";
+import { speedOf } from "./roadSpec";
 import type { NodeId, RoadGraph, SegmentId } from "./roadGraph";
 
-/** Cruise speed in world units per second; road lengths turn into driving time with it. */
+/** Cruise speed in world units per second (50 km/h, see `speedOf`): roads' driving time when speed limits are ignored. */
 export const CRUISE_SPEED = 40;
 
 
@@ -14,8 +15,8 @@ export interface Route {
 }
 
 /**
- * The fastest route from `from` to `to`: driving time along each road (every road has the same
- * speed for now) plus the typical delay at each junction passed (see `TrafficRules.routing`). One-way roads only run a → b, and
+ * The fastest route from `from` to `to`: driving time along each road at its speed limit, plus
+ * the typical delay at each junction passed and a cost for each turn (see `TrafficRules.routing`). One-way roads only run a → b, and
  * at a junction a car may only turn onto roads its lane connections lead to. Null when `to` can't
  * be reached.
  */
@@ -59,7 +60,9 @@ export function findRoute(graph: RoadGraph, from: NodeId, to: NodeId): Route | n
 
     const roads = graph.segmentsAt(current.node);
     // Passing through a junction costs its delay; a road's start and end don't.
-    const delay = current.node !== from && roads.length >= 3 && !slipRoad(graph, current.node) ? junctionDelay(graph, current.node) : 0;
+    const junction = current.node !== from && roads.length >= 3 && !slipRoad(graph, current.node);
+    const delay = junction ? junctionDelay(graph, current.node) : 0;
+    const rules = graph.rules.routing;
     for (const segment of roads) {
       if (segment.spec.oneWay && segment.a !== current.node) continue;
       if (segment.id === current.via) continue;
@@ -67,7 +70,10 @@ export function findRoute(graph: RoadGraph, from: NodeId, to: NodeId): Route | n
       const next: State = { node: segment.a === current.node ? segment.b : segment.a, via: segment.id };
       const k = key(next);
       if (done.has(k)) continue;
-      const t = best + delay + graph.path(segment).length / CRUISE_SPEED;
+      const turn = junction && current.via !== null ? turnAt(graph, current.node, graph.segments.get(current.via)!, segment) : "straight";
+      const penalty = turn === "kerb" ? rules.turnKerb : turn === "across" ? rules.turnAcross : 0;
+      const speed = rules.speedLimits ? speedOf(segment.spec) : CRUISE_SPEED;
+      const t = best + delay + penalty + graph.path(segment).length / speed;
       if (t < (time.get(k) ?? Infinity)) {
         time.set(k, t);
         states.set(k, next);

@@ -17,6 +17,18 @@ export interface RoadSpec {
    * asks for a bridge or tunnel; building it picks the level over (or under) whatever it crosses.
    */
   level?: number;
+  /** Speed limit in km/h, one of `SPEED_LIMITS` (absent: `DEFAULT_SPEED`). Cars drive at it, and routes prefer faster roads. */
+  speed?: number;
+}
+
+export const SPEED_LIMITS = [30, 50, 70, 90, 110] as const;
+export const DEFAULT_SPEED = 50;
+/** World units per second per km/h: 50 km/h is a cruise of 40 units/s. */
+const SPEED_SCALE = 0.8;
+
+/** A road's speed limit in world units per second. */
+export function speedOf(spec: RoadSpec): number {
+  return (spec.speed ?? DEFAULT_SPEED) * SPEED_SCALE;
 }
 
 export const MAX_LANES = 3;
@@ -52,8 +64,14 @@ export function hasTrees(spec: RoadSpec): boolean {
 
 /** Drops settings that don't apply (a median on a one-way road, trees without footpaths), so each road stores what it really is. */
 export function normalizeRoadSpec(spec: RoadSpec): RoadSpec {
-  const { trees: _, level, ...rest } = spec;
-  return { ...rest, median: hasMedian(spec), ...(hasTrees(spec) ? { trees: true } : {}), ...(level ? { level } : {}) };
+  const { trees: _, level, speed, ...rest } = spec;
+  return {
+    ...rest,
+    median: hasMedian(spec),
+    ...(hasTrees(spec) ? { trees: true } : {}),
+    ...(level ? { level } : {}),
+    ...(speed !== undefined && speed !== DEFAULT_SPEED ? { speed } : {}),
+  };
 }
 
 /** Validates a spec read from a saved map. */
@@ -68,9 +86,10 @@ export function parseRoadSpec(raw: unknown): RoadSpec {
     typeof s.median !== "boolean" ||
     typeof s.footpath !== "boolean" ||
     (s.trees !== undefined && typeof s.trees !== "boolean") ||
-    (s.level !== undefined && (!Number.isInteger(s.level) || Math.abs(s.level) > MAX_LEVEL))
+    (s.level !== undefined && (!Number.isInteger(s.level) || Math.abs(s.level) > MAX_LEVEL)) ||
+    (s.speed !== undefined && !(SPEED_LIMITS as readonly number[]).includes(s.speed))
   ) {
     throw new Error("Invalid road settings in map file");
   }
-  return normalizeRoadSpec({ lanes: s.lanes!, oneWay: s.oneWay, median: s.median, footpath: s.footpath, trees: s.trees, level: s.level });
+  return normalizeRoadSpec({ lanes: s.lanes!, oneWay: s.oneWay, median: s.median, footpath: s.footpath, trees: s.trees, level: s.level, speed: s.speed });
 }

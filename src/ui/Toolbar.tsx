@@ -27,7 +27,7 @@ import {
   type LucideIcon,
   type LucideProps,
 } from "lucide-react";
-import { MAX_LANES } from "../core/roadSpec";
+import { DEFAULT_SPEED, MAX_LANES, SPEED_LIMITS } from "../core/roadSpec";
 import { useEffect, type ReactNode } from "react";
 import { gameStore, isSnapping, useGame, type SimSpeed, type ToolId } from "../state/store";
 import type { BulldozeMode, RoadMode } from "../tools/Tool";
@@ -266,6 +266,7 @@ function RoadOptions() {
           <span className="text-sm font-semibold tabular-nums">{n}</span>
         </IconButton>
       ))}
+      <SpeedButton />
       <PanelDivider />
       <IconButton label="One-way" pressed={spec.oneWay} onClick={() => update({ oneWay: !spec.oneWay })}>
         <ArrowBigUp size={ICON_SIZE} strokeWidth={2} aria-hidden />
@@ -315,6 +316,23 @@ function RoadOptions() {
         <Grid3x3 size={ICON_SIZE} strokeWidth={2} aria-hidden />
       </IconButton>
     </Panel>
+  );
+}
+
+/** The speed limit for new roads, as a speed sign; each click goes up a step, wrapping round to the slowest. */
+function SpeedButton() {
+  const speed = useGame((s) => s.roadSpec.speed ?? DEFAULT_SPEED);
+  const next = SPEED_LIMITS[(SPEED_LIMITS.indexOf(speed as (typeof SPEED_LIMITS)[number]) + 1) % SPEED_LIMITS.length];
+  return (
+    <IconButton
+      label={`Speed limit: ${speed} km/h (click for ${next})`}
+      pressed={false}
+      onClick={() => gameStore.getState().updateRoadSpec({ speed: next === DEFAULT_SPEED ? undefined : next })}
+    >
+      <span className="grid size-6 place-items-center rounded-full border-[2.5px] border-red-500 bg-white text-[10px] font-bold tabular-nums text-neutral-900">
+        {speed}
+      </span>
+    </IconButton>
   );
 }
 

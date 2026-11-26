@@ -1,7 +1,7 @@
 import { effectiveControl, minorRoads, roundaboutShape, slipControlAt, slipRoad, signalApproaches, signalLights, type JunctionControl } from "./junction";
 import type { NodeId, RoadGraph, RoadSegment, SegmentId } from "./roadGraph";
 import { CRUISE_SPEED, findRoute, type Route } from "./routing";
-import { LANE_WIDTH } from "./roadSpec";
+import { LANE_WIDTH, speedOf } from "./roadSpec";
 import { connectionsAt, hasLaneConnector, laneOffsets, lanesInnerToKerb, turnAt, type Turn } from "./lanes";
 import { carPark, DRIVEWAY_BLEND, headsTo, type Terminal } from "./terminal";
 import { TURN_ORDER } from "./rules";
@@ -717,9 +717,26 @@ export class Simulation {
 
     if (gap <= 0) return -brake * 4;
     const desired = minGap + car.v * headway + (car.v * (car.v - speed)) / (2 * Math.sqrt(accel * brake));
-    const limit = leg.key.startsWith("bay:") ? PARK_SPEED : CRUISE_SPEED;
+    // The speed limit here, and no faster than lets it brake to the next leg's in time.
+    let limit = this.speedLimit(car.leg, car);
+    if (next) limit = Math.min(limit, Math.sqrt(this.speedLimit(car.leg + 1, car) ** 2 + 2 * brake * toLine));
     const a = accel * (1 - (car.v / limit) ** 4 - (Math.max(0, desired) / gap) ** 2);
     return Math.max(a, -brake * 4);
+  }
+
+  /**
+   * Top speed on `car`'s leg `i`: its road's limit (see `speedOf`), the slower of the roads either
+   * side through a junction, and walking pace in a car park bay.
+   */
+  private speedLimit(i: number, car: Car): number {
+    const leg = car.legs[i];
+    if (leg.key.startsWith("bay:")) return PARK_SPEED;
+    const road = (l: Leg | undefined) => {
+      const segment = l?.segment === undefined ? undefined : this.graph.segments.get(l.segment);
+      return segment ? speedOf(segment.spec) : Infinity;
+    };
+    const limit = leg.segment !== undefined ? road(leg) : Math.min(road(car.legs[i - 1]), road(car.legs[i + 1]));
+    return Number.isFinite(limit) ? limit : CRUISE_SPEED;
   }
 
   /** Gap to the car ahead (bumper to bumper) and its speed; Infinity when the road ahead is clear. */

@@ -6,7 +6,7 @@ import { kerbRadius, minorRoads, roundaboutShape, signalApproaches, signalLights
 const STOP_HOLD_TEST = 1;
 import { RoadGraph, type NodeId } from "./roadGraph";
 import { findRoute } from "./routing";
-import { DEFAULT_ROAD_SPEC, LANE_WIDTH, type RoadSpec } from "./roadSpec";
+import { DEFAULT_ROAD_SPEC, LANE_WIDTH, normalizeRoadSpec, parseRoadSpec, type RoadSpec } from "./roadSpec";
 import { CAR_LENGTH, CAR_WIDTH, SIM_DT, Simulation, type Car } from "./simulation";
 import { buildingSize, DEFAULT_SOURCE, carPark, newTerminal, parseTerminal, SINK } from "./terminal";
 import { lanesInnerToKerb } from "./lanes";
@@ -75,6 +75,38 @@ describe("findRoute", () => {
     expect(back.nodes).toEqual([at(graph, 0, 200), to, at(graph, 200, 0), from]);
   });
 
+  /**
+   * From the west, two ways north-east: straight on, then straight through junction K (A); or a
+   * little shorter, turning across traffic at J and again at K (B). `fast` sets route A's speed.
+   */
+  function twoWays(fast?: number) {
+    const graph = new RoadGraph();
+    const a = { ...DEFAULT_ROAD_SPEC, speed: fast };
+    road(graph, -300, 0, 0, 0);
+    road(graph, 0, 0, 300, 0, a);
+    road(graph, 300, 0, 300, -300, a);
+    road(graph, 0, 0, 0, -250);
+    road(graph, 0, -250, 300, -300);
+    road(graph, 300, -300, 300, -400);
+    return { graph, from: at(graph, -300, 0), to: at(graph, 300, -400), viaA: at(graph, 300, 0) };
+  }
+  const noTurnCosts = (graph: RoadGraph) => graph.setRules({ ...graph.rules, routing: { ...graph.rules.routing, turnKerb: 0, turnAcross: 0 } });
+
+  it("charges for turns, so it goes straight on rather than turn across traffic twice to save a little", () => {
+    const { graph, from, to, viaA } = twoWays();
+    expect(findRoute(graph, from, to)!.nodes).toContain(viaA);
+    noTurnCosts(graph);
+    expect(findRoute(graph, from, to)!.nodes).not.toContain(viaA);
+  });
+
+  it("prefers faster roads, by their speed limits", () => {
+    const { graph, from, to, viaA } = twoWays(90);
+    noTurnCosts(graph);
+    expect(findRoute(graph, from, to)!.nodes).toContain(viaA);
+    graph.setRules({ ...graph.rules, routing: { ...graph.rules.routing, speedLimits: false } });
+    expect(findRoute(graph, from, to)!.nodes).not.toContain(viaA);
+  });
+
   it("returns null when the sink can't be reached", () => {
     const graph = new RoadGraph();
     road(graph, 0, 0, 100, 0, { ...DEFAULT_ROAD_SPEC, oneWay: true });
@@ -92,6 +124,25 @@ describe("Simulation", () => {
     sim.parking = false;
     run(sim, 30, () => noOverlap(sim));
     expect(sim.delivered).toBeGreaterThan(5);
+  });
+
+  it("drives at each road's speed limit", () => {
+    const top = (speed?: number) => {
+      const graph = new RoadGraph();
+      road(graph, 0, 0, 1200, 0, { ...DEFAULT_ROAD_SPEC, speed });
+      graph.setTerminal(at(graph, 0, 0), { ...DEFAULT_SOURCE, rate: 30 });
+      graph.setTerminal(at(graph, 1200, 0), SINK);
+      const sim = new Simulation(graph);
+      sim.parking = false;
+      let fastest = 0;
+      run(sim, 30, () => (fastest = Math.max(fastest, ...sim.cars.map((c) => c.v))));
+      return fastest;
+    };
+    expect(top()).toBeLessThanOrEqual(40.5);
+    expect(top(110)).toBeGreaterThan(80);
+    expect(top(30)).toBeLessThanOrEqual(24.5);
+    expect(() => parseRoadSpec({ ...DEFAULT_ROAD_SPEC, speed: 45 })).toThrow();
+    expect(normalizeRoadSpec({ ...DEFAULT_ROAD_SPEC, speed: 50 }).speed).toBeUndefined();
   });
 
   it("counts finished trips and their times, until the stats are reset", () => {

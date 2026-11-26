@@ -25,7 +25,7 @@ export interface TrafficRules {
     turnInGap: number;
   };
   signals: { green: number; amber: number };
-  routing: { delayNone: number; delayYield: number; delayStop: number; delaySignals: number };
+  routing: { speedLimits: boolean; turnKerb: number; turnAcross: number; delayNone: number; delayYield: number; delayStop: number; delaySignals: number };
   trips: { parkMin: number; parkMax: number; signalAhead: number };
 }
 
@@ -45,7 +45,7 @@ export const DEFAULT_RULES: TrafficRules = {
     turnInGap: 3,
   },
   signals: { green: 8, amber: 2 },
-  routing: { delayNone: 0.5, delayYield: 1, delayStop: 3, delaySignals: 4 },
+  routing: { speedLimits: true, turnKerb: 2, turnAcross: 5, delayNone: 0.5, delayYield: 1, delayStop: 3, delaySignals: 4 },
   trips: { parkMin: 20, parkMax: 100, signalAhead: 60 },
 };
 
@@ -69,6 +69,12 @@ export const PRESETS: { id: string; label: string; patch: Patch }[] = [
       following: { headway: 0.5, minGap: 1.5, accel: 25, brake: 40 },
       junctions: { stopHold: 0, yieldHorizon: 1.5, ringGap: 1, giveWayTime: 1.2, turnInGap: 1.5, amberStopIfSafe: false },
     },
+  },
+  {
+    id: "cityBuilder",
+    label: "City-builder",
+    // Like Cities: Skylines: routes stick to fast roads and avoid turning, especially across traffic.
+    patch: { routing: { turnKerb: 4, turnAcross: 10, delayStop: 4, delaySignals: 6 } },
   },
 ];
 
@@ -146,6 +152,9 @@ export const RULE_SECTIONS: { section: RuleSection; title: string; fields: RuleF
     section: "routing",
     title: "Route choice",
     fields: [
+      { kind: "toggle", section: "routing", key: "speedLimits", label: "Prefer faster roads", help: "Time each road by its speed limit; off, every road counts as 50 km/h." },
+      { kind: "number", section: "routing", key: "turnKerb", label: "Kerb-side turn cost", help: "Seconds a route is charged for each turn towards the kerb.", min: 0, max: 30, step: 0.5, unit: "s" },
+      { kind: "number", section: "routing", key: "turnAcross", label: "Turn across traffic cost", help: "Seconds a route is charged for each turn across oncoming traffic.", min: 0, max: 30, step: 0.5, unit: "s" },
       { kind: "number", section: "routing", key: "delayNone", label: "Uncontrolled junction cost", help: "Seconds a route is charged for passing one.", min: 0, max: 20, step: 0.5, unit: "s" },
       { kind: "number", section: "routing", key: "delayYield", label: "Give-way junction cost", help: "Seconds a route is charged for passing one.", min: 0, max: 20, step: 0.5, unit: "s" },
       { kind: "number", section: "routing", key: "delayStop", label: "Stop junction cost", help: "Seconds a route is charged for passing one.", min: 0, max: 20, step: 0.5, unit: "s" },
