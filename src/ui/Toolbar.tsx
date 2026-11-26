@@ -33,7 +33,7 @@ import { useEffect, type ReactNode } from "react";
 import { gameStore, isSnapping, useGame, type SimSpeed, type ToolId } from "../state/store";
 import type { BulldozeMode, RoadMode } from "../tools/Tool";
 import { BUILDING_LABEL, isSourceBuilding, SINK_BUILDINGS, SOURCE_BUILDINGS, SOURCE_RATE, SOURCE_RATE_MAX, type Building } from "../core/terminal";
-import { IconButton, keepFocusOnGame, Panel, PanelButton, PanelDivider } from "./Panel";
+import { IconButton, keepFocusOnGame, Panel, PanelButton } from "./Panel";
 
 const TOOLS: { id: ToolId; label: string; key: string; icon: LucideIcon }[] = [
   { id: "select", label: "Select", key: "1", icon: MousePointer2 },
@@ -203,10 +203,10 @@ function TrafficOptions() {
     );
   };
   return (
-    <Panel>
-      {SOURCE_BUILDINGS.map(button)}
-      <PanelDivider />
-      {SINK_BUILDINGS.map(button)}
+    <Panel className="flex-col !items-stretch">
+      <Row label="Homes">{SOURCE_BUILDINGS.map(button)}</Row>
+      <RowDivider />
+      <Row label="Shops & offices">{SINK_BUILDINGS.map(button)}</Row>
     </Panel>
   );
 }
