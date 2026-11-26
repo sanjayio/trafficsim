@@ -5,8 +5,6 @@ import type { NodeId, RoadGraph, SegmentId } from "./roadGraph";
 /** Cruise speed in world units per second; road lengths turn into driving time with it. */
 export const CRUISE_SPEED = 40;
 
-/** Typical seconds lost passing a junction, by how it's controlled. */
-const JUNCTION_DELAY: Record<JunctionControl, number> = { none: 0.5, yield: 1, stop: 3, signals: 4 };
 
 export interface Route {
   /** Nodes from source to sink. */
@@ -17,7 +15,7 @@ export interface Route {
 
 /**
  * The fastest route from `from` to `to`: driving time along each road (every road has the same
- * speed for now) plus the typical delay at each junction passed. One-way roads only run a → b, and
+ * speed for now) plus the typical delay at each junction passed (see `TrafficRules.routing`). One-way roads only run a → b, and
  * at a junction a car may only turn onto roads its lane connections lead to. Null when `to` can't
  * be reached.
  */
@@ -61,7 +59,7 @@ export function findRoute(graph: RoadGraph, from: NodeId, to: NodeId): Route | n
 
     const roads = graph.segmentsAt(current.node);
     // Passing through a junction costs its delay; a road's start and end don't.
-    const delay = current.node !== from && roads.length >= 3 && !slipRoad(graph, current.node) ? JUNCTION_DELAY[effectiveControl(graph.junction(current.node))] : 0;
+    const delay = current.node !== from && roads.length >= 3 && !slipRoad(graph, current.node) ? junctionDelay(graph, current.node) : 0;
     for (const segment of roads) {
       if (segment.spec.oneWay && segment.a !== current.node) continue;
       if (segment.id === current.via) continue;
@@ -76,6 +74,13 @@ export function findRoute(graph: RoadGraph, from: NodeId, to: NodeId): Route | n
         back.set(k, currentKey);
       }
     }
+  }
+
+  function junctionDelay(graph: RoadGraph, node: NodeId): number {
+    // Typical seconds lost passing a junction, by how it's controlled (see `TrafficRules.routing`).
+    const control: JunctionControl = effectiveControl(graph.junction(node));
+    const { delayNone, delayYield, delayStop, delaySignals } = graph.rules.routing;
+    return { none: delayNone, yield: delayYield, stop: delayStop, signals: delaySignals }[control];
   }
 
   function unwind(end: string): Route {

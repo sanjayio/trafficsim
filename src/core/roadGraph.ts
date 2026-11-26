@@ -1,4 +1,5 @@
 import { MIN_CROSSING_ANGLE, MIN_ROAD_LENGTH, NODE_MERGE_DIST, NODE_SNAP_RADIUS } from "./constants";
+import { DEFAULT_RULES, isDefaultRules, parseRules, type TrafficRules } from "./rules";
 import { isStraight, rightNormal, SampledCurve, splitCurve, straightCurve, type Curve } from "./curve";
 import { distance, pointInConvexPolygon, segmentsIntersect, type Vec2 } from "./geometry";
 import {
@@ -48,6 +49,8 @@ export interface SavedMap {
   name?: string;
   /** Junctions with non-default settings (absent in older maps). */
   junctions?: ({ node: NodeId } & JunctionSettings)[];
+  /** Traffic rules that differ from the defaults (absent: all default). */
+  rules?: unknown;
   /** Traffic sources and sinks (absent in older maps). */
   terminals?: ({ node: NodeId } & Terminal)[];
   nodes: RoadNode[];
@@ -87,6 +90,8 @@ export type GraphEvent =
   | { type: "reset" }
   /** A network-wide setting changed (e.g. driving side); everything may need redrawing. */
   | { type: "settings" }
+  /** The traffic rules changed; nothing on the map moved, so nothing needs redrawing. */
+  | { type: "rules" }
   | { type: "junction-changed"; nodeId: NodeId }
   | { type: "terminal-changed"; nodeId: NodeId };
 
@@ -98,6 +103,7 @@ export class RoadGraph {
   readonly nodes = new Map<NodeId, RoadNode>();
   readonly segments = new Map<SegmentId, RoadSegment>();
   private side: DrivingSide = "right";
+  private trafficRules: TrafficRules = structuredClone(DEFAULT_RULES);
   private title = DEFAULT_MAP_NAME;
   /** Settings of junctions that differ from `DEFAULT_JUNCTION`. */
   private junctionSettings = new Map<NodeId, JunctionSettings>();
@@ -130,6 +136,16 @@ export class RoadGraph {
     if (side === this.side) return;
     this.side = side;
     this.emit({ type: "settings" });
+  }
+
+  /** How cars drive, give way and choose their way (see `core/rules`). Read live by the simulation. */
+  get rules(): TrafficRules {
+    return this.trafficRules;
+  }
+
+  setRules(rules: TrafficRules): void {
+    this.trafficRules = parseRules(rules);
+    this.emit({ type: "rules" });
   }
 
   junction(nodeId: NodeId): JunctionSettings {
@@ -628,6 +644,7 @@ export class RoadGraph {
       version: 3,
       name: this.title,
       drivingSide: this.side,
+      ...(isDefaultRules(this.trafficRules) ? {} : { rules: this.trafficRules }),
       junctions: [...this.junctionSettings].map(([node, settings]) => ({ node, ...settings })),
       terminals: [...this.terminals].map(([node, terminal]) => ({ node, ...terminal })),
       nodes: [...this.nodes.values()],
@@ -683,6 +700,7 @@ export class RoadGraph {
     }
 
     this.side = map.drivingSide ?? "right";
+    this.trafficRules = parseRules(map.rules);
     this.title = map.name?.trim() || DEFAULT_MAP_NAME;
     // Sources and sinks sit on dead ends; sources only list real sinks.
     const ends = new Map<NodeId, number>();

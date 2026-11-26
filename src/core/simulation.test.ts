@@ -307,7 +307,7 @@ describe("Simulation", () => {
           leg.set(car, car.leg);
           if (!entered) continue;
           // Red now and already red a moment ago means it ran the light (allowed in on yellow, it can cross just after the change).
-          const light = (t: number) => signalLights(approaches.length, t)[approaches.indexOf(car.legs[car.leg - 1].segment!)];
+          const light = (t: number) => signalLights(approaches.length, t, graph.rules.signals)[approaches.indexOf(car.legs[car.leg - 1].segment!)];
           expect(light(sim.time) === "red" && light(sim.time - 1.5) === "red").toBe(false);
         }
       });
@@ -678,6 +678,33 @@ describe("stop and give way junctions", () => {
     });
     expect(sideStopped).toBeGreaterThan(0);
     expect(mainStopped).toBe(0);
+  });
+
+  it("let the side road go first when the rules put it first, without jamming", () => {
+    const graph = new RoadGraph();
+    road(graph, -300, 0, 300, 0);
+    road(graph, 0, 0, 0, 300);
+    const centre = at(graph, 0, 0);
+    graph.setJunction(centre, { control: "yield" });
+    graph.setTerminal(at(graph, -300, 0), { ...DEFAULT_SOURCE, rate: 30 });
+    graph.setTerminal(at(graph, 0, 300), { ...DEFAULT_SOURCE, rate: 30 });
+    graph.setTerminal(at(graph, 300, 0), SINK);
+    graph.setRules({ ...graph.rules, junctions: { ...graph.rules.junctions, rightOfWay: ["minor", "mainThrough", "mainTurning"] } });
+    const sim = new Simulation(graph);
+    sim.parking = false;
+    const stem = [...minorRoads(graph, centre)][0];
+    let mainStopped = 0;
+    run(sim, 90, () => {
+      noOverlap(sim);
+      for (const car of sim.cars) {
+        const leg = car.legs[car.leg];
+        if (car.legs[car.leg + 1]?.node !== centre || car.stopped < STOP_HOLD_TEST || leg.segment === stem) continue;
+        if (!sim.cars.some((c) => c !== car && c.legs[c.leg].key === leg.key && c.s > car.s)) mainStopped++;
+      }
+    });
+    expect(mainStopped).toBeGreaterThan(0);
+    // Still flowing, not jammed.
+    expect(sim.delivered).toBeGreaterThan(15);
   });
 });
 

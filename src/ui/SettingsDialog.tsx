@@ -1,7 +1,9 @@
 import type { DrivingSide } from "../core/roadGraph";
+import type { Engine } from "../render/Engine";
 import { gameStore, useGame } from "../state/store";
 import { Dialog } from "./Dialog";
 import { keepFocusOnGame } from "./Panel";
+import { TrafficRulesSettings } from "./TrafficRules";
 
 const DRIVING_SIDES: { id: DrivingSide; label: string }[] = [
   { id: "right", label: "Right-hand" },
@@ -9,7 +11,7 @@ const DRIVING_SIDES: { id: DrivingSide; label: string }[] = [
 ];
 
 /** Game settings. Opened from the main menu. */
-export function SettingsDialog({ onClose }: { onClose: () => void }) {
+export function SettingsDialog({ engine, onClose }: { engine: Engine | null; onClose: () => void }) {
   const drivingSide = useGame((s) => s.drivingSide);
   return (
     <Dialog title="Settings" onClose={onClose}>
@@ -45,6 +47,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           </div>
         </div>
       </section>
+      {engine && <TrafficRulesSettings engine={engine} />}
     </Dialog>
   );
 }

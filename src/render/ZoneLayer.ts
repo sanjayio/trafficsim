@@ -20,7 +20,7 @@ export class ZoneLayer extends Mesh {
     super(undefined, flatMaterial(palette.preview, TILE_ALPHA));
     this.renderOrder = FlatLayer.markings + 1;
     this.visible = false;
-    this.unsubscribe = graph.subscribe(() => (this.stale = true));
+    this.unsubscribe = graph.subscribe((e) => e.type !== "rules" && (this.stale = true));
   }
 
   /** Shows or hides the tiles, rebuilding them first if the network changed while they were away. */

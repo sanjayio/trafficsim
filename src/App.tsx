@@ -43,7 +43,7 @@ export default function App() {
         <NewMapDialog engine={engine} onClose={closeDialog} onShowTutorial={() => setDialog("tutorial")} />
       )}
       {dialog === "tutorial" && <TutorialDialog onClose={closeDialog} />}
-      {dialog === "settings" && <SettingsDialog onClose={closeDialog} />}
+      {dialog === "settings" && <SettingsDialog engine={engine} onClose={closeDialog} />}
       {dialog === "controls" && <ControlsDialog onClose={closeDialog} />}
     </div>
   );

@@ -172,23 +172,19 @@ export function signalApproaches(graph: RoadGraph, nodeId: NodeId): SegmentId[] 
     .sort((p, q) => angle(p) - angle(q));
 }
 
-/** Seconds of green and of yellow per signal phase. */
-export const SIGNAL_GREEN = 8;
-export const SIGNAL_YELLOW = 2;
-
 export type SignalLight = "red" | "yellow" | "green";
 
 /**
  * The light shown to each approach (sorted by angle around the junction) at simulation time
- * `time`. Phases cycle round the approaches; with an even count, opposite approaches share one.
+ * `time`, green and amber lasting as `timing` says (seconds). Phases cycle round the approaches; with an even count, opposite approaches share one.
  */
-export function signalLights(approaches: number, time: number): SignalLight[] {
+export function signalLights(approaches: number, time: number, timing: { green: number; amber: number }): SignalLight[] {
   const pairs = approaches % 2 === 0 && approaches >= 4;
   const phases = pairs ? approaches / 2 : approaches;
-  const cycle = SIGNAL_GREEN + SIGNAL_YELLOW;
+  const cycle = timing.green + timing.amber;
   const phase = Math.floor(time / cycle) % phases;
   const inPhase = time % cycle;
-  const lit: SignalLight = inPhase < SIGNAL_GREEN ? "green" : "yellow";
+  const lit: SignalLight = inPhase < timing.green ? "green" : "yellow";
   return Array.from({ length: approaches }, (_, i) => ((pairs ? i % phases : i) === phase ? lit : "red"));
 }
 

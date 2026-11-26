@@ -126,7 +126,7 @@ export class Engine {
     host.appendChild(canvas);
 
     this.scene.fog = this.fog;
-    this.cleanups.push(this.graph.subscribe(() => (this.streetLightsDirty = true)));
+    this.cleanups.push(this.graph.subscribe((e) => e.type !== "rules" && (this.streetLightsDirty = true)));
     this.scene.add(this.streetLights, ...this.shadows.objects, this.sky, this.rain, this.ground, this.grid, this.roads, this.zoneLayer, this.cars, this.routeLine, this.overlay);
 
     // Left-drag pans with the Select tool, except in the lane connector, which needs left clicks.

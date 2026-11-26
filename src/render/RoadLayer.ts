@@ -179,7 +179,7 @@ export class RoadLayer extends Group {
   /** Switches every junction's signals to the lights for simulation time `time`. */
   updateSignals(time: number): void {
     for (const approaches of this.signals.values()) {
-      const lights = signalLights(approaches.length, time);
+      const lights = signalLights(approaches.length, time, this.graph.rules.signals);
       approaches.forEach((lamps, i) => this.kit.setLight(lamps, lights[i]));
     }
   }

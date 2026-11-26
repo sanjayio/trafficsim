@@ -1,0 +1,196 @@
+/**
+ * The traffic rules: every tunable part of how cars drive, give way and choose their way, saved
+ * with the map so players can experiment. The simulation reads them live, every step.
+ */
+
+/** Who goes first at a stop or give-way junction, highest first. */
+export const RIGHT_OF_WAY = ["mainThrough", "mainTurning", "minor"] as const;
+export type RightOfWay = (typeof RIGHT_OF_WAY)[number];
+
+/** Which turns go first when movements cross (on the same green, or both on the main road), highest first. */
+export const TURN_ORDER = ["straight", "kerb", "across"] as const;
+export type TurnPriority = (typeof TURN_ORDER)[number];
+
+export interface TrafficRules {
+  following: { accel: number; brake: number; minGap: number; headway: number };
+  junctions: {
+    rightOfWay: RightOfWay[];
+    turnOrder: TurnPriority[];
+    amberStopIfSafe: boolean;
+    gridlockCheck: boolean;
+    stopHold: number;
+    yieldHorizon: number;
+    ringGap: number;
+    giveWayTime: number;
+    turnInGap: number;
+  };
+  signals: { green: number; amber: number };
+  routing: { delayNone: number; delayYield: number; delayStop: number; delaySignals: number };
+  trips: { parkMin: number; parkMax: number; signalAhead: number };
+}
+
+export type RuleSection = keyof TrafficRules;
+
+export const DEFAULT_RULES: TrafficRules = {
+  following: { accel: 15, brake: 25, minGap: 3, headway: 0.9 },
+  junctions: {
+    rightOfWay: [...RIGHT_OF_WAY],
+    turnOrder: [...TURN_ORDER],
+    amberStopIfSafe: true,
+    gridlockCheck: true,
+    stopHold: 0.5,
+    yieldHorizon: 3,
+    ringGap: 2,
+    giveWayTime: 2.5,
+    turnInGap: 3,
+  },
+  signals: { green: 8, amber: 2 },
+  routing: { delayNone: 0.5, delayYield: 1, delayStop: 3, delaySignals: 4 },
+  trips: { parkMin: 20, parkMax: 100, signalAhead: 60 },
+};
+
+type Patch = { [S in RuleSection]?: Partial<TrafficRules[S]> };
+
+/** Named starting points; each changes a few rules from the default. */
+export const PRESETS: { id: string; label: string; patch: Patch }[] = [
+  { id: "default", label: "Default", patch: {} },
+  {
+    id: "polite",
+    label: "Polite",
+    patch: {
+      following: { headway: 1.6, minGap: 5, accel: 10 },
+      junctions: { stopHold: 1.5, yieldHorizon: 5, ringGap: 3, giveWayTime: 4, turnInGap: 4.5 },
+    },
+  },
+  {
+    id: "aggressive",
+    label: "Aggressive",
+    patch: {
+      following: { headway: 0.5, minGap: 1.5, accel: 25, brake: 40 },
+      junctions: { stopHold: 0, yieldHorizon: 1.5, ringGap: 1, giveWayTime: 1.2, turnInGap: 1.5, amberStopIfSafe: false },
+    },
+  },
+];
+
+export function applyPatch(base: TrafficRules, patch: Patch): TrafficRules {
+  const out = structuredClone(base);
+  for (const section of Object.keys(patch) as RuleSection[]) Object.assign(out[section], patch[section]);
+  return out;
+}
+
+export function presetRules(id: string): TrafficRules {
+  return applyPatch(DEFAULT_RULES, PRESETS.find((p) => p.id === id)?.patch ?? {});
+}
+
+/** The preset `rules` match exactly, or null when they've been changed from any. */
+export function matchingPreset(rules: TrafficRules): string | null {
+  const json = JSON.stringify(rules);
+  return PRESETS.find((p) => JSON.stringify(presetRules(p.id)) === json)?.id ?? null;
+}
+
+export type RuleField =
+  | { kind: "number"; section: RuleSection; key: string; label: string; help: string; min: number; max: number; step: number; unit: string }
+  | { kind: "toggle"; section: RuleSection; key: string; label: string; help: string }
+  | { kind: "order"; section: RuleSection; key: string; label: string; help: string; items: Record<string, string> };
+
+/** How each rule is shown in Settings, and the range it's kept to. Grouped by section, in display order. */
+export const RULE_SECTIONS: { section: RuleSection; title: string; fields: RuleField[] }[] = [
+  {
+    section: "junctions",
+    title: "Junctions",
+    fields: [
+      {
+        kind: "order",
+        section: "junctions",
+        key: "rightOfWay",
+        label: "Right of way",
+        help: "At stop and give-way junctions, who goes first when paths cross.",
+        items: { mainThrough: "Main road, straight on", mainTurning: "Main road, turning", minor: "Side road" },
+      },
+      {
+        kind: "order",
+        section: "junctions",
+        key: "turnOrder",
+        label: "Turn priority",
+        help: "On the same green (or both on the main road), which movement goes first.",
+        items: { straight: "Straight on", kerb: "Turning kerb-side", across: "Turning across traffic" },
+      },
+      { kind: "toggle", section: "junctions", key: "amberStopIfSafe", label: "Stop on amber", help: "Stop on amber when there's room to; off, amber is treated as green." },
+      { kind: "toggle", section: "junctions", key: "gridlockCheck", label: "Don't block the box", help: "Only enter a junction when there's room on the road out." },
+      { kind: "number", section: "junctions", key: "stopHold", label: "Stop sign wait", help: "How long cars stand at a stop line before going.", min: 0, max: 5, step: 0.1, unit: "s" },
+      { kind: "number", section: "junctions", key: "yieldHorizon", label: "Give-way look", help: "Give way to priority traffic arriving within this time.", min: 0, max: 8, step: 0.1, unit: "s" },
+      { kind: "number", section: "junctions", key: "ringGap", label: "Roundabout gap", help: "Gap wanted before ring traffic reaches an entry.", min: 0.5, max: 6, step: 0.1, unit: "s" },
+      { kind: "number", section: "junctions", key: "giveWayTime", label: "Driveway gap", help: "Gap wanted pulling out of a driveway.", min: 0.5, max: 6, step: 0.1, unit: "s" },
+      { kind: "number", section: "junctions", key: "turnInGap", label: "Turn-in gap", help: "Gap wanted turning into a driveway across oncoming traffic.", min: 0.5, max: 6, step: 0.1, unit: "s" },
+    ],
+  },
+  {
+    section: "signals",
+    title: "Traffic lights",
+    fields: [
+      { kind: "number", section: "signals", key: "green", label: "Green", help: "Seconds of green per phase.", min: 3, max: 30, step: 1, unit: "s" },
+      { kind: "number", section: "signals", key: "amber", label: "Amber", help: "Seconds of amber after each green.", min: 0, max: 6, step: 0.5, unit: "s" },
+    ],
+  },
+  {
+    section: "following",
+    title: "Car following",
+    fields: [
+      { kind: "number", section: "following", key: "headway", label: "Following time", help: "Time gap kept to the car ahead.", min: 0.3, max: 3, step: 0.1, unit: "s" },
+      { kind: "number", section: "following", key: "minGap", label: "Standstill gap", help: "Space left to the car ahead when stopped.", min: 0, max: 15, step: 0.5, unit: "u" },
+      { kind: "number", section: "following", key: "accel", label: "Acceleration", help: "How hard cars pull away.", min: 5, max: 40, step: 1, unit: "u/s²" },
+      { kind: "number", section: "following", key: "brake", label: "Comfortable braking", help: "How hard cars like to brake.", min: 10, max: 60, step: 1, unit: "u/s²" },
+    ],
+  },
+  {
+    section: "routing",
+    title: "Route choice",
+    fields: [
+      { kind: "number", section: "routing", key: "delayNone", label: "Uncontrolled junction cost", help: "Seconds a route is charged for passing one.", min: 0, max: 20, step: 0.5, unit: "s" },
+      { kind: "number", section: "routing", key: "delayYield", label: "Give-way junction cost", help: "Seconds a route is charged for passing one.", min: 0, max: 20, step: 0.5, unit: "s" },
+      { kind: "number", section: "routing", key: "delayStop", label: "Stop junction cost", help: "Seconds a route is charged for passing one.", min: 0, max: 20, step: 0.5, unit: "s" },
+      { kind: "number", section: "routing", key: "delaySignals", label: "Signals cost", help: "Seconds a route is charged for passing one.", min: 0, max: 20, step: 0.5, unit: "s" },
+    ],
+  },
+  {
+    section: "trips",
+    title: "Trips",
+    fields: [
+      { kind: "number", section: "trips", key: "parkMin", label: "Shortest stay", help: "Shortest time a car stays parked.", min: 5, max: 300, step: 5, unit: "s" },
+      { kind: "number", section: "trips", key: "parkMax", label: "Longest stay", help: "Longest time a car stays parked.", min: 5, max: 300, step: 5, unit: "s" },
+      { kind: "number", section: "trips", key: "signalAhead", label: "Indicate from", help: "How far before a turn or lane change cars indicate.", min: 0, max: 200, step: 10, unit: "u" },
+    ],
+  },
+];
+
+/**
+ * Rules read from a saved map: anything missing or invalid takes its default, numbers are kept
+ * in range, and orders must list each choice once. Never throws, so a map always loads.
+ */
+export function parseRules(raw: unknown): TrafficRules {
+  const rules = structuredClone(DEFAULT_RULES);
+  const input = (raw && typeof raw === "object" ? raw : {}) as Record<string, Record<string, unknown> | undefined>;
+  for (const { section, fields } of RULE_SECTIONS) {
+    const given = input[section];
+    if (!given || typeof given !== "object") continue;
+    const target = rules[section] as unknown as Record<string, unknown>;
+    for (const field of fields) {
+      const value = given[field.key];
+      if (field.kind === "number" && typeof value === "number" && Number.isFinite(value)) {
+        target[field.key] = Math.min(field.max, Math.max(field.min, value));
+      } else if (field.kind === "toggle" && typeof value === "boolean") {
+        target[field.key] = value;
+      } else if (field.kind === "order" && Array.isArray(value)) {
+        const items = Object.keys(field.items);
+        if (value.length === items.length && items.every((i) => value.includes(i))) target[field.key] = [...value];
+      }
+    }
+  }
+  if (rules.trips.parkMax < rules.trips.parkMin) rules.trips.parkMax = rules.trips.parkMin;
+  return rules;
+}
+
+/** True when `rules` are the defaults (so a map needn't save them). */
+export function isDefaultRules(rules: TrafficRules): boolean {
+  return JSON.stringify(rules) === JSON.stringify(DEFAULT_RULES);
+}

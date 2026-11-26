@@ -4,6 +4,7 @@ import { CRUISE_SPEED, findRoute, type Route } from "./routing";
 import { LANE_WIDTH } from "./roadSpec";
 import { connectionsAt, hasLaneConnector, laneOffsets, lanesInnerToKerb, turnAt, type Turn } from "./lanes";
 import { carPark, DRIVEWAY_BLEND, headsTo, type Terminal } from "./terminal";
+import { TURN_ORDER } from "./rules";
 import { legAt, legLength, TrackBuilder, type Leg } from "./track";
 
 /** Fixed simulation timestep in seconds, so traffic logic never sees a variable dt. */
@@ -11,33 +12,15 @@ export const SIM_DT = 1 / 60;
 
 export const CAR_LENGTH = 14;
 export const CAR_WIDTH = 6.5;
-/** Car-following (IDM): acceleration, comfortable braking, standstill gap and time headway. */
-const ACCEL = 15;
-const BRAKE = 25;
+/** Clearance kept round cars when checking for room (car following itself uses the rules' standstill gap). */
 const MIN_GAP = 3;
-const HEADWAY = 0.9;
 /** A car asks to enter a junction this far (plus its braking distance) before the stop line. */
 const ASK_DISTANCE = 15;
 /** Front cars this close to the line queue for an all-way junction, first come first served. */
 const QUEUE_DISTANCE = 40;
-/** At a stop sign, seconds a car stands at the line before it may go. */
-const STOP_HOLD = 0.5;
-/** Seconds of gap a car entering a roundabout needs before a circulating car reaches it. */
-const RING_GAP = 2;
-/** Cars signal a turn or lane change from this far before it. */
-const SIGNAL_AHEAD = 60;
-/** On green, turning cars give way to priority traffic this many seconds from the junction. */
-const YIELD_HORIZON = 3;
 
-/** Pulling out of a driveway, the gap (in seconds) wanted before the next car along the road gets there. */
-const GIVE_WAY_TIME = 2.5;
-/** Turning into a driveway across oncoming traffic, the gap (in seconds) wanted before the next oncoming car gets there. */
-const TURN_IN_GAP = 3;
 /** Top speed in a car park bay (driving in or backing out). */
 const PARK_SPEED = 8;
-/** How long a car stays parked at a shop or office, in seconds: somewhere between these. */
-const PARK_MIN = 20;
-const PARK_MAX = 100;
 /** Paint, roughly as common as on real roads: mostly white, black, silver and grey, a few colours. */
 const CAR_COLORS = [
   0xf2f2f0, 0xf2f2f0, 0xf2f2f0, 0x1c1d20, 0x1c1d20, 0x1c1d20, 0xb9bdc2, 0xb9bdc2, 0x6c7178, 0x6c7178,
@@ -162,6 +145,8 @@ export class Simulation {
     this.random = seeded(seed);
     this.unsubscribe = graph.subscribe((e) => {
       this.routes.clear();
+      // New rules: cars carry on, reading them from the next step.
+      if (e.type === "rules") return;
       if (e.type === "terminal-changed") {
         // A shop or office removed, or moved or resized: its bays (and cars in or heading for
         // them) go too. Renamed, recoloured or grown taller, they stay.
@@ -218,7 +203,8 @@ export class Simulation {
             // In its bay: stays a while.
             car.s = legLength(car.legs[car.leg]);
             car.v = 0;
-            car.leaveAt = this.time + PARK_MIN + this.random() * (PARK_MAX - PARK_MIN);
+            const { parkMin, parkMax } = this.graph.rules.trips;
+            car.leaveAt = this.time + parkMin + this.random() * (parkMax - parkMin);
             this.delivered++;
             if (this.graph.recordVisit(car.parking.sink)) this.levelUps.push(car.parking.sink);
           } else {
@@ -248,7 +234,7 @@ export class Simulation {
 
   /**
    * Which indicator a car has on: 1 right, -1 left, 0 none. On for a turn or lane change coming up
-   * within `SIGNAL_AHEAD` and while making it. At roundabouts: towards the kerb for the first exit,
+   * within the rules' `signalAhead` and while making it. At roundabouts: towards the kerb for the first exit,
    * away from it for the third and later (kept on round the ring), none for the second; then
    * towards the kerb when nearing the exit.
    */
@@ -264,11 +250,11 @@ export class Simulation {
     const leg = car.legs[car.leg];
     if (leg.shift !== undefined || (leg.node !== undefined && !leg.ring)) return approach(leg);
     if (leg.ring) {
-      if (car.s >= leg.offRing! - SIGNAL_AHEAD) return kerb;
+      if (car.s >= leg.offRing! - this.graph.rules.trips.signalAhead) return kerb;
       return car.s < leg.onRing! || leg.exit! >= 3 ? approach(leg) : 0;
     }
     const next = car.legs[car.leg + 1];
-    return next && legLength(leg) - car.s < SIGNAL_AHEAD ? approach(next) : 0;
+    return next && legLength(leg) - car.s < this.graph.rules.trips.signalAhead ? approach(next) : 0;
   }
 
   /** How high a car is: up on a bridge, down in a tunnel, else 0. */
@@ -648,6 +634,7 @@ export class Simulation {
   /** IDM acceleration towards the car ahead, or a stop line the car may not cross yet. */
   private accelerate(car: Car, lanes: Map<string, Car[]>): number {
     let { gap, speed } = this.leader(car, lanes);
+    const { accel, brake, minGap, headway } = this.graph.rules.following;
 
     const leg = car.legs[car.leg];
     const next = car.legs[car.leg + 1];
@@ -662,7 +649,7 @@ export class Simulation {
       const front = !ahead || this.at(ahead) > leg.to;
       if (front && toLine < QUEUE_DISTANCE && car.arrival === null) car.arrival = this.time;
       // A turn into a driveway, or the main road at a junction, is checked from further back, so a car with a clear way doesn't slow for nothing.
-      const ask = ASK_DISTANCE + (car.v * car.v) / (2 * BRAKE) + (next.rule === "turnIn" || next.rule === "priority" ? QUEUE_DISTANCE : 0);
+      const ask = ASK_DISTANCE + (car.v * car.v) / (2 * brake) + (next.rule === "turnIn" || next.rule === "priority" ? QUEUE_DISTANCE : 0);
       if (toLine < ask) car.cleared = front && this.mayEnter(car, next, toLine);
       // Stop with the front bumper just behind the line.
       const toBumper = toLine - CAR_LENGTH / 2 - 0.5;
@@ -672,11 +659,11 @@ export class Simulation {
       }
     }
 
-    if (gap <= 0) return -BRAKE * 4;
-    const desired = MIN_GAP + car.v * HEADWAY + (car.v * (car.v - speed)) / (2 * Math.sqrt(ACCEL * BRAKE));
+    if (gap <= 0) return -brake * 4;
+    const desired = minGap + car.v * headway + (car.v * (car.v - speed)) / (2 * Math.sqrt(accel * brake));
     const limit = leg.key.startsWith("bay:") ? PARK_SPEED : CRUISE_SPEED;
-    const a = ACCEL * (1 - (car.v / limit) ** 4 - (Math.max(0, desired) / gap) ** 2);
-    return Math.max(a, -BRAKE * 4);
+    const a = accel * (1 - (car.v / limit) ** 4 - (Math.max(0, desired) / gap) ** 2);
+    return Math.max(a, -brake * 4);
   }
 
   /** Gap to the car ahead (bumper to bumper) and its speed; Infinity when the road ahead is clear. */
@@ -761,7 +748,8 @@ export class Simulation {
   private mayEnter(car: Car, next: Movement, toLine: number): boolean {
     if (next.rule === "merge") return this.mayChangeLane(car, next);
     if (next.rule === "turnIn") return this.mayTurnIn(car, next);
-    if (!this.exitHasRoom(car, next)) return false;
+    const { junctions, following } = this.graph.rules;
+    if (junctions.gridlockCheck && !this.exitHasRoom(car, next)) return false;
     // Cars already in the junction, or allowed in, on movements crossing or merging with this one.
     const claimed = this.cars.filter((c) => {
       if (c === car) return false;
@@ -778,40 +766,45 @@ export class Simulation {
     const waiting = this.cars.filter(
       (c) => c !== car && !c.cleared && c.legs[c.leg + 1]?.node === next.node && c.arrival !== null,
     );
+    // Higher for the turns that go first (see `TrafficRules.junctions.turnOrder`).
+    const rank = (turn: Turn | undefined) => (turn ? TURN_ORDER.length - junctions.turnOrder.indexOf(turn) : 0);
+    const near = (c: Car) => legLength(c.legs[c.leg]) - c.s < c.v * junctions.yieldHorizon + 10;
 
     if (next.rule === "signals") {
       const approaches = signalApproaches(this.graph, next.node!);
-      const lights = signalLights(approaches.length, this.time);
+      const lights = signalLights(approaches.length, this.time, this.graph.rules.signals);
       const lightFor = (c: Car) => lights[approaches.indexOf(c.legs[c.leg].segment!)];
       const light = lightFor(car);
-      // Not green: stop if there's room to before the front bumper reaches the line (a car let through
-      // on yellow keeps going if the light turns red).
-      if (light !== "green" && (car.v * car.v) / (2 * BRAKE) < toLine - CAR_LENGTH / 2) return false;
-      // Turning cars let conflicting straight-on (then kerb-side) traffic with a green go first.
-      const rank = (turn: Turn | undefined) => (turn === "straight" ? 2 : turn === "kerb" ? 1 : 0);
-      const approaching = this.cars.filter((c) => {
+      // Red (or amber, unless amber counts as go): stop if there's room to before the front bumper
+      // reaches the line (a car let through on amber keeps going if the light turns red).
+      const stop = light === "red" || (light === "yellow" && junctions.amberStopIfSafe);
+      if (stop && (car.v * car.v) / (2 * following.brake) < toLine - CAR_LENGTH / 2) return false;
+      // Turning cars let conflicting movements that go first, with a green, go first.
+      return !this.cars.some((c) => {
         const upcoming = c.legs[c.leg + 1];
         if (c === car || upcoming?.node !== next.node || lightFor(c) !== "green") return false;
-        const distance = legLength(c.legs[c.leg]) - c.s;
-        return distance < c.v * YIELD_HORIZON + 10 && rank(upcoming.turn) > rank(next.turn);
+        return near(c) && rank(upcoming.turn) > rank(next.turn) && this.tracks.conflicts(next, upcoming);
       });
-      return !approaching.some((c) => this.tracks.conflicts(next, c.legs[c.leg + 1]));
     }
 
-    // On the main road: through traffic first; a turning car lets conflicting traffic going on
-    // ahead (then turning kerb-side) on the main road come past.
-    const rank = (turn: Turn | undefined) => (turn === "straight" ? 2 : turn === "kerb" ? 1 : 0);
-    const coming = (c: Car) => {
-      const upcoming = c.legs[c.leg + 1];
-      return c !== car && upcoming?.node === next.node && upcoming.rule === "priority" && legLength(c.legs[c.leg]) - c.s < c.v * YIELD_HORIZON + 10;
-    };
-    if (next.rule === "priority") {
-      return !this.cars.some((c) => coming(c) && rank(c.legs[c.leg + 1].turn) > rank(next.turn) && this.tracks.conflicts(next, c.legs[c.leg + 1]));
-    }
-    // Stop or give way: wait for the main road to be clear of anyone it would cross or join.
-    if (next.rule === "stop" && car.stopped < STOP_HOLD) return false;
-    if ((next.rule === "stop" || next.rule === "yield") && this.cars.some((c) => coming(c) && this.tracks.conflicts(next, c.legs[c.leg + 1]))) {
-      return false;
+    if (next.rule !== "none") {
+      // Stop or give way, and the main road: whoever stands higher (see `TrafficRules.junctions.rightOfWay`)
+      // goes first; between two main-road turns, the turn order decides.
+      const standing = (leg: Movement) =>
+        junctions.rightOfWay.indexOf(leg.rule === "priority" ? (leg.turn === "straight" ? "mainThrough" : "mainTurning") : "minor");
+      const mine = standing(next);
+      const first = (leg: Movement) => {
+        const theirs = standing(leg);
+        return theirs < mine || (theirs === mine && leg.rule === "priority" && leg.turn !== "straight" && rank(leg.turn) > rank(next.turn));
+      };
+      if (next.rule === "stop" && car.stopped < junctions.stopHold) return false;
+      const yields = this.cars.some((c) => {
+        const upcoming = c.legs[c.leg + 1];
+        if (c === car || upcoming?.node !== next.node || !(upcoming.rule === "priority" || upcoming.rule === "stop" || upcoming.rule === "yield")) return false;
+        return near(c) && first(upcoming) && this.tracks.conflicts(next, upcoming);
+      });
+      if (yields) return false;
+      if (next.rule === "priority") return true;
     }
     // Then first come, first served among the side roads' conflicting movements (and all-way with no control).
     const mine = car.arrival ?? this.time;
@@ -829,6 +822,8 @@ export class Simulation {
    */
   private mayChangeLane(car: Car, change: Movement): boolean {
     const join = change.joinAt!;
+    const { giveWayTime } = this.graph.rules.junctions;
+    const { headway } = this.graph.rules.following;
     // Out of a building: the driveways each way share their first stretch.
     const door = change.key.startsWith("out:") ? Number(change.key.split(":")[1]) : null;
     if (door !== null && this.cars.some((c) => c !== car && this.nearDoor(c, door))) return false;
@@ -854,7 +849,7 @@ export class Simulation {
         position = other.legs[i].from - ahead;
       } else continue;
       // Out of a driveway, give way: road traffic keeps going, so wait for a gap it won't have to slow for.
-      const gap = door !== null ? other.v * GIVE_WAY_TIME + CAR_LENGTH : other.v * HEADWAY * 1.5 + CAR_LENGTH;
+      const gap = door !== null ? other.v * giveWayTime + CAR_LENGTH : other.v * headway * 1.5 + CAR_LENGTH;
       const behind = join - (gap + MIN_GAP * 2);
       if (position > behind && position < join + CAR_LENGTH + MIN_GAP * 2) return false;
     }
@@ -891,7 +886,7 @@ export class Simulation {
       const to = { x: target.x - p.x, y: target.y - p.y };
       const ahead = to.x * h.x + to.y * h.y;
       // A car standing still (waiting at a line itself) only counts when it's right there.
-      const reach = c.v < 1 ? CAR_LENGTH : c.v * TURN_IN_GAP + CAR_LENGTH * 1.5;
+      const reach = c.v < 1 ? CAR_LENGTH : c.v * this.graph.rules.junctions.turnInGap + CAR_LENGTH * 1.5;
       return ahead > -CAR_LENGTH && ahead < reach;
     });
   }
@@ -926,7 +921,7 @@ export class Simulation {
 
   /**
    * Roundabouts: circulating cars have priority. Enter only when no car on (or about to join) the
-   * ring will pass this entry within `RING_GAP` seconds, and the spot just past it is free.
+   * ring will pass this entry within the rules' `ringGap` seconds, and the spot just past it is free.
    */
   private ringClear(next: Movement, claimed: Car[]): boolean {
     const ring = next.ring!;
@@ -956,7 +951,7 @@ export class Simulation {
       const exit = otherLeg.ring!.exit;
       const upstream = this.around(next, angle, entry) * ring.radius + lead;
       const passes = this.around(next, angle, exit) > this.around(next, angle, entry) - 0.05;
-      if (passes && upstream < other.v * RING_GAP + CAR_LENGTH + MIN_GAP * 2) return false;
+      if (passes && upstream < other.v * this.graph.rules.junctions.ringGap + CAR_LENGTH + MIN_GAP * 2) return false;
       const downstream = this.around(next, entry, angle) * ring.radius;
       if (lead === 0 && downstream < CAR_LENGTH + MIN_GAP * 2) return false;
     }
