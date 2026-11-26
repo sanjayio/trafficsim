@@ -162,7 +162,8 @@ const SCENES: Record<string, () => ReactNode> = {
           <circle r={3.5} className={phase === "a" ? "tut-light-a" : "tut-light-b"} />
         </g>
       ))}
-      <g transform="translate(160 60)">
+      {/* The junction's options button, off to the side so cars don't pass under it. */}
+      <g transform="translate(110 20)">
         <g className="tut-pulse">
           <circle r={9} fill="#171717" opacity={0.9} />
           <circle r={3} fill="none" stroke="#e5e5e5" strokeWidth={1.5} />
