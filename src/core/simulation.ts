@@ -108,7 +108,7 @@ const LET_IN_PAUSE = 5;
 const SQUEEZE_LENGTH = CAR_LENGTH * 0.8;
 /** Slower than this (units/s), a car ahead counts as held up when choosing a lane. */
 const CRAWL = 5;
-/** A home that can't send a car out onto a jammed road looks again after this many seconds. */
+/** A home that can't send a car out (its door busy, or the road outside jammed) looks again after this many seconds. */
 const RETRY_SPAWN = 0.5;
 /** A car standing still this long counts as stuck. */
 const STUCK_AFTER = 10;
@@ -180,6 +180,14 @@ export class Simulation {
   private routes = new Map<string, Route | null>();
   /** Cars by lane this step (see `byLane`). */
   private lanes = new Map<string, Car[]>();
+  /**
+   * Also gathered once a step, so checks that would otherwise look at every car look at a few (see
+   * `index`): cars changing lane (or pulling out of a driveway), cars at the end of their lane
+   * waiting to move over, and the cars in, or heading into, each junction.
+   */
+  private changing: Car[] = [];
+  private merging: Car[] = [];
+  private atNode = new Map<NodeId, Car[]>();
   private due = new Map<NodeId, number>();
   /** Homes waiting for the road outside to clear: when to look again (see `spawn`). */
   private retryAt = new Map<NodeId, number>();
@@ -238,6 +246,7 @@ export class Simulation {
     for (const car of this.cars) if (car.leaveAt !== null && this.time >= car.leaveAt && !this.leave(car)) arrived.add(car);
 
     const lanes = (this.lanes = this.byLane());
+    this.index();
     const acceleration = new Map<Car, number>();
     for (const car of this.cars) if (car.leaveAt === null) acceleration.set(car, this.accelerate(car, lanes));
 
@@ -349,6 +358,14 @@ export class Simulation {
     const id = car.legs[car.leg].segment;
     const segment = id === undefined ? undefined : this.graph.segments.get(id);
     if (!segment?.spec.level) return 0;
+    const leg = car.legs[car.leg];
+    // In a lane: its track runs the road's length, so how far along it the car is says where it is
+    // on the road (no search). Elsewhere (changing lane, a driveway): the nearest point on the road.
+    if (leg.key.startsWith("r:")) {
+      const along = Math.min(1, Math.max(0, this.at(car) / (leg.track.length || 1)));
+      const forward = leg.key.split(":")[2] === "1";
+      return this.graph.heightAt(segment, (forward ? along : 1 - along) * this.graph.path(segment).length);
+    }
     const { x, y } = this.pose(car);
     return this.graph.heightAt(segment, this.graph.path(segment).nearest({ x, y }).s);
   }
@@ -662,6 +679,13 @@ export class Simulation {
       const due = Math.min(1, (this.due.get(source) ?? this.random()) + (t.rate / 60) * dt);
       this.due.set(source, due);
       if (due < 1 || (this.retryAt.get(source) ?? 0) > this.time) continue;
+      // Not while the last car is still at the door or near the top of the driveway (either way out):
+      // checked before planning a trip, so a home that has to wait doesn't plan one every step.
+      const door = `door:${source}`;
+      if (this.cars.some((c) => c.legs[c.leg].key === door || this.nearDoor(c, source))) {
+        this.retryAt.set(source, this.time + RETRY_SPAWN);
+        continue;
+      }
       // Only to shops and offices with a free bay: when they're all full, the source waits.
       const reachable = sinks.filter(([id, s]) => headsTo(t, id, s.building)).map(([id]) => id).filter(
         (sink) => sink !== source && (!this.parking || this.freeBay(sink) !== null) && this.route(source, sink),
@@ -672,9 +696,6 @@ export class Simulation {
       const route = this.route(source, sink)!;
       const lanes = this.planTrip(route);
       const legs = this.legsFor(route, bay === null ? {} : { parkAt: bay }, lanes);
-      // Not while the last car is still at the door or near the top of the driveway (either way out).
-      const blocked = this.cars.some((c) => c.legs[c.leg].key === legs[0].key || this.nearDoor(c, source));
-      if (blocked) continue;
       // Not while the road outside is jammed where the driveway joins it: look again in a moment.
       if (this.jammedAtJoin(legs)) {
         this.retryAt.set(source, this.time + RETRY_SPAWN);
@@ -930,6 +951,30 @@ export class Simulation {
     return car.legs[car.leg].from + car.s;
   }
 
+  /** Gathers `changing`, `merging` and `atNode` for this step. */
+  private index(): void {
+    this.changing = [];
+    this.merging = [];
+    this.atNode.clear();
+    for (const car of this.cars) {
+      const leg = car.legs[car.leg];
+      const next = car.legs[car.leg + 1] as Movement | undefined;
+      if (leg.joinAt !== undefined) this.changing.push(car);
+      if (next?.squeeze === "merge" && !car.cleared) this.merging.push(car);
+      for (const node of new Set([leg.node, next?.node])) {
+        if (node === undefined) continue;
+        const list = this.atNode.get(node);
+        if (list) list.push(car);
+        else this.atNode.set(node, [car]);
+      }
+    }
+  }
+
+  /** The cars in, or heading into, junction `node` this step. */
+  private atJunction(node: NodeId | undefined): Car[] {
+    return (node !== undefined && this.atNode.get(node)) || [];
+  }
+
   /** Cars by the lane (leg key) they're on, nearest the start first. */
   private byLane(): Map<string, Car[]> {
     const lanes = new Map<string, Car[]>();
@@ -1064,15 +1109,15 @@ export class Simulation {
     // it leaves see it where it is; cars with the lane it joins on their way ahead see it where it will join.
     // How far ahead each lane on its way is: a point p along that lane's track is p + offset ahead.
     const offsets = new Map<string, number>();
-    for (let k = car.leg, distance = 0; k < car.legs.length && distance < LOOK_AHEAD; k++) {
+    for (let k = car.leg, distance = 0; this.changing.length && k < car.legs.length && distance < LOOK_AHEAD; k++) {
       const leg = car.legs[k];
       const start = k === car.leg ? this.at(car) : leg.from;
       if (!offsets.has(leg.key)) offsets.set(leg.key, distance - start);
       distance += Math.max(0, leg.to - start);
     }
-    for (const other of this.cars) {
+    for (const other of this.changing) {
       const leg = other.legs[other.leg];
-      if (leg.joinAt === undefined || other === car) continue;
+      if (other === car) continue;
       const left = other.legs[other.leg - 1];
       const joins = leg.outKey === undefined ? undefined : offsets.get(leg.outKey);
       // The lane it's leaving, if that's on this car's way (the one it's in, or one ahead).
@@ -1081,7 +1126,7 @@ export class Simulation {
         leaves !== undefined
           ? left.to + other.s + leaves
           : joins !== undefined
-            ? leg.joinAt - (legLength(leg) - other.s) + joins
+            ? leg.joinAt! - (legLength(leg) - other.s) + joins
             : null;
       if (ahead !== null && ahead > 0 && ahead - CAR_LENGTH < best.gap) best = { gap: ahead - CAR_LENGTH, speed: other.v };
     }
@@ -1094,7 +1139,7 @@ export class Simulation {
       const mine = this.ringAngle(car);
       const leaving = leg.offRing! - car.s < CAR_LENGTH * 3;
       // shortcut: a car alongside in the outer lane isn't watched while an inner-lane car leaves; add a merge check if they clip.
-      for (const other of this.cars) {
+      for (const other of this.atJunction(leg.node)) {
         const otherLeg = other.legs[other.leg];
         if (other === car || otherLeg.node !== leg.node || !otherLeg.ring || other.s > otherLeg.offRing!) continue;
         // A car about to join counts as already at its joining point, so ring traffic makes room for it.
@@ -1118,9 +1163,9 @@ export class Simulation {
   private letIn(car: Car, lanes: Map<string, Car[]>): number {
     const mine = car.legs[car.leg];
     const { letIn, minSafeGap } = this.graph.rules.laneChange;
-    if (!letIn || !mine.key.startsWith("r:")) return Infinity;
+    if (!letIn || !mine.key.startsWith("r:") || (!this.merging.length && car.lettingIn === undefined)) return Infinity;
     // The one it was letting in is in (or gave up): a while before the next.
-    const before = car.lettingIn === undefined ? undefined : this.cars.find((c) => c.id === car.lettingIn);
+    const before = car.lettingIn === undefined ? undefined : this.merging.find((c) => c.id === car.lettingIn);
     if (car.lettingIn !== undefined && !(before && this.waitingToJoin(before, mine.key))) {
       car.lettingIn = undefined;
       car.letInAt = this.time;
@@ -1132,7 +1177,7 @@ export class Simulation {
     const room = (ahead: number) => ahead - SQUEEZE_LENGTH - minSafeGap - CAR_LENGTH;
     const canStop = (c: Car, ahead: number) => room(ahead) >= (c.v * c.v) / (2 * brake);
     let gap = Infinity;
-    for (const other of this.cars) {
+    for (const other of this.merging) {
       if (other === car || (car.lettingIn !== undefined && other.id !== car.lettingIn) || !this.waitingToJoin(other, mine.key)) continue;
       const theirs = other.legs[other.leg];
       // Where it is, alongside in this lane (both lanes' tracks run the length of the road).
@@ -1179,7 +1224,8 @@ export class Simulation {
     const { junctions, following } = this.graph.rules;
     if (junctions.gridlockCheck && !this.exitHasRoom(car, next)) return false;
     // Cars already in the junction, or allowed in, on movements crossing or merging with this one.
-    const claimed = this.cars.filter((c) => {
+    const here = this.atJunction(next.node);
+    const claimed = here.filter((c) => {
       if (c === car) return false;
       const leg = c.legs[c.leg];
       const upcoming = c.legs[c.leg + 1];
@@ -1191,9 +1237,7 @@ export class Simulation {
     if (claimed.some((c) => this.tracks.conflicts(next, legOf(c)))) return false;
 
     // Front cars waiting at this junction's other lines, and the leg each would take.
-    const waiting = this.cars.filter(
-      (c) => c !== car && !c.cleared && c.legs[c.leg + 1]?.node === next.node && c.arrival !== null,
-    );
+    const waiting = here.filter((c) => c !== car && !c.cleared && c.legs[c.leg + 1]?.node === next.node && c.arrival !== null);
     // Higher for the turns that go first (see `TrafficRules.junctions.turnOrder`).
     const rank = (turn: Turn | undefined) => (turn ? TURN_ORDER.length - junctions.turnOrder.indexOf(turn) : 0);
     const near = (c: Car) => legLength(c.legs[c.leg]) - c.s < c.v * junctions.yieldHorizon + 10;
@@ -1210,14 +1254,14 @@ export class Simulation {
         // Turning kerb-side on red, where allowed: after stopping, giving way to anyone with a green it would cross or join.
         const freeTurn = light === "red" && next.turn === "kerb" && this.graph.junction(next.node!).turnOnRed;
         if (!freeTurn || car.stopped < junctions.stopHold) return false;
-        return !this.cars.some((c) => {
+        return !here.some((c) => {
           const upcoming = c.legs[c.leg + 1];
           if (c === car || upcoming?.node !== next.node || lightFor(c) === "red") return false;
           return near(c) && this.tracks.conflicts(next, upcoming);
         });
       }
       // Turning cars let conflicting movements that go first, with a green, go first.
-      return !this.cars.some((c) => {
+      return !here.some((c) => {
         const upcoming = c.legs[c.leg + 1];
         if (c === car || upcoming?.node !== next.node || lightFor(c) !== "green") return false;
         return near(c) && rank(upcoming.turn) > rank(next.turn) && this.tracks.conflicts(next, upcoming);
@@ -1235,7 +1279,7 @@ export class Simulation {
         return theirs < mine || (theirs === mine && leg.rule === "priority" && leg.turn !== "straight" && rank(leg.turn) > rank(next.turn));
       };
       if (next.rule === "stop" && car.stopped < junctions.stopHold) return false;
-      const yields = this.cars.some((c) => {
+      const yields = here.some((c) => {
         const upcoming = c.legs[c.leg + 1];
         if (c === car || upcoming?.node !== next.node || !(upcoming.rule === "priority" || upcoming.rule === "stop" || upcoming.rule === "yield")) return false;
         return near(c) && first(upcoming) && this.tracks.conflicts(next, upcoming);
@@ -1399,13 +1443,12 @@ export class Simulation {
     const out = car.legs[index];
     // And past it, when it's short, to the first car on the legs beyond.
     let room = this.ahead(car, index, out.from) - CAR_LENGTH;
-    for (const c of this.cars) {
-      const leg = c.legs[c.leg];
-      const left = leg.joinAt !== undefined ? c.legs[c.leg - 1] : null;
-      const position = leg.key === out.key ? this.at(c) : left?.key === out.key ? left.to + c.s : null;
-      if (position !== null) room = Math.min(room, position - out.from - CAR_LENGTH);
+    for (const c of this.lanes.get(out.key) ?? []) room = Math.min(room, this.at(c) - out.from - CAR_LENGTH);
+    for (const c of this.changing) {
+      const left = c.legs[c.leg - 1];
+      if (left.key === out.key) room = Math.min(room, left.to + c.s - out.from - CAR_LENGTH);
     }
-    for (const c of this.cars) {
+    for (const c of this.atJunction(next.node)) {
       if (c === car) continue;
       const leg = c.legs[c.leg];
       const upcoming = c.legs[c.leg + 1];

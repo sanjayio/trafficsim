@@ -33,6 +33,8 @@ import { OverlayLayer } from "./OverlayLayer";
 import { palette } from "./palette";
 import { RoadLayer } from "./RoadLayer";
 
+/** Highest device pixel ratio drawn at (see `mount`). */
+const MAX_PIXEL_RATIO = 1.5;
 /** Below this zoom the minor grid is hidden to avoid moiré. */
 const MINOR_GRID_MIN_ZOOM = 0.45;
 const STATS_INTERVAL_MS = 250;
@@ -111,7 +113,8 @@ export class Engine {
   mount(host: HTMLElement): void {
     // A stencil buffer, for the openings in the ground over tunnels' ramps (see `trenchMask`).
     const renderer = new WebGLRenderer({ antialias: true, stencil: true });
-    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    // Capped: a 2x (Retina) screen at full ratio draws four times the pixels, for little gain here.
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
     renderer.setClearColor(palette.ground);
     // Scales the scene's brightness for the time of day and weather; lights opt out (toneMapped: false).
     renderer.toneMapping = LinearToneMapping;

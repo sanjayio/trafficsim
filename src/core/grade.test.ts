@@ -3,6 +3,8 @@ import { straightCurve } from "./curve";
 import { heightAlong, LEVEL_HEIGHT, RAMP_PER_LEVEL, TUNNEL_DEPTH } from "./grade";
 import { RoadGraph } from "./roadGraph";
 import { DEFAULT_ROAD_SPEC } from "./roadSpec";
+import { SIM_DT, Simulation } from "./simulation";
+import { DEFAULT_SOURCE, SINK } from "./terminal";
 
 const line = (ax: number, ay: number, bx: number, by: number) => straightCurve({ x: ax, y: ay }, { x: bx, y: by });
 const bridge = { ...DEFAULT_ROAD_SPEC, level: 1 };
@@ -15,6 +17,34 @@ describe("bridges and tunnels", () => {
     expect(heightAlong(1, 200, 400)).toBe(LEVEL_HEIGHT);
     expect(heightAlong(-2, 200, 400)).toBe(-2 * TUNNEL_DEPTH);
     expect(heightAlong(1, RAMP_PER_LEVEL / 2, 400)).toBeCloseTo(LEVEL_HEIGHT / 2);
+  });
+
+  it("carry cars up and over at the road's height, both ways", () => {
+    const graph = new RoadGraph();
+    // Two bridges side by side: cars cross one from its start, the other from its end.
+    graph.buildRoad(line(0, 0, 900, 0), bridge);
+    graph.buildRoad(line(0, 300, 900, 300), bridge);
+    const at = (x: number, y: number) => graph.nodeNear({ x, y }, 1)!.id;
+    graph.setTerminal(at(0, 0), { ...DEFAULT_SOURCE, rate: 20 });
+    graph.setTerminal(at(900, 0), SINK);
+    graph.setTerminal(at(900, 300), { ...DEFAULT_SOURCE, rate: 20 });
+    graph.setTerminal(at(0, 300), SINK);
+    const sim = new Simulation(graph);
+    sim.parking = false;
+    const directions = new Set<string>();
+    for (let t = 0; t < 40 / SIM_DT; t++) {
+      sim.step(SIM_DT);
+      for (const car of sim.cars) {
+        const leg = car.legs[car.leg];
+        if (!leg.key.startsWith("r:")) continue;
+        // The same as the road's height at the nearest point to where the car is.
+        const road = graph.segments.get(leg.segment!)!;
+        const { x, y } = sim.pose(car);
+        expect(sim.heightOf(car)).toBeCloseTo(graph.heightAt(road, graph.path(road).nearest({ x, y }).s), 0);
+        directions.add(leg.key.split(":")[2]);
+      }
+    }
+    expect([...directions].sort()).toEqual(["-1", "1"]);
   });
 
   it("pass over and under roads without a junction, and stack over each other", () => {

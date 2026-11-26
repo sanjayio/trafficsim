@@ -49,7 +49,7 @@ const GARAGE_WIDTH = 8;
  * Geometry is shared; materials are cached per colour.
  */
 export class BuildingKit {
-  private box = new BoxGeometry(1, 1, 1);
+  private box = shadedBox();
   private roof = gableGeometry();
   /** A unit square lying on the ground. */
   private plane = new PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
@@ -57,11 +57,11 @@ export class BuildingKit {
   private concrete = flatMaterial(0xa3a59f);
   private paint = flatMaterial(0xf2f2ee);
   private drive = flatMaterial(0x45494f);
-  private materials = new Map<string, MeshBasicMaterial[]>();
+  private materials = new Map<string, MeshBasicMaterial>();
   /** Trees placed on the lot being made (see `tree`), planted together at the end (see `plantTrees`). */
   private trees: { x: number; z: number; bush?: boolean }[] = [];
-  /** Leaves: white, shaded by face, each tree's colour set per instance; they sway (see `swayMaterial`). */
-  private leafMaterials = [0.86, 0.86, 1, 0.7, 0.7, 0.7].map((k) => swayMaterial(new Color(1, 1, 1).multiplyScalar(k)));
+  /** Leaves: white, shaded by face (the box's vertex colours), each tree's colour set per instance; they sway (see `swayMaterial`). */
+  private leafMaterial = Object.assign(swayMaterial(new Color(1, 1, 1)), { vertexColors: true });
 
   /** The building being made's details (see `model`): its colours, and its name for its sign. */
   private details: BuildingDetails = {};
@@ -304,10 +304,10 @@ export class BuildingKit {
         box(2.6 * size, 9 * size, 1.6 * size, null);
       }
     }
-    const trunkMesh = new InstancedMesh(this.box, this.shaded(0x6b4a33, "box"), Math.max(1, trunks.length));
+    const trunkMesh = new InstancedMesh(this.box, this.shaded(0x6b4a33), Math.max(1, trunks.length));
     trunkMesh.count = trunks.length;
     trunks.forEach((m, i) => trunkMesh.setMatrixAt(i, m));
-    const leafMesh = new InstancedMesh(this.box, this.leafMaterials, leaves.length);
+    const leafMesh = new InstancedMesh(this.box, this.leafMaterial, leaves.length);
     leaves.forEach(({ m, colour }, i) => {
       leafMesh.setMatrixAt(i, m);
       leafMesh.setColorAt(i, new Color(colour));
@@ -325,9 +325,9 @@ export class BuildingKit {
     this.roof.dispose();
     this.plane.dispose();
     this.signPlane.dispose();
-    for (const m of this.leafMaterials) m.dispose();
+    this.leafMaterial.dispose();
     for (const m of [this.grass, this.concrete, this.paint, this.drive]) m.dispose();
-    for (const set of this.materials.values()) for (const m of set) m.dispose();
+    for (const m of this.materials.values()) m.dispose();
   }
 
   private parts(building: Building, l: number, d: number, garage: number): Mesh[] {
@@ -473,7 +473,7 @@ export class BuildingKit {
         }
       }
     }
-    const mesh = new InstancedMesh(this.box, this.shaded(colour, "box", light), Math.max(1, panels.length));
+    const mesh = new InstancedMesh(this.box, this.shaded(colour, light), Math.max(1, panels.length));
     panels.forEach((m, i) => mesh.setMatrixAt(i, m));
     mesh.count = panels.length;
     mesh.renderOrder = BUILDING_ORDER;
@@ -482,7 +482,7 @@ export class BuildingKit {
 
   /** A box of size (w, h, d) standing on height y, centred on (x, z) in the building's frame. */
   private block(colour: number, w: number, h: number, d: number, x: number, y: number, z: number): Mesh {
-    const mesh = new Mesh(this.box, this.shaded(colour, "box"));
+    const mesh = new Mesh(this.box, this.shaded(colour));
     mesh.scale.set(w, h, d);
     mesh.position.set(x, y + h / 2, z);
     mesh.renderOrder = BUILDING_ORDER;
@@ -492,7 +492,7 @@ export class BuildingKit {
 
   /** A gable roof (ridge along x) of size (w, h, d) on height y, centred on (x, z). */
   private gable(colour: number, w: number, h: number, d: number, x: number, y: number, z: number): Mesh {
-    const mesh = new Mesh(this.roof, this.shaded(colour, "roof"));
+    const mesh = new Mesh(this.roof, this.shaded(colour));
     mesh.scale.set(w, h, d);
     mesh.position.set(x, y, z);
     mesh.renderOrder = BUILDING_ORDER;
@@ -504,26 +504,26 @@ export class BuildingKit {
    * Materials faking light from above and one side. Boxes, by face (+x, -x, +y, -y, +z, -z): the
    * ends mid-tone, the top lit, the front and back a step darker. Roofs: the two slopes, then the gable ends.
    */
-  private shaded(colour: number, shape: "box" | "roof", light?: number): MeshBasicMaterial[] {
+  /**
+   * The material for something `colour`, shaded by face by its geometry's vertex colours (lit from
+   * above: top full, the rest darker), so a whole box or roof is one draw. Windows (`light`, or a
+   * colour with a light) light up at night (see `setLights`).
+   */
+  private shaded(colour: number, light?: number): MeshBasicMaterial {
     const lit = light ?? WINDOW_LIGHT.get(colour);
-    const key = `${colour}:${shape}:${lit ?? ""}`;
-    let set = this.materials.get(key);
-    if (!set) {
-      const tone = (k: number) => {
-        // Windows aren't dimmed with the scene: they light up at night (see setLights).
-        const material = new MeshBasicMaterial({ color: new Color(colour).multiplyScalar(k), toneMapped: !lit });
-        if (lit) this.windows.push({ material, day: new Color(colour).multiplyScalar(k), night: new Color(lit).multiplyScalar(0.6 + 0.4 * k) });
-        return material;
-      };
-      const [top, light, dark] = [tone(1), tone(0.86), tone(0.7)];
-      set = shape === "box" ? [light, light, top, dark, dark, dark] : [top, dark, light];
-      this.materials.set(key, set);
+    const key = `${colour}:${lit ?? ""}`;
+    let material = this.materials.get(key);
+    if (!material) {
+      // Lit windows aren't dimmed with the scene, and glow a little brighter than their colour.
+      material = new MeshBasicMaterial({ color: colour, vertexColors: true, toneMapped: !lit });
+      if (lit) this.windows.push({ material, day: new Color(colour), night: new Color(lit).multiplyScalar(WINDOW_GLOW) });
+      this.materials.set(key, material);
     }
-    return set;
+    return material;
   }
 }
 
-/** A unit gable roof: base 1 × 1 at y = 0, ridge along x at y = 1, z = 0. Groups: front slope, back slope, ends. */
+/** A unit gable roof: base 1 × 1 at y = 0, ridge along x at y = 1, z = 0, shaded by face (see `shadedBox`). */
 function gableGeometry(): BufferGeometry {
   const a = (x: number) => [x, 0, -0.5];
   const b = (x: number) => [x, 0, 0.5];
@@ -537,11 +537,23 @@ function gableGeometry(): BufferGeometry {
   ];
   const geometry = new BufferGeometry();
   geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
-  geometry.addGroup(0, 6, 0);
-  geometry.addGroup(6, 6, 1);
-  geometry.addGroup(12, 6, 2);
+  // Shaded by face: the slope facing the road lit, the back one darker, the ends between.
+  const tones = [...Array(6).fill(1), ...Array(6).fill(0.7), ...Array(6).fill(0.86)] as number[];
+  geometry.setAttribute("color", new Float32BufferAttribute(tones.flatMap((t) => [t, t, t]), 3));
   return geometry;
 }
+
+/** A unit box shaded by face in its vertex colours, lit from above: top full, the x ends a step darker, the rest darker still. */
+function shadedBox(): BoxGeometry {
+  const box = new BoxGeometry(1, 1, 1);
+  // BoxGeometry's faces, 4 vertices each, in order: +x, -x, +y, -y, +z, -z.
+  const tones = [0.86, 0.86, 1, 0.7, 0.7, 0.7];
+  box.setAttribute("color", new Float32BufferAttribute(tones.flatMap((t) => Array(12).fill(t) as number[]), 3));
+  return box;
+}
+
+/** How much brighter than their colour lit windows glow at night (the faces' shading dims them again). */
+const WINDOW_GLOW = 1.2;
 
 /**
  * Shared by every tree's leaves (see `swayMaterial`): the time, and how hard the wind blows them.

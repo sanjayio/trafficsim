@@ -7,6 +7,8 @@ const COLOR = 0x3b82f6;
 const WIDTH = 2.5;
 /** Spacing of the points the line follows, in world units. */
 const STEP = 3;
+/** Redrawn this often (in frames), and whenever the car moves onto its next leg. */
+const REDRAW_EVERY = 6;
 /** Just above the road (or bridge deck) it lies on. */
 const LIFT = 0.2;
 
@@ -19,10 +21,16 @@ export class RouteLine extends Mesh<BufferGeometry, MeshBasicMaterial> {
     this.visible = false;
   }
 
-  /** Redraws the rest of `car`'s route, or hides the line when null. */
+  private drawn: { car: Car; leg: number } | null = null;
+  private frames = 0;
+
+  /** Redraws the rest of `car`'s route (now and then, see `REDRAW_EVERY`), or hides the line when null. */
   update(sim: Simulation, car: Car | null): void {
     this.visible = car !== null;
     if (!car) return;
+    const fresh = this.drawn?.car === car && this.drawn.leg === car.leg && ++this.frames % REDRAW_EVERY !== 0;
+    if (fresh) return;
+    this.drawn = { car, leg: car.leg };
     const points = sim.routeAhead(car, STEP);
     const positions: number[] = [];
     const indices: number[] = [];
