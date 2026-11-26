@@ -72,6 +72,7 @@ export function MainMenu({
         <Panel>
           <button
             type="button"
+            aria-label="Support"
             aria-haspopup="menu"
             aria-expanded={open === "support"}
             onClick={() => setOpen((o) => (o === "support" ? null : "support"))}
@@ -81,7 +82,8 @@ export function MainMenu({
             }`}
           >
             <Heart size={16} className="text-rose-400" aria-hidden />
-            Support
+            {/* Just the heart on phones. */}
+            <span className="hidden sm:inline">Support</span>
           </button>
         </Panel>
         <Panel>

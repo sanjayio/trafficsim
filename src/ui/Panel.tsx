@@ -36,7 +36,7 @@ export function PanelButton({
       onClick={onClick}
       onMouseDown={keepFocusOnGame}
       disabled={disabled}
-      className={`rounded-lg px-3 py-1.5 font-medium transition-colors duration-100 disabled:opacity-40 ${buttonStateClass(active)}`}
+      className={`flex h-9 items-center rounded-lg px-3 font-medium transition-colors duration-100 disabled:opacity-40 ${buttonStateClass(active)}`}
     >
       {children}
     </button>

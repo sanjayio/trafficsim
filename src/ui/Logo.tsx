@@ -9,7 +9,8 @@ export function Logo() {
         <span className="text-white">Traffic</span>
         <span className="text-sky-400">Sim</span>
       </span>
-      {mapName && <span className="max-w-48 truncate border-l border-white/10 pl-3 text-neutral-400">{mapName}</span>}
+      {/* Not on phones: it would crowd the radio at the top middle. */}
+      {mapName && <span className="hidden max-w-48 truncate border-l border-white/10 pl-3 text-neutral-400 sm:inline">{mapName}</span>}
     </div>
   );
 }
