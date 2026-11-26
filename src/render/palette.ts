@@ -6,6 +6,7 @@ export const palette = {
   gridMajor: 0x3a6229,
   asphalt: 0x3d4148,
   footpath: 0x6f747b,
+  kerb: 0xa3a7ad,
   median: 0x4f5d45,
   centerLine: 0xd9b44a,
   laneLine: 0xd8dade,

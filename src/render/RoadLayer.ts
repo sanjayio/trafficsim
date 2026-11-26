@@ -8,6 +8,7 @@ import { bridge } from "../core/track";
 import { BuildingKit } from "./buildings";
 import { concreteMaterial, gradeStructure, liftGeometry, trenchMask } from "./grade";
 import { convexGeometry, FlatLayer, flatMaterial } from "./flat";
+import { disposeSurfaces, textureSurface } from "./surfaces";
 import { FurnitureKit, type FurnitureSpot } from "./furniture";
 import { buildJunctionParts, type JunctionArm } from "./junctionParts";
 import { buildRoundaboutParts } from "./roundaboutParts";
@@ -40,7 +41,7 @@ const SIGN_SETBACK = 3;
  */
 export class RoadLayer extends Group {
   private materials = Object.fromEntries(
-    Object.entries(ROAD_PART_STYLE).map(([part, style]) => [part, flatMaterial(style.color)]),
+    Object.entries(ROAD_PART_STYLE).map(([part, style]) => [part, textured(part as RoadPart, flatMaterial(style.color))]),
   ) as Record<RoadPart, MeshBasicMaterial>;
   private views = new Map<SegmentId, Mesh[]>();
   private graded = new Map<RoadPart, MeshBasicMaterial>();
@@ -156,8 +157,9 @@ export class RoadLayer extends Group {
     const doorAt = (door.x - lot.centre.x) * along.x + (door.y - lot.centre.y) * along.y;
     const driveway = new Mesh(
       convexGeometry([path === null ? strip(0, DRIVEWAY_WIDTH) : strip(path - doorAt, SIDE_PATH)]),
-      this.materials.asphalt,
+      this.materials.footpath,
     );
+    // Paved like the footpath, and over the kerb (dropped where the drive crosses it).
     driveway.renderOrder = ROAD_PART_STYLE.asphalt.layer;
     const terminal = this.graph.terminal(nodeId)!;
     const name = terminal.kind === "sink" ? terminal.name || defaultName(terminal.building, nodeId) : undefined;
@@ -179,9 +181,10 @@ export class RoadLayer extends Group {
 
   /** Switches every junction's signals to the lights for simulation time `time`. */
   updateSignals(time: number): void {
-    for (const approaches of this.signals.values()) {
+    for (const [nodeId, approaches] of this.signals) {
       const lights = signalLights(approaches.length, time, this.graph.rules.signals);
-      approaches.forEach((lamps, i) => this.kit.setLight(lamps, lights[i]));
+      const freeTurn = !!this.graph.junction(nodeId).turnOnRed;
+      approaches.forEach((lamps, i) => this.kit.setLight(lamps, lights[i], freeTurn));
     }
   }
 
@@ -263,7 +266,8 @@ export class RoadLayer extends Group {
       if (control === "stop") group.add(this.kit.stopSign(spot));
       else if (control === "yield") group.add(this.kit.yieldSign(spot));
       else {
-        const signal = this.kit.signal(spot);
+        // Kerb-side is the driver's right in right-hand traffic.
+        const signal = this.kit.signal(spot, this.graph.drivingSide === "right" ? 1 : -1);
         group.add(signal.group);
         lamps[approaches.indexOf(segment.id)] = signal.lamps;
       }
@@ -546,7 +550,7 @@ export class RoadLayer extends Group {
   private overMaterial(part: RoadPart): MeshBasicMaterial {
     let material = this.over.get(part);
     if (!material) {
-      material = this.materials[part].clone();
+      material = textured(part, this.materials[part].clone());
       material.depthTest = false;
       this.over.set(part, material);
     }
@@ -557,7 +561,7 @@ export class RoadLayer extends Group {
   private gradedMaterial(part: RoadPart): MeshBasicMaterial {
     let material = this.graded.get(part);
     if (!material) {
-      material = this.materials[part].clone();
+      material = textured(part, this.materials[part].clone());
       material.depthWrite = true;
       this.graded.set(part, material);
     }
@@ -587,5 +591,11 @@ export class RoadLayer extends Group {
     for (const { driveway } of this.markers.values()) driveway.geometry.dispose();
     this.buildings.dispose();
     for (const material of Object.values(this.materials)) material.dispose();
+    disposeSurfaces();
   }
+}
+
+/** Asphalt and footpaths get their surface texture (also on copies: a clone doesn't keep it). */
+function textured(part: RoadPart, material: MeshBasicMaterial): MeshBasicMaterial {
+  return part === "asphalt" || part === "footpath" ? textureSurface(material, part) : material;
 }

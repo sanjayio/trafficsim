@@ -5,6 +5,8 @@ import {
   Group,
   Mesh,
   MeshBasicMaterial,
+  Shape,
+  ShapeGeometry,
   type BufferGeometry,
   type Material,
 } from "three";
@@ -45,6 +47,7 @@ export class FurnitureKit {
     triangleInner: new CircleGeometry(SIGN_RADIUS * 0.8, 3),
     head: new BoxGeometry(HEAD.width, HEAD.height, HEAD.depth),
     lamp: new CircleGeometry(LAMP_RADIUS, 16),
+    arrow: arrowGeometry(),
   };
   private materials = {
     pole: new MeshBasicMaterial({ color: 0x9aa0a6 }),
@@ -75,8 +78,11 @@ export class FurnitureKit {
     return group;
   }
 
-  /** A signal head on a pole; switch its lights with `setLight`. */
-  signal(spot: FurnitureSpot): { group: Group; lamps: Mesh[] } {
+  /**
+   * A signal head on a pole; switch its lights with `setLight`. Over the green lamp, a green arrow
+   * pointing kerb-side (`kerb`: 1 to the driver's right, -1 left), lit on red where turning that way is allowed.
+   */
+  signal(spot: FurnitureSpot, kerb: 1 | -1): { group: Group; lamps: Mesh[] } {
     const group = this.post(spot, SIGNAL_HEIGHT);
     const head = this.mesh(this.geometries.head, this.materials.head);
     head.position.set(0, SIGNAL_HEIGHT, POLE_RADIUS + HEAD.depth / 2);
@@ -88,12 +94,27 @@ export class FurnitureKit {
       group.add(lamp);
       return lamp;
     });
-    return { group, lamps };
+    const arrow = this.mesh(this.geometries.arrow, this.materials.lampOn.green);
+    // Local +z faces the driver, so the driver's right is local +x.
+    arrow.rotation.z = kerb === 1 ? 0 : Math.PI;
+    arrow.position.set(0, SIGNAL_HEIGHT - LAMP_SPACING, POLE_RADIUS + HEAD.depth + 0.1);
+    arrow.castShadow = false;
+    arrow.visible = false;
+    arrow.userData.arrow = true;
+    group.add(arrow);
+    return { group, lamps: [...lamps, arrow] };
   }
 
-  /** Lights the lamp for `light` and dims the others (only touches lamps that change). */
-  setLight(lamps: Mesh[], light: SignalLight): void {
+  /**
+   * Lights the lamp for `light` and dims the others (only touches lamps that change). On red with
+   * `freeTurn` (turning kerb-side on red allowed), the green arrow lights too.
+   */
+  setLight(lamps: Mesh[], light: SignalLight, freeTurn = false): void {
     for (const lamp of lamps) {
+      if (lamp.userData.arrow) {
+        lamp.visible = freeTurn && light === "red";
+        continue;
+      }
       const own = lamp.userData.light as SignalLight;
       const material = own === light ? this.materials.lampOn[own] : this.materials.lampOff[own];
       if (lamp.material !== material) lamp.material = material;
@@ -147,6 +168,21 @@ export class FurnitureKit {
     mesh.castShadow = true;
     return mesh;
   }
+}
+
+/** An arrow pointing along +x, sized to sit within a lamp. */
+function arrowGeometry(): ShapeGeometry {
+  const r = LAMP_RADIUS;
+  const shape = new Shape()
+    .moveTo(-0.8 * r, -0.22 * r)
+    .lineTo(0.1 * r, -0.22 * r)
+    .lineTo(0.1 * r, -0.6 * r)
+    .lineTo(0.85 * r, 0)
+    .lineTo(0.1 * r, 0.6 * r)
+    .lineTo(0.1 * r, 0.22 * r)
+    .lineTo(-0.8 * r, 0.22 * r)
+    .closePath();
+  return new ShapeGeometry(shape);
 }
 
 function mapLights<T>(make: (light: SignalLight) => T): Record<SignalLight, T> {

@@ -1,6 +1,6 @@
 import type { BufferGeometry } from "three";
 import { segmentCrossing, type Vec2 } from "../core/geometry";
-import { convexGeometry, fill } from "./flat";
+import { convexGeometry, fill, KERB_WIDTH } from "./flat";
 
 /** One road as it leaves a junction. */
 export interface JunctionArm {
@@ -40,7 +40,7 @@ export function buildJunctionParts(
   /** Kerb radius at the corners (the footpath's back edge is concentric, this minus the footpath width); 0 for sharp corners. */
   cornerRadius: number,
 ): {
-  parts: { part: "asphalt" | "footpath"; geometry: BufferGeometry }[];
+  parts: { part: "asphalt" | "footpath" | "kerb"; geometry: BufferGeometry }[];
   /**
    * Per arm (same order as `arms`), how far along it the junction's paved corners reach, so its
    * markings can start clear of the junction.
@@ -53,6 +53,7 @@ export function buildJunctionParts(
   const order = arms.map((_, i) => i).sort((p, q) => angleOf(arms[p]) - angleOf(arms[q]));
   const asphalt: Vec2[][] = [];
   const footpath: Vec2[][] = [];
+  const kerbs: Vec2[][] = [];
 
   for (let k = 0; k < order.length; k++) {
     const ia = order[k];
@@ -84,11 +85,20 @@ export function buildJunctionParts(
         maxShare,
       );
       if (outer) footpath.push(...outer.triangles);
+      // The kerb stones round the corner, the same way (the asphalt covers all but their outer edge).
+      const stones = fillet(
+        trace(a, a.halfWidth + KERB_WIDTH, reach),
+        trace(b, -(b.halfWidth + KERB_WIDTH), reach),
+        kerb.radius - KERB_WIDTH,
+        maxShare,
+      );
+      if (stones) kerbs.push(...stones.triangles);
     }
   }
 
-  const parts: { part: "asphalt" | "footpath"; geometry: BufferGeometry }[] = [];
+  const parts: { part: "asphalt" | "footpath" | "kerb"; geometry: BufferGeometry }[] = [];
   if (footpath.length) parts.push({ part: "footpath", geometry: convexGeometry(footpath) });
+  if (kerbs.length) parts.push({ part: "kerb", geometry: convexGeometry(kerbs) });
   if (asphalt.length) parts.push({ part: "asphalt", geometry: convexGeometry(asphalt) });
   return { parts, reach: reachOut };
 }

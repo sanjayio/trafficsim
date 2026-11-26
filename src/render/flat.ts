@@ -11,6 +11,8 @@ export const FlatLayer = {
   ground: -1,
   grid: 0,
   footpath: 1,
+  /** Between footpath and asphalt: the asphalt covers all of a kerb band but its outer edge. */
+  kerb: 1.5,
   asphalt: 2,
   markings: 3,
   /** Previews draw above everything; their own parts keep the same relative order. */
@@ -18,6 +20,9 @@ export const FlatLayer = {
 } as const;
 
 const CAP_SEGMENTS = 12;
+
+/** Width of the kerb stones along a footpath's road edge (a lighter band, so the footpath reads as raised). */
+export const KERB_WIDTH = 1;
 
 export function flatMaterial(color: number, opacity = 1): MeshBasicMaterial {
   return new MeshBasicMaterial({

@@ -2,7 +2,7 @@ import type { BufferGeometry } from "three";
 import { distance, segmentCrossing, type Vec2 } from "../core/geometry";
 import type { RoundaboutShape } from "../core/junction";
 import { LANE_WIDTH, MEDIAN_WIDTH } from "../core/roadSpec";
-import { convexGeometry, fill, FlatLayer } from "./flat";
+import { convexGeometry, fill, FlatLayer, KERB_WIDTH } from "./flat";
 import type { JunctionArm } from "./junctionParts";
 
 const RING_SEGMENTS = 48;
@@ -35,7 +35,7 @@ const TOOTH_WIDTH = 3.2;
 const TOOTH_LENGTH = 4.5;
 const TOOTH_GAP = 1.6;
 
-type Part = "asphalt" | "footpath" | "median" | "laneLine" | "stopLine";
+type Part = "asphalt" | "footpath" | "kerb" | "median" | "laneLine" | "stopLine";
 
 /** An approach to the roundabout, as seen leaving it. */
 export interface RoundaboutArm extends JunctionArm {
@@ -74,13 +74,18 @@ export function buildRoundaboutParts(
 ): RoundaboutLayout {
   const asphalt: Vec2[][] = [circle(centre, shape.outer)];
   const footpath: Vec2[][] = [];
+  // Kerb stones along the footpaths' road edges: built like the footpath, a kerb's width wide.
+  const kerbStones: Vec2[][] = [];
   const lines: Vec2[][] = [];
   const teeth: Vec2[][] = [];
   const kerbs: Vec2[][] = [];
   const islands: Vec2[][] = [];
   for (let k = 1; k < shape.lanes; k++) lines.push(...dashedCircle(centre, shape.island + k * LANE_WIDTH + 2));
   const walkWidth = Math.max(0, ...arms.map((a) => a.footpath));
-  if (walkWidth > 0) footpath.push(circle(centre, shape.outer + walkWidth));
+  if (walkWidth > 0) {
+    footpath.push(circle(centre, shape.outer + walkWidth));
+    kerbStones.push(circle(centre, shape.outer + KERB_WIDTH));
+  }
 
   const signs: RoundaboutLayout["signs"] = [];
   const approaches: RoundaboutLayout["approaches"] = [];
@@ -102,13 +107,15 @@ export function buildRoundaboutParts(
     const at = (offset: (along: number) => number) => (along: number) => arm.edge(offset(along), along);
     const road = ([1, -1] as const).map((side) => at((a) => side * (arm.halfWidth + shift(a))));
     const walk = ([1, -1] as const).map((side) => at((a) => side * (arm.halfWidth + shift(a) + arm.footpath)));
-    return { arm, start, length, split, end, shift, road, walk };
+    const kerb = ([1, -1] as const).map((side) => at((a) => side * (arm.halfWidth + shift(a) + KERB_WIDTH)));
+    return { arm, start, length, split, end, shift, road, walk, kerb };
   });
   // Every road edge (and footpath edge) meeting the ring, for the kerbs between them.
   const roadEdges: KerbEdge[] = [];
   const walkEdges: KerbEdge[] = [];
+  const kerbEdges: KerbEdge[] = [];
 
-  plans.forEach(({ arm, start, split, end, shift, road, walk }, index) => {
+  plans.forEach(({ arm, start, split, end, shift, road, walk, kerb }, index) => {
     if (split) {
       // The widened road under the split (the island draws over its middle).
       asphalt.push(...band(arm, (a) => -(arm.halfWidth + shift(a)), (a) => arm.halfWidth + shift(a), 0, end));
@@ -116,6 +123,9 @@ export function buildRoundaboutParts(
         for (const side of [1, -1]) {
           footpath.push(
             ...band(arm, (a) => side * (arm.halfWidth + shift(a)), (a) => side * (arm.halfWidth + shift(a) + arm.footpath), 0, end),
+          );
+          kerbStones.push(
+            ...band(arm, (a) => side * (arm.halfWidth + shift(a)), (a) => side * (arm.halfWidth + shift(a) + KERB_WIDTH), 0, end),
           );
         }
       }
@@ -140,7 +150,10 @@ export function buildRoundaboutParts(
     const reach = Math.min(shape.outer * FLARE_RATIO_MAX * smoothness, arm.length * 0.5);
     ([1, -1] as const).forEach((side, i) => {
       roadEdges.push({ edge: road[i], road: index, side, reach, limit: arm.length });
-      if (walkWidth > 0 && arm.footpath > 0) walkEdges.push({ edge: walk[i], road: index, side, reach, limit: arm.length });
+      if (walkWidth > 0 && arm.footpath > 0) {
+        walkEdges.push({ edge: walk[i], road: index, side, reach, limit: arm.length });
+        kerbEdges.push({ edge: kerb[i], road: index, side, reach, limit: arm.length });
+      }
     });
 
     approaches.push({ inset: split ? end : shape.outer, giveWay: !split });
@@ -153,7 +166,10 @@ export function buildRoundaboutParts(
   });
 
   asphalt.push(...kerbsBetween(centre, shape.outer, roadEdges));
-  if (walkWidth > 0) footpath.push(...kerbsBetween(centre, shape.outer + walkWidth, walkEdges));
+  if (walkWidth > 0) {
+    footpath.push(...kerbsBetween(centre, shape.outer + walkWidth, walkEdges));
+    kerbStones.push(...kerbsBetween(centre, shape.outer + KERB_WIDTH, kerbEdges));
+  }
 
   const parts: RoundaboutLayout["parts"] = [
     { part: "asphalt", order: FlatLayer.asphalt + 0.5, geometry: convexGeometry(asphalt) },
@@ -162,6 +178,7 @@ export function buildRoundaboutParts(
     { part: "median", order: FlatLayer.markings + 0.2, geometry: convexGeometry([circle(centre, shape.island - ISLAND_KERB)]) },
   ];
   if (footpath.length) parts.push({ part: "footpath", order: FlatLayer.footpath, geometry: convexGeometry(footpath) });
+  if (kerbStones.length) parts.push({ part: "kerb", order: FlatLayer.kerb, geometry: convexGeometry(kerbStones) });
   if (lines.length) parts.push({ part: "laneLine", order: FlatLayer.markings + 0.1, geometry: convexGeometry(lines) });
   if (teeth.length) parts.push({ part: "stopLine", order: FlatLayer.markings + 0.1, geometry: convexGeometry(teeth) });
   if (islands.length) {

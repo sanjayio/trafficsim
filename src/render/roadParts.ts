@@ -12,10 +12,10 @@ import {
   type RoadSpec,
 } from "../core/roadSpec";
 import { laneOffsets, type Turn } from "../core/lanes";
-import { convexGeometry, FlatLayer } from "./flat";
+import { convexGeometry, FlatLayer, KERB_WIDTH } from "./flat";
 import { palette } from "./palette";
 
-export type RoadPart = "footpath" | "asphalt" | "median" | "centerLine" | "laneLine" | "arrow" | "stopLine";
+export type RoadPart = "footpath" | "kerb" | "asphalt" | "median" | "centerLine" | "laneLine" | "arrow" | "stopLine";
 
 /** How markings finish at one end of a road. */
 export interface RoadEnd {
@@ -40,6 +40,7 @@ export interface RoadEnd {
 
 export const ROAD_PART_STYLE: Record<RoadPart, { color: number; layer: number }> = {
   footpath: { color: palette.footpath, layer: FlatLayer.footpath },
+  kerb: { color: palette.kerb, layer: FlatLayer.kerb },
   asphalt: { color: palette.asphalt, layer: FlatLayer.asphalt },
   median: { color: palette.median, layer: FlatLayer.markings },
   centerLine: { color: palette.centerLine, layer: FlatLayer.markings },
@@ -81,7 +82,10 @@ export function buildRoadParts(
   const deadEnd: RoadEnd = { inset: carriageway / 2, entry: "none", turnaround: true };
   const { start, end } = ends ?? { start: deadEnd, end: deadEnd };
 
-  if (spec.footpath) parts.push({ part: "footpath", geometry: convexGeometry(surface(path, roadWidth(spec), caps, paved)) });
+  if (spec.footpath) {
+    parts.push({ part: "footpath", geometry: convexGeometry(surface(path, roadWidth(spec), caps, paved)) });
+    parts.push({ part: "kerb", geometry: convexGeometry(surface(path, carriageway + KERB_WIDTH * 2, caps, paved)) });
+  }
   parts.push({ part: "asphalt", geometry: convexGeometry(surface(path, carriageway, caps, paved)) });
 
   // Markings stop short of junctions so they don't run through them. At a two-way dead end they
@@ -288,6 +292,8 @@ export function buildBendSurface(spec: RoadSpec, edge: (offset: number) => Curve
   if (spec.footpath) {
     const out = half + FOOTPATH_WIDTH;
     parts.push({ part: "footpath", geometry: convexGeometry([...band(edge(-out), edge(-half)), ...band(edge(half), edge(out))]) });
+    const kerb = half + KERB_WIDTH;
+    parts.push({ part: "kerb", geometry: convexGeometry([...band(edge(-kerb), edge(-half)), ...band(edge(half), edge(kerb))]) });
   }
   return parts;
 }
