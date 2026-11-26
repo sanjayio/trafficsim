@@ -15,3 +15,278 @@ body {
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
 }
+
+/* Tutorial scenes (see TutorialScene): small looping pictures, one per slide. */
+.tut-enter {
+  animation: tut-enter 0.25s ease-out;
+}
+@keyframes tut-enter {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+}
+.tut-scene svg * {
+  transform-box: fill-box;
+}
+
+/* Cars driving along a road, each way. */
+.tut-drive-right {
+  animation: tut-drive-right 4s linear infinite;
+}
+.tut-drive-left {
+  animation: tut-drive-left 4s linear infinite;
+}
+@keyframes tut-drive-right {
+  from {
+    transform: translateX(-20px);
+  }
+  to {
+    transform: translateX(340px);
+  }
+}
+@keyframes tut-drive-left {
+  from {
+    transform: translateX(340px);
+  }
+  to {
+    transform: translateX(-20px);
+  }
+}
+
+/* Each tool lit in turn. */
+.tut-tool {
+  animation: tut-tool 4.8s infinite;
+}
+@keyframes tut-tool {
+  0%,
+  22% {
+    background: rgb(14 165 233 / 0.9);
+    color: white;
+  }
+  25%,
+  100% {
+    background: rgb(23 23 23 / 0.85);
+  }
+}
+
+/* A road drawn from one click to the next, then cleared. */
+.tut-draw {
+  stroke-dasharray: 100;
+  animation: tut-draw 4s ease-in-out infinite;
+}
+@keyframes tut-draw {
+  0%,
+  10% {
+    stroke-dashoffset: 100;
+    opacity: 1;
+  }
+  50%,
+  85% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+.tut-click {
+  transform-origin: center;
+  animation: tut-click 4s ease-out infinite;
+}
+@keyframes tut-click {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  6% {
+    transform: scale(1.6);
+    opacity: 1;
+  }
+  12%,
+  85% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Signals: one pair of approaches green (then amber) while the other is red, in turn. */
+.tut-light-a {
+  animation: tut-light 6s infinite;
+}
+.tut-light-b {
+  animation: tut-light 6s infinite -3s;
+}
+@keyframes tut-light {
+  0%,
+  42% {
+    fill: #2fbf71;
+  }
+  43%,
+  50% {
+    fill: #f5a524;
+  }
+  51%,
+  100% {
+    fill: #e5484d;
+  }
+}
+.tut-cross-x {
+  animation: tut-cross-x 6s linear infinite;
+}
+.tut-cross-y {
+  animation: tut-cross-y 6s linear infinite -3s;
+}
+@keyframes tut-cross-x {
+  0% {
+    transform: translateX(-20px);
+  }
+  45%,
+  100% {
+    transform: translateX(340px);
+  }
+}
+@keyframes tut-cross-y {
+  0% {
+    transform: translateY(-20px);
+  }
+  45%,
+  100% {
+    transform: translateY(140px);
+  }
+}
+.tut-pulse {
+  animation: tut-pulse 2s ease-in-out infinite;
+  transform-origin: center;
+}
+@keyframes tut-pulse {
+  50% {
+    transform: scale(1.25);
+  }
+}
+
+/* From a home's door, along the road, into the shop. */
+.tut-trip {
+  offset-path: path("M 50 40 L 50 72 Q 50 78 56 78 L 264 78 Q 270 78 270 72 L 270 40");
+  offset-rotate: auto;
+  animation: tut-trip 5.1s linear infinite;
+}
+@keyframes tut-trip {
+  0% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  4%,
+  94% {
+    opacity: 1;
+  }
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+
+/* A box dragged over a road and a building, which go; then they're back. */
+.tut-select {
+  transform-origin: top left;
+  animation: tut-select 4s ease-out infinite;
+}
+@keyframes tut-select {
+  0% {
+    transform: scale(0);
+    opacity: 1;
+  }
+  35%,
+  50% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  60%,
+  100% {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+.tut-demolish {
+  animation: tut-demolish 4s infinite;
+}
+@keyframes tut-demolish {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  58%,
+  90% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/* Pan, turn and zoom round a little town. */
+.tut-scene .tut-camera {
+  transform-box: view-box;
+  transform-origin: 160px 60px;
+  animation: tut-camera 9s ease-in-out infinite;
+}
+@keyframes tut-camera {
+  0%,
+  100% {
+    transform: none;
+  }
+  25% {
+    transform: translate(-40px, 10px);
+  }
+  50% {
+    transform: rotate(20deg);
+  }
+  75% {
+    transform: scale(1.5);
+  }
+}
+
+/* Paused, then faster at each speed. */
+.tut-speed {
+  animation: tut-speed 6s linear infinite;
+}
+@keyframes tut-speed {
+  0%,
+  25% {
+    transform: translateX(10px);
+  }
+  50% {
+    transform: translateX(50px);
+  }
+  75% {
+    transform: translateX(130px);
+  }
+  100% {
+    transform: translateX(330px);
+  }
+}
+.tut-chip {
+  fill: rgb(23 23 23 / 0.85);
+  animation: tut-chip 6s infinite;
+}
+@keyframes tut-chip {
+  0%,
+  24% {
+    fill: rgb(14 165 233 / 0.9);
+  }
+  25%,
+  100% {
+    fill: rgb(23 23 23 / 0.85);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tut-enter,
+  .tut-scene * {
+    animation: none !important;
+  }
+}

@@ -16,6 +16,7 @@ import { KeyCombo } from "./ControlsDialog";
 import { CONTROL_GROUPS, type ControlRow } from "./controls";
 import { Dialog } from "./Dialog";
 import { keepFocusOnGame } from "./Panel";
+import { TutorialScene } from "./TutorialScenes";
 
 /** What each group of controls is for, in a sentence, with an icon (by the group's title in `controls.ts`). */
 const INTRO: Record<string, { icon: LucideIcon; text: string }> = {
@@ -77,7 +78,8 @@ export function TutorialDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <Dialog title="Tutorial" onClose={onClose} onKey={onKey}>
-      <section className="flex min-h-80 flex-col gap-4" aria-live="polite">
+      {/* Keyed by slide, so it slides in afresh and its picture starts from the beginning. */}
+      <section key={index} className="tut-enter flex min-h-80 flex-col gap-4" aria-live="polite">
         <div className="flex items-center gap-3">
           <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-sky-500/15 text-sky-400">
             <Icon size={20} aria-hidden />
@@ -89,6 +91,7 @@ export function TutorialDialog({ onClose }: { onClose: () => void }) {
             <h3 className="text-base font-semibold text-white">{slide.title}</h3>
           </div>
         </div>
+        <TutorialScene title={slide.title} />
         <p className="text-neutral-300">{slide.text}</p>
         {slide.rows.length > 0 && (
           <dl className="flex flex-col gap-2 rounded-xl border border-white/10 bg-white/[0.03] p-3">
