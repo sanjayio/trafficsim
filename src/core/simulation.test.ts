@@ -146,6 +146,39 @@ describe("Simulation", () => {
     expect(normalizeRoadSpec({ ...DEFAULT_ROAD_SPEC, speed: 50 }).speed).toBeUndefined();
   });
 
+  it("doesn't send cars out onto a jammed road, and starts again when it clears", () => {
+    const graph = new RoadGraph();
+    road(graph, 0, 0, 600, 0, { ...DEFAULT_ROAD_SPEC, oneWay: true });
+    graph.setTerminal(at(graph, 600, 0), SINK);
+    const home = graph.nodeOnRoad({ x: 400, y: 5 })!;
+    graph.setTerminal(home.id, { ...DEFAULT_SOURCE, rate: 60, side: 1 });
+    const sim = new Simulation(graph);
+    sim.parking = false;
+    // The far end lets a car in only now and then: the road jams back past the home, creeping along.
+    const blockable = sim as unknown as { mayTurnIn: (car: Car, turn: Car["legs"][number]) => boolean };
+    const mayTurnIn = blockable.mayTurnIn.bind(sim);
+    let open = false;
+    blockable.mayTurnIn = (car, turn) => (open || sim.time % 10 < 0.5) && mayTurnIn(car, turn);
+    // Whether the queue ever reaches the driveway, and when each car is sent out.
+    let reached = false;
+    const sent = new Set<number>();
+    const watch = () => {
+      reached ||= sim.cars.some((c) => c.legs[c.leg].key.startsWith("r:") && c.v < 1 && Math.abs(sim.pose(c).x - 400) < 20);
+      for (const c of sim.cars) sent.add(c.id);
+    };
+    run(sim, 150, watch);
+    // The home stops sending cars once the queue is close ahead of its driveway: none waiting at its
+    // door or on its driveway either.
+    expect(sim.cars.length).toBeGreaterThan(4);
+    expect(reached).toBe(false);
+    expect(sim.cars.filter((c) => /^(door|out):/.test(c.legs[c.leg].key))).toEqual([]);
+    // Open again: the road clears, and cars come out again.
+    open = true;
+    const before = sent.size;
+    run(sim, 60, watch);
+    expect(sent.size).toBeGreaterThan(before + 10);
+  });
+
   it("counts finished trips and their times, until the stats are reset", () => {
     const graph = new RoadGraph();
     road(graph, 0, 0, 400, 0);

@@ -108,6 +108,8 @@ const LET_IN_PAUSE = 5;
 const SQUEEZE_LENGTH = CAR_LENGTH * 0.8;
 /** Slower than this (units/s), a car ahead counts as held up when choosing a lane. */
 const CRAWL = 5;
+/** A home that can't send a car out onto a jammed road looks again after this many seconds. */
+const RETRY_SPAWN = 0.5;
 /** A car standing still this long counts as stuck. */
 const STUCK_AFTER = 10;
 
@@ -179,6 +181,8 @@ export class Simulation {
   /** Cars by lane this step (see `byLane`). */
   private lanes = new Map<string, Car[]>();
   private due = new Map<NodeId, number>();
+  /** Homes waiting for the road outside to clear: when to look again (see `spawn`). */
+  private retryAt = new Map<NodeId, number>();
   private random: () => number;
   private nextId = 1;
   private unsubscribe: () => void;
@@ -657,7 +661,7 @@ export class Simulation {
       // through its wait, so homes don't all send their first car at once.
       const due = Math.min(1, (this.due.get(source) ?? this.random()) + (t.rate / 60) * dt);
       this.due.set(source, due);
-      if (due < 1) continue;
+      if (due < 1 || (this.retryAt.get(source) ?? 0) > this.time) continue;
       // Only to shops and offices with a free bay: when they're all full, the source waits.
       const reachable = sinks.filter(([id, s]) => headsTo(t, id, s.building)).map(([id]) => id).filter(
         (sink) => sink !== source && (!this.parking || this.freeBay(sink) !== null) && this.route(source, sink),
@@ -671,6 +675,11 @@ export class Simulation {
       // Not while the last car is still at the door or near the top of the driveway (either way out).
       const blocked = this.cars.some((c) => c.legs[c.leg].key === legs[0].key || this.nearDoor(c, source));
       if (blocked) continue;
+      // Not while the road outside is jammed where the driveway joins it: look again in a moment.
+      if (this.jammedAtJoin(legs)) {
+        this.retryAt.set(source, this.time + RETRY_SPAWN);
+        continue;
+      }
       this.due.set(source, 0);
       this.cars.push({
         id: this.nextId++,
@@ -701,6 +710,20 @@ export class Simulation {
         if (!this.lotKeys.has(sink)) this.lotKeys.set(sink, lotKey(this.graph.terminal(sink))!);
       }
     }
+  }
+
+  /**
+   * Whether the road is full where `legs` first join it: cars standing (or crawling) in that lane
+   * where they'd join it, or queued just ahead of there.
+   */
+  private jammedAtJoin(legs: Movement[]): boolean {
+    const join = legs.find((l) => l.joinAt !== undefined && l.outKey !== undefined);
+    if (!join) return false;
+    return this.cars.some((c) => {
+      if (c.v >= CRAWL || c.legs[c.leg].key !== join.outKey) return false;
+      const ahead = this.at(c) - join.joinAt!;
+      return ahead > -CAR_LENGTH * 2 && ahead < CAR_LENGTH * 4;
+    });
   }
 
   /** A bay at shop or office `sink` no car holds, or null when they're all taken. */
