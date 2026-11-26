@@ -1,4 +1,6 @@
-import { Check, Cloud, CloudRain, Moon, Sun, Sunset, Wind, type LucideIcon } from "lucide-react";
+import { Activity, Check, Cloud, CloudRain, Moon, RotateCcw, Sun, Sunset, Wind, type LucideIcon } from "lucide-react";
+import { useState } from "react";
+import type { Engine } from "../render/Engine";
 import { gameStore, useGame, type Weather } from "../state/store";
 import { keepFocusOnGame } from "./Panel";
 
@@ -25,7 +27,48 @@ function partOfDay(hours: number): LucideIcon {
   return Sun;
 }
 
-export function StatusBar() {
+/** Live traffic measures, to see how the traffic rules play out; opened from the status bar. */
+function TrafficStatsPanel({ engine }: { engine: Engine | null }) {
+  const traffic = useGame((s) => s.stats.traffic);
+  const rows: [string, string][] = traffic
+    ? [
+        ["Cars driving", `${traffic.cars}`],
+        ["Stuck (still 10 s+)", `${traffic.stuck}`],
+        ["Trips finished", `${traffic.trips}`],
+        ["Mean trip time", traffic.trips ? `${traffic.meanTrip.toFixed(1)} s` : "–"],
+        ["Trips in last minute", `${traffic.perMinute}`],
+        ["Lane changes per trip", traffic.trips ? (traffic.laneChanges / traffic.trips).toFixed(2) : "–"],
+        ["Reroutes", `${traffic.reroutes}`],
+      ]
+    : [];
+  return (
+    <div className="pointer-events-auto absolute bottom-[5.5rem] right-0 w-64 rounded-xl border border-white/10 bg-neutral-900/90 p-3 text-xs text-neutral-300 shadow-xl shadow-black/40 backdrop-blur">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="font-medium uppercase tracking-wide text-neutral-500">Traffic</span>
+        <button
+          type="button"
+          onClick={() => engine?.sim.resetStats()}
+          onMouseDown={keepFocusOnGame}
+          className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-neutral-400 transition-colors duration-100 hover:bg-white/10 hover:text-white"
+        >
+          <RotateCcw size={12} aria-hidden />
+          Reset
+        </button>
+      </div>
+      <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1">
+        {rows.map(([label, value]) => (
+          <div key={label} className="contents">
+            <dt className="text-neutral-400">{label}</dt>
+            <dd className="text-right text-neutral-100">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+export function StatusBar({ engine }: { engine: Engine | null }) {
+  const [showStats, setShowStats] = useState(false);
   const fps = useGame((s) => s.stats.fps);
   const autosave = useGame((s) => s.autosave);
   const timeOfDay = useGame((s) => s.timeOfDay);
@@ -34,6 +77,7 @@ export function StatusBar() {
 
   return (
     <div className="pointer-events-none absolute inset-x-3 bottom-3 flex justify-end whitespace-nowrap text-xs text-neutral-400">
+      {showStats && <TrafficStatsPanel engine={engine} />}
       <div className="flex items-center gap-3 rounded-lg bg-neutral-900/70 px-2.5 py-1 tabular-nums backdrop-blur">
         {/* Whether the map is kept in the browser (see Engine.restoreAutosave). */}
         {autosave && (
@@ -80,7 +124,19 @@ export function StatusBar() {
           />
           <span className="w-9 text-neutral-300">{clock(timeOfDay)}</span>
         </label>
-        <span>{fps} fps</span>
+        <button
+          type="button"
+          aria-expanded={showStats}
+          title="Traffic stats"
+          onClick={() => setShowStats(!showStats)}
+          onMouseDown={keepFocusOnGame}
+          className={`pointer-events-auto -mx-1 flex items-center gap-1 rounded-md px-1 py-0.5 transition-colors duration-100 hover:bg-white/10 hover:text-neutral-100 ${
+            showStats ? "text-neutral-100" : ""
+          }`}
+        >
+          <Activity size={12} aria-hidden />
+          {fps} fps
+        </button>
       </div>
     </div>
   );

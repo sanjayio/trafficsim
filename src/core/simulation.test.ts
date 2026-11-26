@@ -94,6 +94,25 @@ describe("Simulation", () => {
     expect(sim.delivered).toBeGreaterThan(5);
   });
 
+  it("counts finished trips and their times, until the stats are reset", () => {
+    const graph = new RoadGraph();
+    road(graph, 0, 0, 400, 0);
+    graph.setTerminal(at(graph, 0, 0), { ...DEFAULT_SOURCE, rate: 30 });
+    graph.setTerminal(at(graph, 400, 0), SINK);
+    const sim = new Simulation(graph);
+    sim.parking = false;
+    run(sim, 60);
+    const stats = sim.stats();
+    expect(stats.trips).toBe(sim.delivered);
+    // About 400 units at cruising speed, plus pulling out and turning in.
+    expect(stats.meanTrip).toBeGreaterThan(8);
+    expect(stats.meanTrip).toBeLessThan(30);
+    expect(stats.perMinute).toBeGreaterThan(0);
+    expect(stats.stuck).toBe(0);
+    sim.resetStats();
+    expect(sim.stats()).toMatchObject({ trips: 0, meanTrip: 0, perMinute: 0, laneChanges: 0 });
+  });
+
   it("gives the route ahead of a car, from where it is to the end of its trip", () => {
     const graph = new RoadGraph();
     road(graph, 0, 0, 400, 0);

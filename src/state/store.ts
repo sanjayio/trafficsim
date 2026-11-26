@@ -2,6 +2,7 @@ import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 import type { DrivingSide } from "../core/roadGraph";
 import { DEFAULT_ROAD_SPEC, type RoadSpec } from "../core/roadSpec";
+import type { TrafficStats } from "../core/simulation";
 import type { BulldozeMode, RoadMode, TrafficMode } from "../tools/Tool";
 
 /** Parallel road offset limits and step, centre to centre, in world units. */
@@ -23,6 +24,7 @@ export type Weather = (typeof WEATHERS)[number];
 
 export interface Stats {
   fps: number;
+  traffic: TrafficStats | null;
 }
 
 interface GameState {
@@ -120,7 +122,7 @@ export const gameStore = createStore<GameState>()((set, get) => ({
   hint: null,
   parallel: false,
   parallelOffset: 64,
-  stats: { fps: 0 },
+  stats: { fps: 0, traffic: null },
   autosave: null,
   message: null,
   drivingSide: "right",

@@ -38,7 +38,7 @@ export default function App() {
         onShowControls={() => setDialog("controls")}
         onShowTutorial={() => setDialog("tutorial")}
       />
-      <StatusBar />
+      <StatusBar engine={engine} />
       {dialog === "newMap" && engine && (
         <NewMapDialog engine={engine} onClose={closeDialog} onShowTutorial={() => setDialog("tutorial")} />
       )}

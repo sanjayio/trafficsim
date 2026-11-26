@@ -451,7 +451,7 @@ export class Engine {
     this.statsFrames++;
     this.statsElapsed += deltaMS;
     if (this.statsElapsed >= STATS_INTERVAL_MS) {
-      setStats({ fps: Math.round((this.statsFrames * 1000) / this.statsElapsed) });
+      setStats({ fps: Math.round((this.statsFrames * 1000) / this.statsElapsed), traffic: this.sim.stats() });
       this.statsElapsed = 0;
       this.statsFrames = 0;
     }

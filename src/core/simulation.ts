@@ -65,7 +65,28 @@ export interface Car {
   parking: { sink: NodeId; bay: number } | null;
   /** Parked: the simulation time it leaves. */
   leaveAt: number | null;
+  /** When the trip being driven began (for the trip-time stats). */
+  started: number;
+  /** Seconds standing still, anywhere but parked (for the stats' stuck count). */
+  idle: number;
 }
+
+/** Traffic measures since the stats were last reset, to compare how rules play out. */
+export interface TrafficStats {
+  /** Cars on the map now, and of those standing still for over `STUCK_AFTER` seconds. */
+  cars: number;
+  stuck: number;
+  /** Trips finished (to a shop or office, or back home), and their mean time in seconds. */
+  trips: number;
+  meanTrip: number;
+  /** Trips finished in the last minute of simulation time. */
+  perMinute: number;
+  laneChanges: number;
+  reroutes: number;
+}
+
+/** A car standing still this long counts as stuck. */
+const STUCK_AFTER = 10;
 
 /** A shop's or office's footprint: what its bays depend on. Null for a home or no building. */
 function lotKey(t: Terminal | undefined): string | null {
@@ -115,6 +136,8 @@ export class Simulation {
   levelUps: NodeId[] = [];
   /** Cars that have reached their sink (parked, unless `parking` is off). */
   delivered = 0;
+  /** Counted since the stats were last reset (see `stats`). */
+  private counts = { trips: 0, tripTime: 0, laneChanges: 0, reroutes: 0, finished: [] as number[] };
   /**
    * Cars park in a free bay at their shop or office, stay a while and drive home; a shop with no
    * free bay gets no more until one leaves. Off, they vanish on arriving (traffic tests use this
@@ -158,6 +181,7 @@ export class Simulation {
         return;
       }
       if (e.type === "reset") {
+        this.resetStats();
         this.lotKeys.clear();
         this.junctionShapes.clear();
       }
@@ -199,6 +223,7 @@ export class Simulation {
       if (next?.rule && !car.cleared) car.s = Math.min(car.s, Math.max(before, legLength(car.legs[car.leg]) - CAR_LENGTH / 2));
       while (car.s >= legLength(car.legs[car.leg])) {
         if (car.leg === car.legs.length - 1) {
+          this.finishTrip(car);
           if (car.parking) {
             // In its bay: stays a while.
             car.s = legLength(car.legs[car.leg]);
@@ -221,10 +246,12 @@ export class Simulation {
         if (car.legs[car.leg].reverse) car.parking = null;
         car.s -= legLength(car.legs[car.leg]);
         car.leg++;
+        if (car.legs[car.leg].key.startsWith("c:")) this.counts.laneChanges++;
         car.cleared = false;
         car.arrival = null;
         car.stopped = 0;
       }
+      car.idle = car.v < 0.5 ? car.idle + dt : 0;
       const toLine = legLength(car.legs[car.leg]) - car.s;
       // Standing at the line: the front bumper (half a car ahead) within a few units of it.
       car.stopped = car.v < 0.5 && toLine - CAR_LENGTH / 2 < 6 ? car.stopped + dt : 0;
@@ -255,6 +282,32 @@ export class Simulation {
     }
     const next = car.legs[car.leg + 1];
     return next && legLength(leg) - car.s < this.graph.rules.trips.signalAhead ? approach(next) : 0;
+  }
+
+  /** Traffic measures since the last `resetStats` (or map load). */
+  stats(): TrafficStats {
+    const { trips, tripTime, laneChanges, reroutes, finished } = this.counts;
+    while (finished.length && finished[0] < this.time - 60) finished.shift();
+    const driving = this.cars.filter((c) => c.leaveAt === null);
+    return {
+      cars: driving.length,
+      stuck: driving.filter((c) => c.idle > STUCK_AFTER).length,
+      trips,
+      meanTrip: trips ? tripTime / trips : 0,
+      perMinute: finished.length,
+      laneChanges,
+      reroutes,
+    };
+  }
+
+  resetStats(): void {
+    this.counts = { trips: 0, tripTime: 0, laneChanges: 0, reroutes: 0, finished: [] };
+  }
+
+  private finishTrip(car: Car): void {
+    this.counts.trips++;
+    this.counts.tripTime += this.time - car.started;
+    this.counts.finished.push(this.time);
   }
 
   /** How high a car is: up on a bridge, down in a tunnel, else 0. */
@@ -427,6 +480,8 @@ export class Simulation {
         trip: { from: source, to: sink, bays: bay === null ? {} : { parkAt: bay } },
         parking: bay === null ? null : { sink, bay },
         leaveAt: null,
+        started: this.time,
+        idle: 0,
       });
       if (bay !== null) {
         if (!this.held.has(sink)) this.held.set(sink, new Set());
@@ -467,6 +522,7 @@ export class Simulation {
       cleared: false,
       arrival: null,
       stopped: 0,
+      started: this.time,
       trip: { from: sink, to: car.home, bays: { leaveFrom: bay } },
     });
     // Out of an underground car park (no backing out of a bay): its space is free once it sets off.
