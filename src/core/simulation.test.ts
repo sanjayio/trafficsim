@@ -1036,4 +1036,23 @@ describe("turning into driveways", () => {
     expect(turns).toBeGreaterThan(0);
     expect(stalled).toBe(0);
   });
+  it("only gives way to oncoming traffic on its own road, not on a street far away", () => {
+    const graph = new RoadGraph();
+    // Heading east to a shop on the far side (turning across traffic, driving on the right)...
+    road(graph, 0, 0, 900, 0);
+    const shop = graph.nodeOnRoad({ x: 500, y: -5 })!;
+    graph.setTerminal(shop.id, { ...SINK, side: -1 });
+    // ...while a busy one-way street 300 away runs west, the opposite way.
+    road(graph, 900, -300, 0, -300, { ...DEFAULT_ROAD_SPEC, oneWay: true });
+    graph.setTerminal(at(graph, 900, -300), { ...DEFAULT_SOURCE, rate: 40 });
+    graph.setTerminal(at(graph, 0, -300), SINK);
+    graph.setTerminal(at(graph, 900, 0), SINK);
+    graph.setTerminal(at(graph, 0, 0), { ...DEFAULT_SOURCE, rate: 20, sinks: [shop.id] });
+    const sim = new Simulation(graph);
+    sim.parking = false;
+    run(sim, 90);
+    // Nobody waiting long to turn in.
+    expect(sim.cars.filter((c) => c.legs[c.leg + 1]?.rule === "turnIn" && c.idle > 5)).toHaveLength(0);
+    expect(sim.delivered).toBeGreaterThan(30);
+  });
 });

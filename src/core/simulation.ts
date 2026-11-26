@@ -1,7 +1,7 @@
 import { effectiveControl, minorRoads, roundaboutShape, slipControlAt, slipRoad, signalApproaches, signalLights, type JunctionControl } from "./junction";
 import type { NodeId, RoadGraph, RoadSegment, SegmentId } from "./roadGraph";
 import { CRUISE_SPEED, findRoute, type Route } from "./routing";
-import { LANE_WIDTH, speedOf } from "./roadSpec";
+import { carriagewayWidth, LANE_WIDTH, speedOf } from "./roadSpec";
 import { connectionsAt, hasLaneConnector, laneOffsets, lanesInnerToKerb, turnAt, type Turn } from "./lanes";
 import { carPark, DRIVEWAY_BLEND, headsTo, type Terminal } from "./terminal";
 import { TURN_ORDER } from "./rules";
@@ -1155,11 +1155,15 @@ export class Simulation {
     const me = this.pose(car);
     const target = legAt(turn, legLength(turn)).p;
     const heading = { x: Math.cos(me.heading), y: Math.sin(me.heading) };
+    // Only traffic on this road: no further to the side than its far edge.
+    const road = this.graph.segments.get(car.legs[car.leg].segment!);
+    const width = road ? carriagewayWidth(road.spec) : LANE_WIDTH * 2;
     return !this.cars.some((c) => {
       if (c === car || !c.legs[c.leg].key.startsWith("r:")) return false;
       const p = this.pose(c);
       const h = { x: Math.cos(p.heading), y: Math.sin(p.heading) };
       if (h.x * heading.x + h.y * heading.y > -0.5) return false;
+      if (Math.abs((me.x - p.x) * h.y - (me.y - p.y) * h.x) > width) return false;
       const to = { x: target.x - p.x, y: target.y - p.y };
       const ahead = to.x * h.x + to.y * h.y;
       // A car standing still (waiting at a line itself) only counts when it's right there.
