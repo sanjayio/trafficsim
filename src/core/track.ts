@@ -62,6 +62,12 @@ export interface Leg {
   underground?: boolean;
   /** Roundabout legs: the ring's centre, the radius cars circulate at, and the angles they join and leave it. */
   ring?: { centre: Vec2; radius: number; entry: number; exit: number; direction: 1 | -1 };
+  /**
+   * Lane changes along a road: the whole of the lanes it leaves and joins, how far along the road
+   * (along the lane joined) it starts, and the furthest it can start and still finish before the
+   * road's end. A car that can't change where planned moves it on, see `TrackBuilder.changeAt`.
+   */
+  slide?: { entry: Leg; exit: Leg; lead: number; maxLead: number };
 }
 
 export function legLength(leg: Leg): number {
@@ -121,26 +127,38 @@ export class TrackBuilder {
     const exit = this.roadLeg(segment, fromNode, exitLane, ends);
     if (entryLane === exitLane) return [exit];
     const entry = this.roadLeg(segment, fromNode, entryLane, ends);
-    const change = Math.min(LANE_CHANGE_LENGTH, legLength(exit) * 0.6);
-    const lanes = laneOffsets(segment.spec, this.graph.drivingSide);
-    const half = (legLength(exit) - change) / 2;
-    const lead = early ? Math.min(LANE_CHANGE_LEAD, half) : half;
+    const half = (legLength(exit) - changeLength(exit)) / 2;
+    return this.changeAt(entry, exit, early ? Math.min(LANE_CHANGE_LEAD, half) : half);
+  }
+
+  /**
+   * Driving lane `entry` (a whole road leg), a smooth change starting `lead` along the road (as
+   * measured along `exit`), then lane `exit` from where it joins.
+   */
+  changeAt(entry: Leg, exit: Leg, lead: number): Leg[] {
+    const change = changeLength(exit);
     const leave = entry.from + lead * (legLength(entry) / (legLength(exit) || 1));
     const join = exit.from + lead + change;
     const p0 = entry.track.at(leave);
     const p1 = exit.track.at(join);
     const track = new Track(bridge(p0.p, p0.tangent, p1.p, p1.tangent));
+    const lanes = laneOffsets(this.graph.segments.get(entry.segment!)!.spec, this.graph.drivingSide);
+    const [entryLane, exitLane] = [entry, exit].map((l) => Number(l.key.split(":")[3]));
+    // Room to finish the change a car length before the road's end.
+    const maxLead = Math.max(lead, legLength(exit) - change - LANE_CHANGE_ROOM);
     return [
       { ...entry, to: leave },
       {
         track,
         from: 0,
         to: track.length,
-        key: `c:${entry.key}>${exitLane}`,
-        segment: segment.id,
+        // Cars changing at different points are on different paths: they don't follow each other.
+        key: `c:${entry.key}>${exitLane}@${Math.round(leave)}`,
+        segment: entry.segment,
         outKey: exit.key,
         joinAt: join,
         shift: lanes[exitLane] > lanes[entryLane] ? 1 : -1,
+        slide: { entry, exit, lead, maxLead },
       },
       { ...exit, from: join },
     ];
@@ -446,6 +464,13 @@ function straight(a: Vec2, b: Vec2): Curve {
 /** Longest stretch of road a lane change takes, and how far along the road it starts (less on short roads). */
 const LANE_CHANGE_LENGTH = 50;
 const LANE_CHANGE_LEAD = 20;
+/** A lane change finishes at least this far before the road's end. */
+const LANE_CHANGE_ROOM = 15;
+
+/** How long a lane change onto lane `exit` takes, along the road. */
+function changeLength(exit: Leg): number {
+  return Math.min(LANE_CHANGE_LENGTH, legLength(exit) * 0.6);
+}
 
 /** How far round the ring (radians) cars join and leave it from their approach's direction. */
 const RING_JOIN = 0.35;

@@ -20,13 +20,19 @@ export interface Route {
  * at a junction a car may only turn onto roads its lane connections lead to. Null when `to` can't
  * be reached.
  */
-export function findRoute(graph: RoadGraph, from: NodeId, to: NodeId): Route | null {
+export function findRoute(
+  graph: RoadGraph,
+  from: NodeId,
+  to: NodeId,
+  /** Setting off from `from` having arrived on road `via`, onto one of roads `only`. */
+  start?: { via: SegmentId; only: Set<SegmentId> },
+): Route | null {
   // Searched by (node, road arrived on), as which turns are allowed depends on the road arrived on.
   type State = { node: NodeId; via: SegmentId | null };
   const key = (s: State) => `${s.node}:${s.via}`;
-  const start: State = { node: from, via: null };
-  const time = new Map<string, number>([[key(start), 0]]);
-  const states = new Map<string, State>([[key(start), start]]);
+  const first: State = { node: from, via: start?.via ?? null };
+  const time = new Map<string, number>([[key(first), 0]]);
+  const states = new Map<string, State>([[key(first), first]]);
   const back = new Map<string, string>();
   const done = new Set<string>();
   // Which roads each junction's lane connections lead to from each road in.
@@ -66,6 +72,7 @@ export function findRoute(graph: RoadGraph, from: NodeId, to: NodeId): Route | n
     for (const segment of roads) {
       if (segment.spec.oneWay && segment.a !== current.node) continue;
       if (segment.id === current.via) continue;
+      if (start && current === first && !start.only.has(segment.id)) continue;
       if (current.via !== null && !allowed(current.node, current.via, segment.id)) continue;
       const next: State = { node: segment.a === current.node ? segment.b : segment.a, via: segment.id };
       const k = key(next);
@@ -95,7 +102,8 @@ export function findRoute(graph: RoadGraph, from: NodeId, to: NodeId): Route | n
     for (let k: string | undefined = end; k !== undefined; k = back.get(k)) {
       const s = states.get(k)!;
       nodes.unshift(s.node);
-      if (s.via !== null) segments.unshift(s.via);
+      // The road arrived on at the start (when setting off mid-route) isn't part of the route.
+      if (s.via !== null && s !== first) segments.unshift(s.via);
     }
     return { nodes, segments };
   }

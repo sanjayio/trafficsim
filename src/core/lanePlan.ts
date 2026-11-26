@@ -17,6 +17,8 @@ export interface LanePlan {
   /** Per road, the lane the car drives in from its start, and the one it leaves in. */
   entry: number[];
   exit: number[];
+  /** Per road, whether the lane it's entered in can't go where the route goes, so changing lane is a must. */
+  forced: boolean[];
 }
 
 /**
@@ -46,10 +48,11 @@ export function planLanes(facts: LaneFacts, from: number, entry: number, rules: 
     return Math.min(...facts.next(i, x).map((e) => cost(i + 1, e, depth)));
   };
 
-  const plan: LanePlan = { entry: [], exit: [] };
+  const plan: LanePlan = { entry: [], exit: [], forced: [] };
   let e = entry;
   for (let i = from; i < facts.roads; i++) {
     plan.entry[i] = e;
+    plan.forced[i] = !facts.valid(i).includes(e);
     const score = (x: number) =>
       rules.order.map((criterion) =>
         criterion === "fewestChanges"

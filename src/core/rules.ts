@@ -30,6 +30,7 @@ export interface TrafficRules {
   };
   signals: { green: number; amber: number };
   lanes: { order: LaneCriterion[]; lookahead: number; congestionAware: boolean; sight: number };
+  laneChange: { minSafeGap: number; reaction: number; urgency: boolean; minReaction: number; urgencyStart: number; deadlockReroute: boolean; rerouteWait: number };
   routing: { speedLimits: boolean; turnKerb: number; turnAcross: number; delayNone: number; delayYield: number; delayStop: number; delaySignals: number };
   trips: { parkMin: number; parkMax: number; signalAhead: number };
 }
@@ -51,6 +52,7 @@ export const DEFAULT_RULES: TrafficRules = {
   },
   signals: { green: 8, amber: 2 },
   lanes: { order: [...LANE_CRITERIA], lookahead: 3, congestionAware: true, sight: 150 },
+  laneChange: { minSafeGap: 6, reaction: 1.4, urgency: true, minReaction: 0.4, urgencyStart: 200, deadlockReroute: true, rerouteWait: 15 },
   routing: { speedLimits: true, turnKerb: 2, turnAcross: 5, delayNone: 0.5, delayYield: 1, delayStop: 3, delaySignals: 4 },
   trips: { parkMin: 20, parkMax: 100, signalAhead: 60 },
 };
@@ -66,6 +68,7 @@ export const PRESETS: { id: string; label: string; patch: Patch }[] = [
       following: { headway: 1.6, minGap: 5, accel: 10 },
       junctions: { stopHold: 1.5, yieldHorizon: 5, ringGap: 3, giveWayTime: 4, turnInGap: 4.5 },
       lanes: { order: ["keepLane", "fewestChanges", "leastCongested"] },
+      laneChange: { reaction: 2, minSafeGap: 9, urgencyStart: 100, rerouteWait: 25 },
     },
   },
   { id: "standard", label: "Standard", patch: {} },
@@ -76,6 +79,7 @@ export const PRESETS: { id: string; label: string; patch: Patch }[] = [
       following: { headway: 0.7, minGap: 2, accel: 20, brake: 32 },
       junctions: { stopHold: 0.2, yieldHorizon: 2, ringGap: 1.5, giveWayTime: 1.8, turnInGap: 2 },
       lanes: { order: ["fewestChanges", "leastCongested", "keepLane"] },
+      laneChange: { reaction: 1, minSafeGap: 4, urgencyStart: 300, rerouteWait: 10 },
     },
   },
   {
@@ -85,6 +89,7 @@ export const PRESETS: { id: string; label: string; patch: Patch }[] = [
       following: { headway: 0.4, minGap: 1, accel: 30, brake: 50 },
       junctions: { stopHold: 0, yieldHorizon: 1, ringGap: 0.8, giveWayTime: 1, turnInGap: 1.2, amberStopIfSafe: false },
       lanes: { order: ["leastCongested", "fewestChanges", "keepLane"] },
+      laneChange: { reaction: 0.5, minSafeGap: 2, minReaction: 0.1, urgencyStart: 400, rerouteWait: 6 },
     },
   },
 ];
@@ -164,6 +169,19 @@ export const RULE_SECTIONS: { section: RuleSection; title: string; fields: RuleF
       { kind: "number", section: "lanes", key: "lookahead", label: "Plan ahead", help: "How many roads ahead cars plan their lanes for.", min: 1, max: 5, step: 1, unit: "roads" },
       { kind: "toggle", section: "lanes", key: "congestionAware", label: "Avoid queues", help: "Count stopped or slow cars ahead in each lane, entering a road." },
       { kind: "number", section: "lanes", key: "sight", label: "Sight distance", help: "How far ahead cars see queues.", min: 30, max: 400, step: 10, unit: "u" },
+    ],
+  },
+  {
+    section: "laneChange",
+    title: "Lane changes",
+    fields: [
+      { kind: "number", section: "laneChange", key: "minSafeGap", label: "Safe gap", help: "Space wanted in the other lane, before and behind, on top of the car's length.", min: 0, max: 20, step: 0.5, unit: "u" },
+      { kind: "number", section: "laneChange", key: "reaction", label: "Reaction time", help: "Seconds of the closing speed added to the gap wanted (more: fewer, safer merges).", min: 0.2, max: 3, step: 0.1, unit: "s" },
+      { kind: "toggle", section: "laneChange", key: "urgency", label: "Get pushy near the turn", help: "When a lane change is needed for the route, accept smaller gaps the nearer the road's end." },
+      { kind: "number", section: "laneChange", key: "minReaction", label: "Pushiest reaction time", help: "The reaction time accepted at the last moment.", min: 0, max: 2, step: 0.1, unit: "s" },
+      { kind: "number", section: "laneChange", key: "urgencyStart", label: "Get pushy from", help: "How far before the last chance to change lane cars start accepting smaller gaps.", min: 0, max: 600, step: 10, unit: "u" },
+      { kind: "toggle", section: "laneChange", key: "deadlockReroute", label: "Give up and reroute", help: "A car stuck waiting to change lane finds another way from the lane it's in." },
+      { kind: "number", section: "laneChange", key: "rerouteWait", label: "Wait before rerouting", help: "How long a car waits for a gap before rerouting.", min: 3, max: 60, step: 1, unit: "s" },
     ],
   },
   {

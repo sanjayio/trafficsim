@@ -254,8 +254,9 @@ export class Simulation {
         car.s -= legLength(car.legs[car.leg]);
         car.leg++;
         if (car.legs[car.leg].key.startsWith("c:")) this.counts.laneChanges++;
-        // Onto the next road out of a junction: choose its lanes again, seeing the traffic on it now.
-        if (car.legs[car.leg - 1].node !== undefined && car.legs[car.leg].key.startsWith("r:")) this.enterRoad(car);
+        // Onto the next road: choose its lanes again, seeing the traffic on it now.
+        const now = car.legs[car.leg];
+        if (now.key.startsWith("r:") && now.segment !== car.route.segments[car.road]) this.enterRoad(car);
         car.cleared = false;
         car.arrival = null;
         car.stopped = 0;
@@ -380,16 +381,82 @@ export class Simulation {
     car.road = road;
     const entry = Number(leg.key.split(":")[3]);
     const plan = this.planFor(car.route, road, entry, car);
-    const lanes: LanePlan = {
-      entry: [...car.lanes.entry.slice(0, road), ...plan.entry.slice(road)],
-      exit: [...car.lanes.exit.slice(0, road), ...plan.exit.slice(road)],
+    this.follow(car, car.route, this.joinPlans(car.lanes, plan, road));
+  }
+
+  /** `before` for the roads before road `from`, `after` from it on. */
+  private joinPlans(before: LanePlan, after: LanePlan, from: number): LanePlan {
+    const join = <T>(a: T[], b: T[]) => [...a.slice(0, from), ...b.slice(from)];
+    return { entry: join(before.entry, after.entry), exit: join(before.exit, after.exit), forced: join(before.forced, after.forced) };
+  }
+
+  /**
+   * Switches `car` to driving `route` in `lanes` from where it is. The roads behind are the same in
+   * the same lanes, so the legs up to its current one are too; false (changing nothing) if they aren't.
+   */
+  private follow(car: Car, route: Route, lanes: LanePlan): boolean {
+    if (route === car.route && JSON.stringify(lanes) === JSON.stringify(car.lanes)) return true;
+    const fresh = this.legsFor(route, car.trip.bays, lanes);
+    const leg = car.legs[car.leg];
+    if (fresh[car.leg]?.key !== leg.key || fresh[car.leg].from !== leg.from) return false;
+    Object.assign(car, { legs: fresh, route, lanes });
+    return true;
+  }
+
+  /**
+   * Moves the lane change ahead of `car` on along the road, so it starts just ahead of the car, but
+   * no further than its last chance. False if it's there already.
+   */
+  private slide(car: Car): boolean {
+    const slide = car.legs[car.leg + 1].slide!;
+    const scale = legLength(slide.entry) / (legLength(slide.exit) || 1);
+    // Far enough ahead that it doesn't start the change before it's checked again.
+    const lead = Math.min(slide.maxLead, (car.s + car.v * 0.5 + CAR_LENGTH) / scale);
+    // Not worth rebuilding for a small step, until the last chance.
+    if (lead <= slide.lead || (lead < slide.lead + 2 && lead < slide.maxLead)) return false;
+    const [entry, change, exit] = this.tracks.changeAt(slide.entry, slide.exit, lead);
+    const [oldEntry, oldChange, oldExit] = car.legs.slice(car.leg, car.leg + 3);
+    car.legs.splice(car.leg, 3, { ...oldEntry, ...entry }, { ...oldChange, ...change }, { ...oldExit, ...exit });
+    return true;
+  }
+
+  /**
+   * `car` has waited too long for a gap to change lane before the junction ahead: it gives up, and
+   * finds another way to where it's going from the lane it's in (one of the roads this lane's
+   * connections lead to). Nothing changes if there's none.
+   */
+  private reroute(car: Car): void {
+    const { graph } = this;
+    const leg = car.legs[car.leg];
+    const i = car.road;
+    const node = car.route.nodes[i + 1];
+    if (i === car.route.segments.length - 1) return;
+    const lane = Number(leg.key.split(":")[3]);
+    const segment = graph.segments.get(leg.segment!)!;
+    const order = lanesInnerToKerb(segment.spec, graph.drivingSide);
+    // The roads it can go on to from this lane: by its lane connections, or round a roundabout (the
+    // kerb lane to the first exit, the inner lane from the third, either to the second).
+    const only = new Set(
+      hasLaneConnector(graph, node)
+        ? connectionsAt(graph, node)
+            .filter((c) => c.from.segment === segment.id && c.from.lane === lane)
+            .map((c) => c.to.segment)
+        : graph
+            .segmentsAt(node)
+            .filter((out) => {
+              if (out.id === segment.id || !this.tracks.isRoundabout(node)) return false;
+              const exit = this.tracks.exitNumber(node, segment, out);
+              return exit === 2 || (exit === 1 ? lane === order[order.length - 1] : lane === order[0]);
+            })
+            .map((s) => s.id),
+    );
+    const rest = findRoute(graph, node, car.trip.to, { via: leg.segment!, only });
+    if (!rest) return;
+    const route: Route = {
+      nodes: [...car.route.nodes.slice(0, i + 1), ...rest.nodes],
+      segments: [...car.route.segments.slice(0, i + 1), ...rest.segments],
     };
-    if (JSON.stringify(lanes) === JSON.stringify(car.lanes)) return;
-    const fresh = this.legsFor(car.route, car.trip.bays, lanes);
-    // The roads behind keep their lanes, so the legs up to here are the same: it carries on from the same leg.
-    if (fresh[car.leg]?.key !== leg.key) return;
-    car.legs = fresh;
-    car.lanes = lanes;
+    if (this.follow(car, route, this.joinPlans(car.lanes, this.planFor(route, i, lane, car), i))) this.counts.reroutes++;
   }
 
   /**
@@ -754,9 +821,9 @@ export class Simulation {
     let { gap, speed } = this.leader(car, lanes);
     const { accel, brake, minGap, headway } = this.graph.rules.following;
 
-    const leg = car.legs[car.leg];
-    const next = car.legs[car.leg + 1];
-    const toLine = legLength(leg) - car.s;
+    let leg = car.legs[car.leg];
+    let next = car.legs[car.leg + 1];
+    let toLine = legLength(leg) - car.s;
     // Signals and lane changes are re-checked until the car is over the line: a light can turn red,
     // or a faster car close in on the gap, while it gets there.
     if (next?.rule === "signals" || next?.rule === "merge" || next?.rule === "turnIn") car.cleared = false;
@@ -769,8 +836,21 @@ export class Simulation {
       // A turn into a driveway, or the main road at a junction, is checked from further back, so a car with a clear way doesn't slow for nothing.
       const ask = ASK_DISTANCE + (car.v * car.v) / (2 * brake) + (next.rule === "turnIn" || next.rule === "priority" ? QUEUE_DISTANCE : 0);
       if (toLine < ask) car.cleared = front && this.mayEnter(car, next, toLine);
-      // Stop with the front bumper just behind the line.
-      const toBumper = toLine - CAR_LENGTH / 2 - 0.5;
+      // No gap to change lane here: carry on in lane and try further along, up to the last chance.
+      if (next.slide && toLine < ask && front && !car.cleared && this.slide(car)) {
+        [leg, next] = [car.legs[car.leg], car.legs[car.leg + 1]];
+        toLine = legLength(leg) - car.s;
+      }
+      // Stuck at the last chance: wait, indicating, and after a while find another way from this lane.
+      const { deadlockReroute, rerouteWait } = this.graph.rules.laneChange;
+      if (next.slide && !car.cleared && car.stopped > rerouteWait && next.slide.lead >= next.slide.maxLead - 0.5) {
+        car.stopped = 0;
+        if (deadlockReroute) this.reroute(car);
+      }
+      // Stop with the front bumper just behind the line; for a lane change, only at its last chance.
+      const slide = next.slide;
+      const toStop = slide ? (slide.maxLead * legLength(slide.entry)) / (legLength(slide.exit) || 1) - car.s : toLine;
+      const toBumper = toStop - CAR_LENGTH / 2 - 0.5;
       if (!car.cleared && toBumper < gap) {
         gap = toBumper;
         speed = 0;
@@ -820,9 +900,10 @@ export class Simulation {
         distance += legLength(leg);
       }
     }
-    // Changing lane, the car is still partly in the lane it's leaving: keep back from cars ahead there too.
+    // Changing lane, the car is still partly in the lane it's leaving: keep back from cars ahead there
+    // too, until it's mostly over (a road lane change; out of a driveway it's never in a lane before).
     const changing = car.legs[car.leg];
-    if (changing.joinAt !== undefined) {
+    if (changing.joinAt !== undefined && (!changing.slide || car.s < legLength(changing) * 0.4)) {
       const left = car.legs[car.leg - 1];
       const mine = left.to + car.s;
       for (const other of lanes.get(left.key) ?? []) {
@@ -958,7 +1039,20 @@ export class Simulation {
   private mayChangeLane(car: Car, change: Movement): boolean {
     const join = change.joinAt!;
     const { giveWayTime } = this.graph.rules.junctions;
-    const { headway } = this.graph.rules.following;
+    const { minSafeGap } = this.graph.rules.laneChange;
+    const buffer = this.changeBuffer(car, change);
+    // Not past cars standing in the lane it's leaving (waiting to change lane themselves): it would
+    // be half in both lanes beside them, blocking each other.
+    if (change.slide) {
+      const leaving = car.legs[car.leg];
+      const past = legLength(change) + CAR_LENGTH;
+      const blocked = this.cars.some((c) => {
+        if (c === car || c.v >= CRAWL || c.legs[c.leg].key !== leaving.key) return false;
+        const ahead = this.at(c) - leaving.to;
+        return ahead > -CAR_LENGTH && ahead < past;
+      });
+      if (blocked) return false;
+    }
     // Out of a building: the driveways each way share their first stretch.
     const door = change.key.startsWith("out:") ? Number(change.key.split(":")[1]) : null;
     if (door !== null && this.cars.some((c) => c !== car && this.nearDoor(c, door))) return false;
@@ -983,12 +1077,33 @@ export class Simulation {
         if (other.legs[i]?.key !== change.outKey) continue;
         position = other.legs[i].from - ahead;
       } else continue;
-      // Out of a driveway, give way: road traffic keeps going, so wait for a gap it won't have to slow for.
-      const gap = door !== null ? other.v * giveWayTime + CAR_LENGTH : other.v * headway * 1.5 + CAR_LENGTH;
-      const behind = join - (gap + MIN_GAP * 2);
-      if (position > behind && position < join + CAR_LENGTH + MIN_GAP * 2) return false;
+      if (door !== null) {
+        // Out of a driveway, give way: road traffic keeps going, so wait for a gap it won't have to slow for.
+        const behind = join - (other.v * giveWayTime + CAR_LENGTH + MIN_GAP * 2);
+        if (position > behind && position < join + CAR_LENGTH + MIN_GAP * 2) return false;
+        continue;
+      }
+      // Changing lane: room behind where the change starts for the car coming up to react, and ahead
+      // of where it ends for closing on a slower car.
+      const behind = join - legLength(change) - (CAR_LENGTH + minSafeGap + other.v * buffer);
+      const ahead = join + CAR_LENGTH + minSafeGap + Math.max(0, car.v - other.v) * buffer;
+      if (position > behind && position < ahead) return false;
     }
     return true;
+  }
+
+  /**
+   * The reaction time `car` allows changing lane at `change`: the rules' reaction time, or, when the
+   * change is a must for its route and the rules let urgency count, less the nearer its last chance.
+   */
+  private changeBuffer(car: Car, change: Movement): number {
+    const { reaction, minReaction, urgency, urgencyStart } = this.graph.rules.laneChange;
+    const slide = change.slide;
+    if (!urgency || !slide || !car.lanes.forced[car.road]) return reaction;
+    const scale = legLength(slide.entry) / (legLength(slide.exit) || 1);
+    const left = Math.max(0, slide.maxLead - car.s / scale);
+    const keen = urgencyStart > 0 ? Math.min(1, left / urgencyStart) : 0;
+    return Math.min(reaction, minReaction + (reaction - minReaction) * keen);
   }
 
   /**

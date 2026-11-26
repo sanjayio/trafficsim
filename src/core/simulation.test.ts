@@ -612,6 +612,53 @@ describe("lane changes", () => {
   });
 });
 
+describe("stuck before a turn", () => {
+  /**
+   * From the west, north is a left turn across traffic (inner lane only), or the long way round,
+   * straight on east (either lane). Cars leave home in the kerb lane; lane changes on the road never
+   * find a gap, so they're stuck before the turn.
+   */
+  function blocked(reroute: boolean) {
+    const graph = new RoadGraph();
+    const spec = { ...DEFAULT_ROAD_SPEC, lanes: 2 };
+    road(graph, -400, 0, 0, 0, spec);
+    road(graph, 0, 0, 0, -400, spec);
+    road(graph, 0, 0, 400, 0, spec);
+    road(graph, 400, 0, 400, -400, spec);
+    road(graph, 400, -400, 0, -400, spec);
+    road(graph, 0, -400, 0, -500, spec);
+    graph.setTerminal(at(graph, -400, 0), { ...DEFAULT_SOURCE, rate: 10 });
+    graph.setTerminal(at(graph, 0, -500), SINK);
+    graph.setRules({ ...graph.rules, laneChange: { ...graph.rules.laneChange, deadlockReroute: reroute, rerouteWait: 4 } });
+    const sim = new Simulation(graph);
+    sim.parking = false;
+    const blockable = sim as unknown as { mayChangeLane: (car: Car, change: Car["legs"][number]) => boolean };
+    const mayChangeLane = blockable.mayChangeLane.bind(sim);
+    blockable.mayChangeLane = (car, change) => (change.slide ? false : mayChangeLane(car, change));
+    return sim;
+  }
+
+  it("waits at the last chance with its indicator on, then finds another way from its lane", () => {
+    const sim = blocked(true);
+    let indicating = false;
+    // Long enough to wait, give up and drive the long way round.
+    run(sim, 100, () => {
+      noOverlap(sim);
+      for (const car of sim.cars) if (car.stopped > 1 && car.legs[car.leg + 1]?.slide) indicating ||= sim.signal(car) !== 0;
+    });
+    expect(indicating).toBe(true);
+    expect(sim.stats().reroutes).toBeGreaterThan(0);
+    expect(sim.delivered).toBeGreaterThan(0);
+  });
+
+  it("waits for good when rerouting is off", () => {
+    const sim = blocked(false);
+    run(sim, 100);
+    expect(sim.stats().reroutes).toBe(0);
+    expect(sim.delivered).toBe(0);
+  });
+});
+
 describe("sources and sinks along a road", () => {
   it("give way pulling out of a driveway: they never pull out in front of a car close by on the road", () => {
     const graph = new RoadGraph();
