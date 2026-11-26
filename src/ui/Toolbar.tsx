@@ -122,11 +122,13 @@ export function Toolbar() {
   return (
     // Above the status bar: tools bottom-left (options stacked above them), simulation speed bottom-right.
     <div className="pointer-events-none absolute inset-x-3 bottom-12 flex items-end justify-between gap-2">
-      {/* Each tool's options stack above its own button group. */}
+      {/* Each tool's options float above its own button group, without widening it. */}
       <div className="flex items-end gap-2">
-        <div className="flex flex-col items-start gap-2">
-          {tool === "road" && <RoadOptions />}
-          {tool === "traffic" && <TrafficOptions />}
+        <div className="relative">
+          <div className="absolute bottom-full left-0 mb-2 w-max">
+            {tool === "road" && <RoadOptions />}
+            {tool === "traffic" && <TrafficOptions />}
+          </div>
           <Panel>
             {TOOLS.filter((t) => t.id !== "bulldoze").map(({ id, label, icon: Icon }) => (
               <IconButton key={id} label={label} pressed={tool === id} onClick={() => gameStore.getState().setTool(id)}>
@@ -136,8 +138,8 @@ export function Toolbar() {
           </Panel>
         </div>
         {/* Bulldoze stands apart, tinted red: it destroys. */}
-        <div className="flex flex-col items-start gap-2">
-          {tool === "bulldoze" && <BulldozeOptions />}
+        <div className="relative">
+          <div className="absolute bottom-full left-0 mb-2 w-max">{tool === "bulldoze" && <BulldozeOptions />}</div>
           <Panel>
             <IconButton label="Bulldoze" danger pressed={tool === "bulldoze"} onClick={() => gameStore.getState().setTool("bulldoze")}>
               <Tractor size={ICON_SIZE} strokeWidth={2} aria-hidden />
