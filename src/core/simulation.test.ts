@@ -327,6 +327,43 @@ describe("Simulation", () => {
     });
   }
 
+  it("turns kerb-side on red where the junction allows it, only after stopping and giving way", () => {
+    const { graph, centre } = crossroads({ control: "signals", turnOnRed: true });
+    // Light traffic from the north, so cars turning from the west on red find gaps in it.
+    graph.setTerminal(at(graph, 0, -300), { ...DEFAULT_SOURCE, rate: 8 });
+    const sim = new Simulation(graph);
+    sim.parking = false;
+    const approaches = signalApproaches(graph, centre);
+    const lightOf = (car: Car) => signalLights(approaches.length, sim.time, graph.rules.signals)[approaches.indexOf(car.legs[car.leg - 1].segment!)];
+    // Cars that stood at the line (long enough for a stop sign) on their way to the junction.
+    const stood = new Set<Car>();
+    const legBefore = new Map<Car, number>();
+    let onRed = 0;
+    run(sim, 120, () => {
+      noOverlap(sim);
+      for (const car of sim.cars) {
+        const leg = car.legs[car.leg];
+        const entered = legBefore.get(car) !== car.leg && leg.node === centre;
+        legBefore.set(car, car.leg);
+        if (entered && lightOf(car) === "red" && !stood.has(car) && leg.turn === "kerb") expect.fail("turned on red without stopping");
+        if (entered && lightOf(car) === "red" && stood.has(car)) {
+          onRed++;
+          expect(leg.turn).toBe("kerb");
+          // Nobody with a green close by on a path it crosses or joins.
+          for (const c of sim.cars) {
+            const upcoming = c.legs[c.leg + 1];
+            if (c === car || upcoming?.node !== centre || lightOf(c) === "red") continue;
+            if (legLength(c.legs[c.leg]) - c.s < c.v * graph.rules.junctions.yieldHorizon + 10) {
+              expect((sim as unknown as { tracks: TrackBuilder }).tracks.conflicts(leg, upcoming)).toBe(false);
+            }
+          }
+        }
+        if (car.legs[car.leg + 1]?.node === centre && car.stopped >= graph.rules.junctions.stopHold) stood.add(car);
+      }
+    });
+    expect(onRed).toBeGreaterThan(0);
+  });
+
   it("keeps its lane where two roads join", () => {
     const graph = new RoadGraph();
     const spec = { ...DEFAULT_ROAD_SPEC, lanes: 2 };

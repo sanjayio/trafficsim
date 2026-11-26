@@ -263,8 +263,10 @@ export class Simulation {
       }
       car.idle = car.v < 0.5 ? car.idle + dt : 0;
       const toLine = legLength(car.legs[car.leg]) - car.s;
-      // Standing at the line: the front bumper (half a car ahead) within a few units of it.
-      car.stopped = car.v < 0.5 && toLine - CAR_LENGTH / 2 < 6 ? car.stopped + dt : 0;
+      // Standing at the line (or barely creeping up to it): the front bumper (half a car ahead) within
+      // a few units of it. Pulling away with permission, it still counts as having stopped.
+      const standing = car.v < 1 || (car.cleared && car.stopped > 0);
+      car.stopped = standing && toLine - CAR_LENGTH / 2 < 6 ? car.stopped + dt : 0;
     }
     if (arrived.size) this.cars = this.cars.filter((c) => !arrived.has(c));
   }
@@ -994,7 +996,16 @@ export class Simulation {
       // Red (or amber, unless amber counts as go): stop if there's room to before the front bumper
       // reaches the line (a car let through on amber keeps going if the light turns red).
       const stop = light === "red" || (light === "yellow" && junctions.amberStopIfSafe);
-      if (stop && (car.v * car.v) / (2 * following.brake) < toLine - CAR_LENGTH / 2) return false;
+      if (stop && (car.v * car.v) / (2 * following.brake) < toLine - CAR_LENGTH / 2) {
+        // Turning kerb-side on red, where allowed: after stopping, giving way to anyone with a green it would cross or join.
+        const freeTurn = light === "red" && next.turn === "kerb" && this.graph.junction(next.node!).turnOnRed;
+        if (!freeTurn || car.stopped < junctions.stopHold) return false;
+        return !this.cars.some((c) => {
+          const upcoming = c.legs[c.leg + 1];
+          if (c === car || upcoming?.node !== next.node || lightFor(c) === "red") return false;
+          return near(c) && this.tracks.conflicts(next, upcoming);
+        });
+      }
       // Turning cars let conflicting movements that go first, with a green, go first.
       return !this.cars.some((c) => {
         const upcoming = c.legs[c.leg + 1];

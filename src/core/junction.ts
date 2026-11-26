@@ -18,6 +18,8 @@ export interface JunctionSettings {
   major?: number;
   /** Where a slip road joins (see `slipRoad`): give way (the default), stop, or signals on every approach. */
   slipControl?: SlipControl;
+  /** Under signals: kerb-side turns may go on red, after stopping, giving way to traffic with a green. */
+  turnOnRed?: boolean;
 }
 
 export const SLIP_CONTROLS = ["yield", "stop", "signals"] as const;
@@ -74,7 +76,12 @@ export function parseJunctionSettings(raw: unknown): JunctionSettings {
   if (s.slipControl !== undefined && !(SLIP_CONTROLS as readonly unknown[]).includes(s.slipControl)) {
     throw new Error("Invalid junction settings in map file");
   }
-  const major = { ...(s.major === undefined ? {} : { major: s.major }), ...(s.slipControl === undefined ? {} : { slipControl: s.slipControl }) };
+  if (s.turnOnRed !== undefined && typeof s.turnOnRed !== "boolean") throw new Error("Invalid junction settings in map file");
+  const major = {
+    ...(s.major === undefined ? {} : { major: s.major }),
+    ...(s.slipControl === undefined ? {} : { slipControl: s.slipControl }),
+    ...(s.turnOnRed ? { turnOnRed: true } : {}),
+  };
   if (s.connections === undefined) return { control, roundabout, cornerRadius, ...major };
   const ref = (r: unknown) =>
     !!r && Number.isSafeInteger((r as { segment: unknown }).segment) && Number.isSafeInteger((r as { lane: unknown }).lane);
@@ -95,7 +102,8 @@ export function isDefaultJunction(s: JunctionSettings): boolean {
     s.cornerRadius === DEFAULT_JUNCTION.cornerRadius &&
     s.connections === undefined &&
     s.major === undefined &&
-    s.slipControl === undefined
+    s.slipControl === undefined &&
+    !s.turnOnRed
   );
 }
 

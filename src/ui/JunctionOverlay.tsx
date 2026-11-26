@@ -1,4 +1,4 @@
-import { Ban, GitMerge, Octagon, RefreshCw, Settings2, Triangle, type LucideProps } from "lucide-react";
+import { Ban, CornerUpRight, GitMerge, Octagon, RefreshCw, Settings2, Triangle, type LucideProps } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { mainRoadChoices, MAX_CORNER_RADIUS, slipRoad, type JunctionControl, type JunctionSettings, type SlipControl } from "../core/junction";
 import type { Engine } from "../render/Engine";
@@ -117,7 +117,7 @@ function JunctionPanel({ engine, id, x, y }: { engine: Engine; id: number; x: nu
   const choices = engine.graph.segmentsAt(id).length >= 3 ? mainRoadChoices(engine.graph, id).length : 0;
   const swappable = (settings.control === "stop" || settings.control === "yield") && choices > 1;
   return (
-    <OptionsPanel title="Junction" x={x} y={y} height={PANEL_HEIGHT + 20}>
+    <OptionsPanel title="Junction" x={x} y={y} height={PANEL_HEIGHT + 20 + (settings.control === "signals" ? 32 : 0)}>
       <fieldset disabled={settings.roundabout} className="flex flex-col gap-1.5 disabled:opacity-40">
         <legend className="mb-1.5 text-xs font-medium uppercase tracking-wide text-neutral-500">
           Control{settings.roundabout ? " (roundabouts give way)" : ""}
@@ -147,6 +147,15 @@ function JunctionPanel({ engine, id, x, y }: { engine: Engine; id: number; x: nu
           <p className="px-1 text-xs text-neutral-500">Click {settings.control === "stop" ? "Stop" : "Give way"} again to swap which roads have it.</p>
         )}
       </fieldset>
+
+      {settings.control === "signals" && !settings.roundabout && (
+        <Switch
+          label={`${engine.graph.drivingSide === "right" ? "Right" : "Left"} turn on red`}
+          icon={<CornerUpRight size={15} className={`text-neutral-400 ${engine.graph.drivingSide === "left" ? "-scale-x-100" : ""}`} aria-hidden />}
+          checked={!!settings.turnOnRed}
+          onChange={(on) => update({ turnOnRed: on || undefined })}
+        />
+      )}
 
       <Switch
         label="Roundabout"
