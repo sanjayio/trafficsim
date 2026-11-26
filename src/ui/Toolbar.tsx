@@ -343,11 +343,14 @@ function RoadOptions() {
   );
 }
 
-/** One row of the road options: a group of related buttons. */
+/** One row of the road options: a group of related buttons, titled. */
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div role="group" aria-label={label} className="flex items-center gap-1">
-      {children}
+    <div role="group" aria-label={label} className="flex flex-col gap-0.5">
+      <span aria-hidden className="px-1.5 pt-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-500">
+        {label}
+      </span>
+      <div className="flex items-center gap-1">{children}</div>
     </div>
   );
 }
