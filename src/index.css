@@ -26,9 +26,6 @@ body {
     transform: translateX(8px);
   }
 }
-.tut-scene svg * {
-  transform-box: fill-box;
-}
 
 /* Cars driving along a road, each way. */
 .tut-drive-right {
@@ -92,6 +89,7 @@ body {
   }
 }
 .tut-click {
+  transform-box: fill-box;
   transform-origin: center;
   animation: tut-click 4s ease-out infinite;
 }
@@ -161,6 +159,7 @@ body {
 }
 .tut-pulse {
   animation: tut-pulse 2s ease-in-out infinite;
+  transform-box: fill-box;
   transform-origin: center;
 }
 @keyframes tut-pulse {
@@ -192,6 +191,7 @@ body {
 
 /* A box dragged over a road and a building, which go; then they're back. */
 .tut-select {
+  transform-box: fill-box;
   transform-origin: top left;
   animation: tut-select 4s ease-out infinite;
 }
@@ -229,7 +229,7 @@ body {
 }
 
 /* Pan, turn and zoom round a little town. */
-.tut-scene .tut-camera {
+.tut-camera {
   transform-box: view-box;
   transform-origin: 160px 60px;
   animation: tut-camera 9s ease-in-out infinite;
