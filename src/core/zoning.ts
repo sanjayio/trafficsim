@@ -59,7 +59,7 @@ export class ZoneMap {
   private unsubscribe: () => void;
 
   constructor(private graph: RoadGraph) {
-    this.unsubscribe = graph.subscribe((e) => e.type !== "rules" && (this.tiles = null));
+    this.unsubscribe = graph.subscribe((e) => e.type !== "rules" && e.type !== "scenery" && (this.tiles = null));
   }
 
   dispose(): void {

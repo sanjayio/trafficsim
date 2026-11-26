@@ -1,5 +1,6 @@
 import { MIN_CROSSING_ANGLE, MIN_ROAD_LENGTH, NODE_MERGE_DIST, NODE_SNAP_RADIUS } from "./constants";
 import { DEFAULT_RULES, isDefaultRules, parseRules, type TrafficRules } from "./rules";
+import { parseScenery, saveScenery, type Plant } from "./scenery";
 import { isStraight, rightNormal, SampledCurve, splitCurve, straightCurve, type Curve } from "./curve";
 import { distance, pointInConvexPolygon, segmentsIntersect, type Vec2 } from "./geometry";
 import {
@@ -51,6 +52,8 @@ export interface SavedMap {
   junctions?: ({ node: NodeId } & JunctionSettings)[];
   /** Traffic rules that differ from the defaults (absent: all default). */
   rules?: unknown;
+  /** Trees and bushes (see `core/scenery`): a row per plant. Absent in maps from before scenery. */
+  scenery?: unknown;
   /** Traffic sources and sinks (absent in older maps). */
   terminals?: ({ node: NodeId } & Terminal)[];
   nodes: RoadNode[];
@@ -92,6 +95,8 @@ export type GraphEvent =
   | { type: "settings" }
   /** The traffic rules changed; nothing on the map moved, so nothing needs redrawing. */
   | { type: "rules" }
+  /** Trees and bushes planted or cleared (see `core/scenery`). */
+  | { type: "scenery" }
   | { type: "junction-changed"; nodeId: NodeId }
   | { type: "terminal-changed"; nodeId: NodeId };
 
@@ -104,6 +109,9 @@ export class RoadGraph {
   readonly segments = new Map<SegmentId, RoadSegment>();
   private side: DrivingSide = "right";
   private trafficRules: TrafficRules = structuredClone(DEFAULT_RULES);
+  private plants: Plant[] = [];
+  /** Loaded from a map saved before scenery: it's to be planted once (see `SceneryKeeper`). */
+  private unplanted = false;
   private title = DEFAULT_MAP_NAME;
   /** Settings of junctions that differ from `DEFAULT_JUNCTION`. */
   private junctionSettings = new Map<NodeId, JunctionSettings>();
@@ -146,6 +154,22 @@ export class RoadGraph {
   setRules(rules: TrafficRules): void {
     this.trafficRules = parseRules(rules);
     this.emit({ type: "rules" });
+  }
+
+  /** The map's trees and bushes (see `core/scenery`). */
+  get scenery(): readonly Plant[] {
+    return this.plants;
+  }
+
+  /** True after loading a map saved before scenery, until it's been planted. */
+  get sceneryUnplanted(): boolean {
+    return this.unplanted;
+  }
+
+  setScenery(plants: Plant[]): void {
+    this.plants = plants;
+    this.unplanted = false;
+    this.emit({ type: "scenery" });
   }
 
   junction(nodeId: NodeId): JunctionSettings {
@@ -645,6 +669,7 @@ export class RoadGraph {
       name: this.title,
       drivingSide: this.side,
       ...(isDefaultRules(this.trafficRules) ? {} : { rules: this.trafficRules }),
+      scenery: saveScenery(this.plants),
       junctions: [...this.junctionSettings].map(([node, settings]) => ({ node, ...settings })),
       terminals: [...this.terminals].map(([node, terminal]) => ({ node, ...terminal })),
       nodes: [...this.nodes.values()],
@@ -701,6 +726,8 @@ export class RoadGraph {
 
     this.side = map.drivingSide ?? "right";
     this.trafficRules = parseRules(map.rules);
+    this.plants = parseScenery(map.scenery);
+    this.unplanted = map.scenery === undefined;
     this.title = map.name?.trim() || DEFAULT_MAP_NAME;
     // Sources and sinks sit on dead ends; sources only list real sinks.
     const ends = new Map<NodeId, number>();

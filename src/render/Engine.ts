@@ -28,6 +28,8 @@ import { Ground } from "./Ground";
 import { Sky } from "./Sky";
 import { swayUniforms } from "./buildings";
 import { StreetLights } from "./StreetLights";
+import { Scenery } from "./Scenery";
+import { SceneryKeeper } from "../core/scenery";
 import { installCloudShadows, SunShadows } from "./shadows";
 import { OverlayLayer } from "./OverlayLayer";
 import { palette } from "./palette";
@@ -79,6 +81,9 @@ export class Engine {
   private tmpFocus = new Vector3();
   private shadows!: SunShadows;
   private streetLights = new StreetLights(this.graph);
+  /** Trees and bushes: planted and cleared as the map changes (the keeper), and drawn. */
+  private sceneryKeeper = new SceneryKeeper(this.graph);
+  private scenery = new Scenery(this.graph);
   /** Roads changed since the streetlights were placed: rebuilt once, next frame. */
   private streetLightsDirty = true;
   /** The view last kept (see keepView), and time since it was last checked. */
@@ -129,8 +134,8 @@ export class Engine {
     host.appendChild(canvas);
 
     this.scene.fog = this.fog;
-    this.cleanups.push(this.graph.subscribe((e) => e.type !== "rules" && (this.streetLightsDirty = true)));
-    this.scene.add(this.streetLights, ...this.shadows.objects, this.sky, this.rain, this.ground, this.grid, this.roads, this.zoneLayer, this.cars, this.routeLine, this.overlay);
+    this.cleanups.push(this.graph.subscribe((e) => e.type !== "rules" && e.type !== "scenery" && (this.streetLightsDirty = true)));
+    this.scene.add(this.streetLights, this.scenery, ...this.shadows.objects, this.sky, this.rain, this.ground, this.grid, this.roads, this.zoneLayer, this.cars, this.routeLine, this.overlay);
 
     // Left-drag pans with the Select tool, except in the lane connector, which needs left clicks.
     this.camera = new Camera(canvas, () => gameStore.getState().tool === "select" && gameStore.getState().laneEditNode === null);
@@ -269,9 +274,13 @@ export class Engine {
   private restoreAutosave(): void {
     this.restoreView();
     const saved = loadAutosave();
+    // A map kept from before scenery is planted as it loads: kept again straight away, with its trees.
+    let planted = false;
     if (saved) {
       try {
-        this.graph.load(JSON.parse(saved) as SavedMap);
+        const map = JSON.parse(saved) as SavedMap;
+        this.graph.load(map);
+        planted = map.scenery === undefined;
         gameStore.getState().setDrivingSide(this.graph.drivingSide);
       } catch {
         // Kept aside before the next save replaces it.
@@ -296,6 +305,7 @@ export class Engine {
       clearTimeout(timer);
       unsubscribe();
     });
+    if (planted) saveAutosave(JSON.stringify(this.graph.toJSON()));
   }
 
   async saveMap(): Promise<boolean> {
@@ -330,6 +340,8 @@ export class Engine {
     this.rain.dispose();
     this.shadows.dispose();
     this.streetLights.dispose();
+    this.scenery.dispose();
+    this.sceneryKeeper.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }

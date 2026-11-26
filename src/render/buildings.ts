@@ -21,7 +21,41 @@ const HOME_SHARE = 0.7;
 const TREE_SPACING = 9;
 /** Leaf colours: mostly greens, some turning yellow and orange, the odd red. Conifers stay green. */
 export const LEAVES = [0x3f7a3a, 0x4f9446, 0x5c8f3a, 0x3b6e35, 0x6b9a3e, 0x4a8a44, 0x7fa53f, 0xb5a03a, 0xc98a2e, 0xa8432f];
-const CONIFER = [0x2f5f34, 0x355e2e, 0x2a5236, 0x3d6b3a];
+export const CONIFER = [0x2f5f34, 0x355e2e, 0x2a5236, 0x3d6b3a];
+export type PlantKind = "broadleaf" | "conifer" | "poplar" | "bush";
+
+/**
+ * The boxes making a plant standing at (x, z), turned `turn` about upright: each trunk (`leaf`
+ * null) and block of leaves (in its colour, from `colour`), as a unit box's matrix.
+ * Broadleaf: a trunk (`trunk` tall), a wide crown and a smaller top. Conifer: tiers narrowing
+ * upwards. Poplar: tall and narrow. Bush: two low blocks, no trunk.
+ */
+export function plantBoxes(
+  p: { x: number; z: number; kind: PlantKind; size: number; turn: number; colour: number; trunk?: number },
+  push: (m: Matrix4, leaf: number | null) => void,
+): void {
+  const { x, z, size, colour } = p;
+  const turn = new Quaternion().setFromAxisAngle(UP, p.turn);
+  const box = (w: number, h: number, y: number, leaf: number | null) =>
+    push(new Matrix4().compose(new Vector3(x, y + h / 2, z), turn, new Vector3(w, h, w)), leaf);
+  if (p.kind === "bush") {
+    box(2.6 * size, 1.4 * size, 0, colour);
+    box(1.8 * size, 0.8 * size, 1.3 * size, shade(colour, 1.1));
+  } else if (p.kind === "broadleaf") {
+    const trunk = p.trunk ?? 3 * size;
+    box(1, trunk, 0, null);
+    box(5.2 * size, 4.6 * size, trunk, colour);
+    box(3.4 * size, 2.6 * size, trunk + 4.4 * size, shade(colour, 1.12));
+  } else if (p.kind === "conifer") {
+    box(0.9, 2 * size, 0, null);
+    [5, 3.8, 2.6, 1.4].forEach((w, i) => box(w * size, 2.4 * size, (1.6 + i * 2.1) * size, shade(colour, 1 + i * 0.05)));
+  } else {
+    box(0.8, 2 * size, 0, null);
+    box(2.6 * size, 9 * size, 1.6 * size, colour);
+  }
+}
+const UP = new Vector3(0, 1, 0);
+
 /** `colour` lightened (k > 1) or darkened (k < 1). */
 const shade = (colour: number, k: number) => new Color(colour).multiplyScalar(k).getHex();
 
@@ -272,37 +306,16 @@ export class BuildingKit {
     if (!this.trees.length) return [];
     const trunks: Matrix4[] = [];
     const leaves: { m: Matrix4; colour: number }[] = [];
-    const up = new Vector3(0, 1, 0);
     for (const { x, z, bush } of this.trees) {
-      const kind = this.random();
+      // (The same draws, in the same order, as ever: the same trees on the same lots.)
+      const pick = this.random();
       const size = 0.8 + this.random() * 0.5;
-      const turn = new Quaternion().setFromAxisAngle(up, this.random() * Math.PI);
-      const colour = LEAVES[Math.floor(this.random() * LEAVES.length)];
-      const box = (w: number, h: number, y: number, list: Matrix4[] | null, shade = colour) => {
-        const m = new Matrix4().compose(new Vector3(x, y + h / 2, z), turn, new Vector3(w, h, w));
-        if (list) list.push(m);
-        else leaves.push({ m, colour: shade });
-      };
-      if (bush) {
-        // A low, rounded shrub: two blocks, no trunk.
-        box(2.6 * size, 1.4 * size, 0, null);
-        box(1.8 * size, 0.8 * size, 1.3 * size, null, shade(colour, 1.1));
-      } else if (kind < 0.5) {
-        // Broadleaf: a trunk, a wide crown and a smaller top.
-        const trunk = (2.5 + this.random() * 1.5) * size;
-        box(1, trunk, 0, trunks);
-        box(5.2 * size, 4.6 * size, trunk, null);
-        box(3.4 * size, 2.6 * size, trunk + 4.4 * size, null, shade(colour, 1.12));
-      } else if (kind < 0.8) {
-        // Conifer: always green, tiers narrowing upwards.
-        const green = CONIFER[Math.floor(this.random() * CONIFER.length)];
-        box(0.9, 2 * size, 0, trunks);
-        [5, 3.8, 2.6, 1.4].forEach((w, i) => box(w * size, 2.4 * size, (1.6 + i * 2.1) * size, null, shade(green, 1 + i * 0.05)));
-      } else {
-        // Poplar: tall and narrow.
-        box(0.8, 2 * size, 0, trunks);
-        box(2.6 * size, 9 * size, 1.6 * size, null);
-      }
+      const turn = this.random() * Math.PI;
+      let colour = LEAVES[Math.floor(this.random() * LEAVES.length)];
+      const kind: PlantKind = bush ? "bush" : pick < 0.5 ? "broadleaf" : pick < 0.8 ? "conifer" : "poplar";
+      const trunk = kind === "broadleaf" ? (2.5 + this.random() * 1.5) * size : undefined;
+      if (kind === "conifer") colour = CONIFER[Math.floor(this.random() * CONIFER.length)];
+      plantBoxes({ x, z, kind, size, turn, colour, trunk }, (m, leaf) => (leaf === null ? trunks.push(m) : leaves.push({ m, colour: leaf })));
     }
     const trunkMesh = new InstancedMesh(this.box, this.shaded(0x6b4a33), Math.max(1, trunks.length));
     trunkMesh.count = trunks.length;
@@ -544,7 +557,7 @@ function gableGeometry(): BufferGeometry {
 }
 
 /** A unit box shaded by face in its vertex colours, lit from above: top full, the x ends a step darker, the rest darker still. */
-function shadedBox(): BoxGeometry {
+export function shadedBox(): BoxGeometry {
   const box = new BoxGeometry(1, 1, 1);
   // BoxGeometry's faces, 4 vertices each, in order: +x, -x, +y, -y, +z, -z.
   const tones = [0.86, 0.86, 1, 0.7, 0.7, 0.7];

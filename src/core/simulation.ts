@@ -210,7 +210,7 @@ export class Simulation {
     this.unsubscribe = graph.subscribe((e) => {
       this.routes.clear();
       // New rules: cars carry on, reading them from the next step.
-      if (e.type === "rules") return;
+      if (e.type === "rules" || e.type === "scenery") return;
       if (e.type === "terminal-changed") {
         // A shop or office removed, or moved or resized: its bays (and cars in or heading for
         // them) go too. Renamed, recoloured or grown taller, they stay.
