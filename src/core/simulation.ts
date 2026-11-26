@@ -90,6 +90,8 @@ export interface TrafficStats {
   reroutes: number;
 }
 
+/** How far ahead along its route a car looks for the car in front (more than it needs to stop from top speed). */
+const LOOK_AHEAD = 250;
 /** Slower than this (units/s), a car ahead counts as held up when choosing a lane. */
 const CRAWL = 5;
 /** A car standing still this long counts as stuck. */
@@ -160,6 +162,8 @@ export class Simulation {
   /** Bays held at each shop or office, counted once a step (see `spawn`). */
   private held = new Map<NodeId, Set<number>>();
   private routes = new Map<string, Route | null>();
+  /** Cars by lane this step (see `byLane`). */
+  private lanes = new Map<string, Car[]>();
   private due = new Map<NodeId, number>();
   private random: () => number;
   private nextId = 1;
@@ -215,7 +219,7 @@ export class Simulation {
     const arrived = new Set<Car>();
     for (const car of this.cars) if (car.leaveAt !== null && this.time >= car.leaveAt && !this.leave(car)) arrived.add(car);
 
-    const lanes = this.byLane();
+    const lanes = (this.lanes = this.byLane());
     const acceleration = new Map<Car, number>();
     for (const car of this.cars) if (car.leaveAt === null) acceleration.set(car, this.accelerate(car, lanes));
 
@@ -890,9 +894,10 @@ export class Simulation {
     const ahead = lane[lane.indexOf(car) + 1];
     if (ahead) best = { gap: this.at(ahead) - this.at(car) - CAR_LENGTH, speed: ahead.v };
     else {
-      // Look along the next couple of legs, at the first car past where each starts.
+      // Look along the legs ahead (however short: roads can be a few units long between buildings),
+      // as far as it could need to stop, at the first car past where each starts.
       let distance = legLength(car.legs[car.leg]) - car.s;
-      for (let i = car.leg + 1; i < Math.min(car.legs.length, car.leg + 3); i++) {
+      for (let i = car.leg + 1; i < car.legs.length && distance < LOOK_AHEAD; i++) {
         const leg = car.legs[i];
         const first = lanes.get(leg.key)?.find((c) => this.at(c) >= leg.from);
         if (first) {
@@ -913,20 +918,29 @@ export class Simulation {
         if (ahead > 0 && ahead - CAR_LENGTH < best.gap) best = { gap: ahead - CAR_LENGTH, speed: other.v };
       }
     }
-    // A car changing lane takes up room in both lanes: cars in the lane it leaves see it where it
-    // is, cars in the lane it joins see it where it will join.
+    // A car changing lane (or pulling out of a driveway) takes up room in both lanes: cars in the lane
+    // it leaves see it where it is; cars with the lane it joins on their way ahead see it where it will join.
     const mine = car.legs[car.leg];
-    if (mine.key.startsWith("r:")) {
-      for (const other of this.cars) {
-        const leg = other.legs[other.leg];
-        if (leg.joinAt === undefined || other === car) continue;
-        const left = other.legs[other.leg - 1];
-        const position =
-          left.key === mine.key ? left.to + other.s : leg.outKey === mine.key ? leg.joinAt - (legLength(leg) - other.s) : null;
-        if (position === null) continue;
-        const ahead = position - this.at(car);
-        if (ahead > 0 && ahead - CAR_LENGTH < best.gap) best = { gap: ahead - CAR_LENGTH, speed: other.v };
-      }
+    // How far ahead each lane on its way is: a point p along that lane's track is p + offset ahead.
+    const offsets = new Map<string, number>();
+    for (let k = car.leg, distance = 0; k < car.legs.length && distance < LOOK_AHEAD; k++) {
+      const leg = car.legs[k];
+      const start = k === car.leg ? this.at(car) : leg.from;
+      if (!offsets.has(leg.key)) offsets.set(leg.key, distance - start);
+      distance += Math.max(0, leg.to - start);
+    }
+    for (const other of this.cars) {
+      const leg = other.legs[other.leg];
+      if (leg.joinAt === undefined || other === car) continue;
+      const left = other.legs[other.leg - 1];
+      const joins = leg.outKey === undefined ? undefined : offsets.get(leg.outKey);
+      const ahead =
+        mine.key.startsWith("r:") && left.key === mine.key
+          ? left.to + other.s - this.at(car)
+          : joins !== undefined
+            ? leg.joinAt - (legLength(leg) - other.s) + joins
+            : null;
+      if (ahead !== null && ahead > 0 && ahead - CAR_LENGTH < best.gap) best = { gap: ahead - CAR_LENGTH, speed: other.v };
     }
     // On a roundabout, also follow whoever is ahead round the ring in the same ring lane, whichever
     // way they came in. Leaving, a car crosses any lanes outside it, so it watches every lane.
@@ -1068,6 +1082,8 @@ export class Simulation {
     const door = change.key.startsWith("out:") ? Number(change.key.split(":")[1]) : null;
     if (door !== null && this.cars.some((c) => c !== car && this.nearDoor(c, door))) return false;
     const from = car.legs[car.leg].key;
+    // Room where it joins, past any short roads beyond, for the car to fit in.
+    if (this.ahead(car, car.leg + 2, join) < CAR_LENGTH + MIN_GAP * 2) return false;
     for (const other of this.cars) {
       if (other === car) continue;
       const leg = other.legs[other.leg];
@@ -1157,12 +1173,31 @@ export class Simulation {
     return car.legs[car.leg].key.startsWith(`out:${source}:`) && car.s < CAR_LENGTH + MIN_GAP * 2;
   }
 
+  /**
+   * Distance along `car`'s route from point `at` on its leg `index` (along that leg's track) to the
+   * nearest other car ahead, looking up to `LOOK_AHEAD`; Infinity if there's none.
+   */
+  private ahead(car: Car, index: number, at: number): number {
+    let distance = 0;
+    for (let k = index; k < car.legs.length && distance < LOOK_AHEAD; k++) {
+      const leg = car.legs[k];
+      const start = k === index ? at : leg.from;
+      // Cars in each lane are kept nearest the start first.
+      const first = this.lanes.get(leg.key)?.find((c) => c !== car && this.at(c) >= start);
+      if (first) return distance + this.at(first) - start;
+      distance += Math.max(0, leg.to - start);
+    }
+    return Infinity;
+  }
+
   /** Room for one more car where the movement comes out, counting cars already heading there. */
   private exitHasRoom(car: Car, next: Movement): boolean {
     // Up to the first car in the lane it comes out in, however far along (the leg itself may stop
     // short at a lane change); a car changing out of that lane still takes room in it.
-    const out = car.legs[car.legs.indexOf(next) + 1];
-    let room = Infinity;
+    const index = car.legs.indexOf(next) + 1;
+    const out = car.legs[index];
+    // And past it, when it's short, to the first car on the legs beyond.
+    let room = this.ahead(car, index, out.from) - CAR_LENGTH;
     for (const c of this.cars) {
       const leg = c.legs[c.leg];
       const left = leg.joinAt !== undefined ? c.legs[c.leg - 1] : null;

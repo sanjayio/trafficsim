@@ -725,6 +725,30 @@ describe("sources and sinks along a road", () => {
     expect(pulledOut.size).toBeGreaterThan(3);
   });
 
+  it("see the queue past short stretches of road between close-packed homes, and don't pile into it", () => {
+    const graph = new RoadGraph();
+    road(graph, 0, 0, 400, 0);
+    // Homes every 18 units, on both sides: the road between them is only a few units long.
+    for (let x = 220; x <= 346; x += 18) graph.setTerminal(graph.nodeOnRoad({ x, y: x % 36 ? 10 : -10 })!.id, { ...DEFAULT_SOURCE, rate: 20, side: x % 36 ? 1 : -1 });
+    graph.setTerminal(at(graph, 0, 0), { ...DEFAULT_SOURCE, rate: 30 });
+    graph.setTerminal(at(graph, 400, 0), SINK);
+    const sim = new Simulation(graph);
+    sim.parking = false;
+    run(sim, 120, () => {
+      noOverlap(sim);
+      const onRoad = sim.cars.filter((c) => c.legs[c.leg].key.startsWith("r:"));
+      for (const a of onRoad) {
+        for (const b of onRoad) {
+          if (a === b || a.legs[a.leg].key.split(":")[2] !== b.legs[b.leg].key.split(":")[2]) continue;
+          const p = sim.pose(a);
+          const q = sim.pose(b);
+          apart(Math.hypot(p.x - q.x, p.y - q.y), CAR_LENGTH * 0.9);
+        }
+      }
+    });
+    expect(sim.delivered).toBeGreaterThan(20);
+  });
+
   it("send cars out of the driveway both ways, and take them in at the far end", () => {
     const graph = new RoadGraph();
     const spec = { ...DEFAULT_ROAD_SPEC, lanes: 2 };
