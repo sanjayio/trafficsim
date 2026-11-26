@@ -27,7 +27,9 @@ const CAR_COLORS = [
   0xf2f2f0, 0xf2f2f0, 0xf2f2f0, 0x1c1d20, 0x1c1d20, 0x1c1d20, 0xb9bdc2, 0xb9bdc2, 0x6c7178, 0x6c7178,
   0x1f3a5f, 0x9b1c1c, 0x2f5d50, 0x8a6f4e, 0xc9a227, 0x3f7fbf,
 ];
-export const CAR_TYPES = ["sedan", "hatch", "suv"] as const;
+export const CAR_TYPES = ["hatch", "electric", "taxi"] as const;
+/** The share of cars that are taxis; the rest are hatchbacks and electric saloons, half and half. */
+const TAXIS = 0.1;
 export type CarType = (typeof CAR_TYPES)[number];
 
 /**
@@ -780,7 +782,7 @@ export class Simulation {
         v: 0,
         accel: 0,
         color: CAR_COLORS[Math.floor(this.random() * CAR_COLORS.length)],
-        type: CAR_TYPES[Math.floor(this.random() * CAR_TYPES.length)],
+        type: carType(this.random()),
         cleared: false,
         arrival: null,
         stopped: 0,
@@ -1590,4 +1592,9 @@ export class Simulation {
     }
     return true;
   }
+}
+
+/** A car's type from a draw `r` in [0, 1): a taxi now and then, else a hatchback or an electric saloon. */
+function carType(r: number): CarType {
+  return r < TAXIS ? "taxi" : r < TAXIS + (1 - TAXIS) / 2 ? "hatch" : "electric";
 }

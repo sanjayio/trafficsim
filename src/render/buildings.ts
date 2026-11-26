@@ -1,26 +1,27 @@
 import { BoxGeometry, BufferGeometry, CanvasTexture, Color, ConeGeometry, CylinderGeometry, Float32BufferAttribute, Group, IcosahedronGeometry, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, PlaneGeometry, Quaternion, SRGBColorSpace, Vector3 } from "three";
-import { carPark, DRIVEWAY_WIDTH, isSourceBuilding, LOT_SETBACK, PARKING_DEPTH, PLAZA_DEPTH, tallSteps, type Building, type BuildingDetails, type Lot } from "../core/terminal";
+import { BAY_WIDTH, carPark, DRIVEWAY_WIDTH, isSourceBuilding, LOT_SETBACK, PARKING_DEPTH, PLAZA_DEPTH, tallSteps, type Building, type BuildingDetails, type Lot, type SinkBuilding } from "../core/terminal";
 import { FlatLayer, flatMaterial, KERB_HEIGHT } from "./flat";
-import { faceTone, villaLook, villaModel } from "./villas";
+import { palette } from "./palette";
+import { apartmentLook, apartmentModel } from "./apartments";
+import { commercialLook, commercialModel } from "./commercial";
+import { faceTone, villaLook, villaModel, type KitModel } from "./villas";
 
 /** Buildings draw after the flat road layers, with normal depth testing. */
 const BUILDING_ORDER = 20;
 
-/** Each building's usual colours: its main colour (walls, or glass) and its accent (roof, awning, sign band, frames). */
-export const BUILDING_COLORS: Record<Building, { primary: number; secondary: number }> = {
-  villa: { primary: 0xf2ede4, secondary: 0xb5543c },
-  townhouse: { primary: 0xe8dcc6, secondary: 0x4a4f57 },
-  apartment: { primary: 0xc9c4ba, secondary: 0xa9a49a },
-  smallShop: { primary: 0xe9e4d8, secondary: 0x2a9d8f },
-  largeShop: { primary: 0xd8d4cc, secondary: 0xe63946 },
-  smallOffice: { primary: 0x4f7ea8, secondary: 0xd6dde3 },
-  largeOffice: { primary: 0x4f7ea8, secondary: 0xd6dde3 },
-};
-
-/** A building's colours when it hasn't been given its own: villas vary by where they stand (see `villaLook`). */
+/**
+ * A building's colours when it hasn't been given its own, its main colour (walls) and accent (roof,
+ * bands, awnings, its sign): each kind's own, varying by where it stands (see `villaLook`,
+ * `apartmentLook`, `commercialLook`).
+ */
 export function usualColors(building: Building, centre: { x: number; y: number }): { primary: number; secondary: number } {
-  return building === "villa" ? villaLook(centre).colors : BUILDING_COLORS[building];
+  if (building === "villa") return villaLook(centre).colors;
+  if (building === "apartment") return apartmentLook(centre).colors;
+  return commercialLook(building, centre).colors;
 }
+
+/** Apartment buildings stand no taller than this (the kit's tower, fitted to its lot, would tower over the town). */
+const APARTMENT_HEIGHT = 70;
 
 /** Homes take this share of their plot's length; trees fill the rest. */
 const HOME_SHARE = 0.7;
@@ -128,37 +129,26 @@ const UP = new Vector3(0, 1, 0);
 
 /** Trees along an office plaza, with a bench between each pair. */
 const PLAZA_SPACING = 12;
-/**
- * Panels over office glass and flats' window bands where someone's in: the glass's colour by
- * day (a shade off it, so their own materials), lit at night while the rest stays dark.
- */
-const OCCUPIED_GLASS_LIGHT = 0xf2c96a;
-const OCCUPIED_BAND_LIGHT = 0xffdf99;
-/** Share lit at night (most offices have gone home; most flats are lived in), and roughly how wide each unit is along a wall. */
-const OCCUPANCY = { office: 0.3, flat: 0.7 };
-const UNIT_WIDTH = 7;
 
-/** Window colours, and the light they give at night: warm everywhere, offices included. */
-const WINDOW_LIGHT = new Map<number, number>([
-  [0x2b3440, 0xffd27a],
-]);
-const GARAGE_WIDTH = 8;
+/** How much wider than in proportion a shop or office may be drawn, to fill its footprint. */
+const MAX_STRETCH = 1.6;
+
 
 /**
- * Builds the 3D model of each source and sink building from boxes and gable roofs, faces shaded
+ * Builds the 3D model of each source and sink building (villas: see `villas`) from boxes, faces shaded
  * by hand (lit top, a lighter and a darker pair of sides) since the scene has no lights.
  * Geometry is shared; materials are cached per colour.
  */
 export class BuildingKit {
   private box = shadedBox();
-  private roof = gableGeometry();
   private treeShapes = treeGeometries();
   /** A unit square lying on the ground. */
   private plane = new PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
   private grass = flatMaterial(0x7fa86a);
   private concrete = flatMaterial(0xa3a59f);
   private paint = flatMaterial(0xf2f2ee);
-  private drive = flatMaterial(0x45494f);
+  /** An office's drive across its plaza: paved like the footpath, as every driveway is. */
+  private drive = flatMaterial(palette.footpath);
   private materials = new Map<string, MeshBasicMaterial>();
   /** Trees placed on the lot being made (see `tree`), planted together at the end (see `plantTrees`). */
   private trees: { x: number; z: number; bush?: boolean }[] = [];
@@ -168,14 +158,10 @@ export class BuildingKit {
   /** The building being made's details (see `model`): its colours, and its name for its sign. */
   private details: BuildingDetails = {};
   private signName = "";
-  private building: Building = "villa";
+  /** The board behind the name: the building's accent colour. */
+  private signBoard = 0x2a9d8f;
   /** An upright unit square facing -z (a building's front), for name signs. */
   private signPlane = new PlaneGeometry(1, 1).rotateY(Math.PI);
-
-  /** The building's chosen colour for `role`, or its usual `colour`. */
-  private colour(colour: number, role: "primary" | "secondary"): number {
-    return this.details.colors?.[role] ?? colour;
-  }
 
   /**
    * The building's name on a board `w` × `h`, centred on x, from height y, just in front of the
@@ -187,7 +173,7 @@ export class BuildingKit {
     canvas.width = 512;
     canvas.height = Math.max(64, Math.round((512 * h) / w));
     const ctx = canvas.getContext("2d")!;
-    const back = new Color(this.colour(BUILDING_COLORS[this.building].secondary, "secondary"));
+    const back = new Color(this.signBoard);
     ctx.fillStyle = `#${back.getHexString()}`;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     const light = back.r * 0.3 + back.g * 0.59 + back.b * 0.11 > 0.55;
@@ -211,15 +197,13 @@ export class BuildingKit {
   /** Picks which offices and flats are vacant: seeded per building (see `model`), so it's the same each time it's drawn. */
   private random = () => 0.5;
   /** Window materials, with their colours by day and lit at night. */
-  private windows: { material: MeshBasicMaterial; day: Color; night: Color }[] = [];
 
   /**
    * Lights windows for the time of day: by day they look as the rest of the scene does at
    * `exposure`; as `night` goes from 0 to 1, they glow.
    */
   setLights(exposure: number, night: number): void {
-    for (const w of this.windows) w.material.color.copy(w.day).multiplyScalar(exposure).lerp(w.night, night);
-    // Villas' glass: the same glow, through the scene's exposure (linear tone mapping), which it undoes.
+    // Kit buildings' glass glows, through the scene's exposure (linear tone mapping), which it undoes.
     villaUniforms.villaNight.value = night;
     villaUniforms.villaGlow.value.copy(VILLA_GLOW).multiplyScalar(1 / Math.max(exposure, 0.05));
   }
@@ -232,7 +216,6 @@ export class BuildingKit {
     this.trees = [];
     this.details = details;
     this.signName = details.name ?? "";
-    this.building = lot.building;
     const group = new Group();
     // Local +z is the right of local +x: point x along the road the way that puts z towards the building.
     const right = { x: -lot.along.y, y: lot.along.x };
@@ -254,7 +237,21 @@ export class BuildingKit {
     // stands where its car park leaves room (see carPark).
     const park = home ? null : carPark(lot);
     const at = park?.building;
-    const villa = building === "villa" ? this.villa(lot, l * HOME_SHARE, d, doorX) : null;
+    // Homes are the kit's (see `villas`, `apartments`): their variant and colours by where they stand.
+    const villaAt = building === "villa" ? villaLook(lot.centre) : null;
+    const flatsAt = building === "apartment" ? apartmentLook(lot.centre) : null;
+    const look = villaAt ? { model: villaModel(villaAt.variant), colors: villaAt.colors } : flatsAt ? { model: apartmentModel(flatsAt.variant), colors: flatsAt.colors } : null;
+    const villa = look
+      ? this.kitHome(
+          look.model,
+          this.details.colors ?? look.colors,
+          lot,
+          l * HOME_SHARE,
+          d,
+          doorX,
+          building === "apartment" ? APARTMENT_HEIGHT : Infinity,
+        )
+      : null;
     const bl = villa ? villa.width : at ? at.a1 - at.a0 : l * HOME_SHARE;
     const bd = at ? at.z1 - at.z0 : d;
     const bx = villa ? villa.x : at ? ((at.a0 + at.a1) / 2) * flip : Math.max(-(l - bl) / 2, Math.min((l - bl) / 2, doorX));
@@ -263,7 +260,7 @@ export class BuildingKit {
     body.position.set(bx, 0, bz);
     // Homes: a garage door where the driveway ends (in the house's own frame).
     if (villa) body.add(villa.mesh);
-    else for (const mesh of this.parts(building as Exclude<Building, "villa">, bl, bd, doorX - bx)) body.add(mesh);
+    else body.add(...this.commercial(building as SinkBuilding, lot, bl, bd, doorX - bx, park!.bays[0]?.underground ?? false));
     // Levels gained upward: the same building, taller.
     body.scale.y = 1 + 0.3 * tallSteps(details);
     group.add(body);
@@ -293,6 +290,20 @@ export class BuildingKit {
     } else {
       // The bays cars park in (see Simulation), between painted lines.
       for (const { a, z } of park!.lines) group.add(this.flat(this.paint, FlatLayer.markings, a * flip, z, 0.5, PARKING_DEPTH - 1));
+      // And a line across the closed end of each run of bays (away from where cars come in: the
+      // front yard for the front row, the lane for the two behind), not across a gap left for the driveway.
+      const rows = new Map<number, number[]>();
+      for (const { a, z } of park!.lines) rows.set(z, [...(rows.get(z) ?? []), a]);
+      for (const [z, lines] of rows) {
+        const facing = park!.bays.find((b) => b.z === z)?.facing;
+        const end = z + ((facing ? -facing : 1) * (PARKING_DEPTH - 1)) / 2;
+        lines.sort((p, q) => p - q);
+        for (let i = 0, start = 0; i < lines.length; i++) {
+          if (i + 1 < lines.length && lines[i + 1] - lines[i] <= BAY_WIDTH + 0.01) continue;
+          if (i > start) group.add(this.flat(this.paint, FlatLayer.markings, ((lines[start] + lines[i]) / 2) * flip, end, lines[i] - lines[start] + 0.5, 0.5));
+          start = i + 1;
+        }
+      }
       // The large shop: two trees and a bench in the front yard, clear of the entrance and the side driveway.
       if (park!.path !== null) {
         const yard = -d / 2 - LOT_SETBACK / 2;
@@ -319,32 +330,6 @@ export class BuildingKit {
     return mesh;
   }
 
-  /** A garage door on the front wall at `front`, centred on x, standing on height y: a panel with two grooves. */
-  private garageDoor(x: number, y: number, front: number): Mesh[] {
-    // Stands proud of the wall (and of the apartment's window bands, 0.3 out) so the faces don't flicker.
-    return [
-      this.block(0xd6d0c4, GARAGE_WIDTH, 6, 1, x, y, front - 0.5),
-      this.block(0x9a938a, GARAGE_WIDTH - 0.6, 0.3, 1.2, x, y + 2, front - 0.5),
-      this.block(0x9a938a, GARAGE_WIDTH - 0.6, 0.3, 1.2, x, y + 4, front - 0.5),
-    ];
-  }
-
-  /**
-   * Air-handling units on a roof `l` × `d` at height `y`, one at each spot (fractions of the roof
-   * from its middle): a grey box with a dark fan grille on top and a duct running off it.
-   */
-  private roofUnits(l: number, d: number, y: number, spots: [number, number][]): Mesh[] {
-    return spots.flatMap(([u, v]) => {
-      const x = u * l;
-      const z = v * d;
-      return [
-        this.block(0xb8bcc0, 5, 2.6, 3.6, x, y, z),
-        this.block(0x34373c, 2.6, 0.25, 2.6, x + 0.8, y + 2.6, z),
-        this.block(0x9da2a7, 1.2, 1.2, 6, x - 1.4, y + 0.4, z + 4.4),
-      ];
-    });
-  }
-
   /** A park bench facing the road, centred on (x, z): a seat, a back, and two legs. */
   private bench(x: number, z: number): Mesh[] {
     return [
@@ -353,12 +338,6 @@ export class BuildingKit {
       this.block(0x4a4d52, 0.4, 1.2, 1.4, x - 2, 0, z),
       this.block(0x4a4d52, 0.4, 1.2, 1.4, x + 2, 0, z),
     ];
-  }
-
-  /** The way into an underground car park, in the front wall at `front`, centred on x: a dark opening under a concrete lintel. */
-  private garageEntrance(x: number, front: number): Mesh[] {
-    // Stands proud of the wall, its window bands and lit panels, so the faces don't flicker.
-    return [this.block(0x15171b, 10, 5, 1, x, 0, front - 0.5), this.block(0x8a8f96, 11, 1, 1.2, x, 5, front - 0.6)];
   }
 
   /** A small low-poly tree: a trunk and two stacked blocks of leaves. */
@@ -399,7 +378,6 @@ export class BuildingKit {
   dispose(): void {
     this.box.dispose();
     for (const shape of Object.values(this.treeShapes)) shape.dispose();
-    this.roof.dispose();
     this.plane.dispose();
     this.signPlane.dispose();
     this.leafMaterial.dispose();
@@ -408,22 +386,20 @@ export class BuildingKit {
   }
 
   /**
-   * A villa (see `villas`) on a plot `l` long and `d` deep (its body's share of the lot): its
-   * variant by where it stands, scaled to fit, turned (mirrored) so its garage is on the
-   * driveway's side and slid so the garage door meets the driveway at `doorX`, within the plot.
-   * Its middle across the plot and its width, for the trees round it.
+   * A kit home (`model`, see `villas`) on a plot `l` long and `d` deep (its body's share of the
+   * lot), in `colors`: scaled to fit (no taller than `maxHeight`), turned (mirrored) so its garage
+   * or car park entrance is on the driveway's side and slid so it meets the driveway at `doorX`,
+   * within the plot. Its middle across the plot and its width, for the trees round it.
    */
-  private villa(lot: Lot, l: number, d: number, doorX: number): { mesh: Mesh; x: number; width: number } {
-    const { variant, colors } = villaLook(lot.centre);
-    const model = villaModel(variant);
-    const scale = Math.min(l / (model.maxX - model.minX), d / (model.maxZ - model.minZ));
+  private kitHome(model: KitModel, colors: { primary: number; secondary: number }, lot: Lot, l: number, d: number, doorX: number, maxHeight: number): { mesh: Mesh; x: number; width: number } {
+    const scale = Math.min(l / (model.maxX - model.minX), d / (model.maxZ - model.minZ), maxHeight / model.height);
     const width = (model.maxX - model.minX) * scale;
     const middle = (model.minX + model.maxX) / 2;
     const garage = model.garageX - middle;
     const mirror = doorX >= 0 === garage >= 0 ? 1 : -1;
     const room = (lot.length - width) / 2;
     const x = Math.max(-room, Math.min(room, doorX - mirror * garage * scale));
-    const mesh = new Mesh(model.geometry, this.villaMaterial(this.details.colors ?? colors));
+    const mesh = new Mesh(model.geometry, this.kitMaterial(colors));
     mesh.scale.set(mirror * scale, scale, scale);
     // Its front on the body's front (the plot's road side).
     mesh.position.set(-mirror * middle * scale, 0, -d / 2 - model.minZ * scale);
@@ -433,11 +409,12 @@ export class BuildingKit {
   }
 
   /**
-   * A villa's material: the model's own colours, its walls and roof in `colors`, and its glass
-   * lit at night (see `setLights`). One per pair of colours; every villa shares its variant's geometry.
+   * A kit home's material: the model's own colours, its walls and roof (or accents) in `colors`,
+   * and its glass lit at night (see `setLights`). One per pair of colours; every home of a variant
+   * shares its geometry.
    */
-  private villaMaterial(colors: { primary: number; secondary: number }): MeshBasicMaterial {
-    const key = `villa:${colors.primary}:${colors.secondary}`;
+  private kitMaterial(colors: { primary: number; secondary: number }): MeshBasicMaterial {
+    const key = `kit:${colors.primary}:${colors.secondary}`;
     let material = this.materials.get(key);
     if (!material) {
       material = new MeshBasicMaterial({ vertexColors: true });
@@ -461,141 +438,55 @@ export class BuildingKit {
           // After the scene's tint: lit windows aren't dimmed with the scene.
           .replace("#include <tonemapping_fragment>", "if (vRole > 2.5) gl_FragColor.rgb = mix(gl_FragColor.rgb, villaGlow, villaNight);\n#include <tonemapping_fragment>");
       };
-      material.customProgramCacheKey = () => "villa";
+      material.customProgramCacheKey = () => "kit-home";
       this.materials.set(key, material);
     }
     return material;
   }
 
-  private parts(building: Exclude<Building, "villa">, l: number, d: number, garage: number): Mesh[] {
-    const front = -d / 2;
-    // Within the front wall, whatever the driveway's position.
-    const garageX = Math.max(-l / 2 + GARAGE_WIDTH / 2 + 1, Math.min(l / 2 - GARAGE_WIDTH / 2 - 1, garage));
-    switch (building) {
-      case "townhouse": {
-        const unit = l / 3;
-        const colours = [0xb86b4b, this.colour(0xe8dcc6, "primary"), 0x8f9aa3];
-        const roof = this.colour(0x4a4f57, "secondary");
-        return colours.flatMap((colour, i) => {
-          const x = -l / 2 + unit * (i + 0.5);
-          // The unit the driveway leads to has the garage instead of a front door.
-          const door = Math.abs(garageX - x) < unit / 2 ? this.garageDoor(garageX, 0, front) : [this.block(0x5a3e2b, 3.5, 6, 0.6, x - unit * 0.2, 0, front - 0.3)];
-          return [
-            this.block(colour, unit - 0.4, 16, d, x, 0, 0),
-            this.gable(roof, unit, 6, d + 2, x, 16, 0),
-            ...door,
-            this.block(0x2b3440, 4, 3.5, 0.6, x + unit * 0.2, 9.5, front - 0.3),
-            // Back windows, downstairs and up.
-            this.block(0x2b3440, 4, 3.5, 0.6, x, 3, -front + 0.3),
-            this.block(0x2b3440, 4, 3.5, 0.6, x, 9.5, -front + 0.3),
-            // The end houses' outer walls, downstairs and up.
-            ...(i === 1
-              ? []
-              : [3, 9.5].map((y) => this.block(0x2b3440, 0.6, 3.5, 4, (i === 0 ? -1 : 1) * (l / 2 - 0.2 + 0.3), y, 0))),
-          ];
-        });
-      }
-      case "apartment": {
-        const floors = 6;
-        const storey = 7.5;
-        const height = floors * storey;
-        return [
-          this.block(this.colour(0xc9c4ba, "primary"), l, height, d, 0, 0, 0),
-          ...Array.from({ length: floors }, (_, i) => this.block(0x2e3a48, l + 0.6, 3, d + 0.6, 0, i * storey + 3, 0)),
-          this.occupied(0x2e3a48, OCCUPIED_BAND_LIGHT, OCCUPANCY.flat, l + 0.6, d + 0.6, floors, (i) => i * storey + 3.2, 2.6),
-          this.block(this.colour(0xa9a49a, "secondary"), l + 1, 1, d + 1, 0, height, 0),
-          this.block(this.colour(0xb3aea4, "secondary"), l * 0.35, 5, d * 0.4, l * 0.15, height + 1, 0),
-          ...this.roofUnits(l, d, height + 1, [[-0.3, -0.25], [-0.3, 0.25]]),
-          ...this.garageEntrance(garageX, front),
-        ];
-      }
-      case "smallShop":
-        return [
-          this.block(this.colour(0xe9e4d8, "primary"), l, 10, d, 0, 0, 0),
-          this.block(0x2b3440, l * 0.7, 5, 0.6, 0, 1, front - 0.3),
-          this.block(this.colour(0x2a9d8f, "secondary"), l, 0.8, 5, 0, 7, front - 2.5),
-          this.block(0xe76f51, l * 0.6, 3, 0.8, 0, 10, front + 1),
-          this.sign(l * 0.6, 3, 0, 10, front + 0.55),
-          ...this.roofUnits(l, d, 10, [[0, 0.2]]),
-        ];
-      case "largeShop":
-        return [
-          this.block(this.colour(0xd8d4cc, "primary"), l, 14, d, 0, 0, 0),
-          this.block(this.colour(0xe63946, "secondary"), l * 0.8, 4, 1, 0, 9, front - 0.5),
-          this.sign(l * 0.6, 3.4, 0, 9.3, front - 1),
-          this.block(0x2b3440, l * 0.3, 6, 0.6, 0, 0, front - 0.3),
-          this.block(0x9a968e, 8, 2.5, 6, -l * 0.25, 14, d * 0.1),
-          this.block(0x9a968e, 8, 2.5, 6, l * 0.2, 14, -d * 0.15),
-        ];
-      case "smallOffice":
-        return [
-          ...this.glassStack(l, d, 4, 7),
-          ...this.garageEntrance(garage, front),
-          this.sign(Math.min(l * 0.7, 20), 2.4, garage, 7.4, front - 0.3),
-          ...this.roofUnits(l, d, 28.6, [[-0.25, 0], [0.25, 0.2]]),
-        ];
-      case "largeOffice":
-        return [
-          ...this.glassStack(l, d, 11, 7),
-          ...this.garageEntrance(garage, front),
-          this.sign(Math.min(l * 0.6, 24), 2.6, garage, 7.3, front - 0.3),
-          ...this.glassStack(l * 0.65, d * 0.65, 2, 6, 77),
-          // On the lower roof, round the top floors.
-          ...this.roofUnits(l, d, 77.6, [[-0.41, -0.41], [0.41, 0.41], [0.41, -0.41]]),
-          this.block(0x8a939c, 2, 8, 2, 0, 89, 0),
-        ];
-    }
-  }
-
   /**
-   * Glass floors with a frame band at each, `floors` high, from height `base`. Bands stop just
-   * under each floor's top, so the last one's top isn't level with the roof (the two would flicker).
+   * A shop or office (see `commercial`) on its footprint `l` × `d` (where its car park leaves room),
+   * fitted to it, with its name on its sign. An office's garage (its car park is underground) meets
+   * the driveway at `garage`: the building turned (mirrored) to put it on that side, and slid (and
+   * narrowed if need be) to bring it there, within the footprint.
    */
-  private glassStack(l: number, d: number, floors: number, storey: number, base = 0): Mesh[] {
-    const height = floors * storey;
-    const glass = this.colour(0x4f7ea8, "primary");
-    const frame = this.colour(0xd6dde3, "secondary");
-    return [
-      this.block(glass, l, height, d, 0, base, 0),
-      this.occupied(glass, OCCUPIED_GLASS_LIGHT, OCCUPANCY.office, l, d, floors, (i) => base + i * storey + 0.3, storey - 2.1),
-      ...Array.from({ length: floors }, (_, i) => this.block(frame, l + 0.4, 1, d + 0.4, 0, base + (i + 1) * storey - 1.5, 0)),
-      // A light roof slab on top (its underside, level with the glass's roof, faces down and isn't drawn).
-      this.block(frame, l + 0.4, 0.6, d + 0.4, 0, base + height, 0),
-    ];
-  }
-
-  /**
-   * Lit panels over the windows of the occupied units of a block `l` × `d` in plan: on each of
-   * `floors` floors (the panel from height `bottom(floor)`, `height` tall), each wall split into
-   * units about UNIT_WIDTH wide, a share `occupancy` of them occupied. One instanced mesh for the lot.
-   */
-  private occupied(colour: number, light: number, occupancy: number, l: number, d: number, floors: number, bottom: (floor: number) => number, height: number): Mesh {
-    const panels: Matrix4[] = [];
-    const proud = 0.12;
-    for (let floor = 0; floor < floors; floor++) {
-      const y = bottom(floor) + height / 2;
-      // Each wall: along x (front and back) or z (the ends), at its offset out from the middle.
-      for (const [length, alongX, out] of [[l, true, d / 2], [l, true, -d / 2], [d, false, l / 2], [d, false, -l / 2]] as const) {
-        const units = Math.max(1, Math.round(length / UNIT_WIDTH));
-        const unit = length / units;
-        for (let i = 0; i < units; i++) {
-          if (this.random() >= occupancy) continue;
-          const at = -length / 2 + unit * (i + 0.5);
-          const offset = out + Math.sign(out) * proud;
-          panels.push(
-            alongX
-              ? new Matrix4().compose(new Vector3(at, y, offset), new Quaternion(), new Vector3(unit - 0.6, height, 0.2))
-              : new Matrix4().compose(new Vector3(offset, y, at), new Quaternion(), new Vector3(0.2, height, unit - 0.6)),
-          );
-        }
-      }
+  private commercial(building: SinkBuilding, lot: Lot, l: number, d: number, garage: number, underground: boolean): Mesh[] {
+    const look = commercialLook(building, lot.centre);
+    const model = commercialModel(look.variant);
+    const colors = this.details.colors ?? look.colors;
+    this.signBoard = colors.secondary;
+    const width = model.maxX - model.minX;
+    const middle = (model.minX + model.maxX) / 2;
+    // Stretched along the front to fill its footprint (a car park behind and in front leaves it wide
+    // and shallow), but not so far its shopfronts look drawn out.
+    let scale = Math.min(l / width, d / (model.maxZ - model.minZ));
+    let across = Math.min(l / width, scale * MAX_STRETCH);
+    let mirror = 1;
+    let centre = 0;
+    if (underground) {
+      const offset = model.garageX - middle;
+      mirror = garage >= 0 === offset >= 0 ? 1 : -1;
+      // Room to bring the garage to the driveway, the building kept within its footprint.
+      const g = Math.abs(garage);
+      const o = Math.abs(offset);
+      across = Math.min(across, (l / 2 + g) / (width / 2 + o), o < width / 2 ? (l / 2 - g) / (width / 2 - o) : Infinity);
+      scale = Math.min(scale, across);
+      const room = (l - width * across) / 2;
+      centre = Math.max(-room, Math.min(room, garage - mirror * offset * across));
     }
-    const mesh = new InstancedMesh(this.box, this.shaded(colour, light), Math.max(1, panels.length));
-    panels.forEach((m, i) => mesh.setMatrixAt(i, m));
-    mesh.count = panels.length;
+    // Model z to the footprint's: its front on the footprint's front.
+    const z = (v: number) => -d / 2 + (v - model.minZ) * scale;
+    const mesh = new Mesh(model.geometry, this.kitMaterial(colors));
+    mesh.scale.set(mirror * across, scale, scale);
+    mesh.position.set(centre - mirror * middle * across, 0, z(0));
     mesh.renderOrder = BUILDING_ORDER;
-    return mesh;
+    mesh.castShadow = true;
+    const meshes: Mesh[] = [mesh];
+    const sign = model.sign;
+    if (sign && this.signName) meshes.push(this.sign(sign.w * across, sign.h * scale, centre + mirror * (sign.x - middle) * across, (sign.y - sign.h / 2) * scale, z(sign.z)));
+    return meshes;
   }
+
 
   /** A box of size (w, h, d) standing on height y, centred on (x, z) in the building's frame. */
   private block(colour: number, w: number, h: number, d: number, x: number, y: number, z: number): Mesh {
@@ -607,57 +498,19 @@ export class BuildingKit {
     return mesh;
   }
 
-  /** A gable roof (ridge along x) of size (w, h, d) on height y, centred on (x, z). */
-  private gable(colour: number, w: number, h: number, d: number, x: number, y: number, z: number): Mesh {
-    const mesh = new Mesh(this.roof, this.shaded(colour));
-    mesh.scale.set(w, h, d);
-    mesh.position.set(x, y, z);
-    mesh.renderOrder = BUILDING_ORDER;
-    mesh.castShadow = true;
-    return mesh;
-  }
-
-  /**
-   * Materials faking light from above and one side. Boxes, by face (+x, -x, +y, -y, +z, -z): the
-   * ends mid-tone, the top lit, the front and back a step darker. Roofs: the two slopes, then the gable ends.
-   */
   /**
    * The material for something `colour`, shaded by face by its geometry's vertex colours (lit from
-   * above: top full, the rest darker), so a whole box or roof is one draw. Windows (`light`, or a
-   * colour with a light) light up at night (see `setLights`).
+   * above: top full, the rest darker), so a whole box is one draw.
    */
-  private shaded(colour: number, light?: number): MeshBasicMaterial {
-    const lit = light ?? WINDOW_LIGHT.get(colour);
-    const key = `${colour}:${lit ?? ""}`;
+  private shaded(colour: number): MeshBasicMaterial {
+    const key = `${colour}`;
     let material = this.materials.get(key);
     if (!material) {
-      // Lit windows aren't dimmed with the scene, and glow a little brighter than their colour.
-      material = new MeshBasicMaterial({ color: colour, vertexColors: true, toneMapped: !lit });
-      if (lit) this.windows.push({ material, day: new Color(colour), night: new Color(lit).multiplyScalar(WINDOW_GLOW) });
+      material = new MeshBasicMaterial({ color: colour, vertexColors: true });
       this.materials.set(key, material);
     }
     return material;
   }
-}
-
-/** A unit gable roof: base 1 × 1 at y = 0, ridge along x at y = 1, z = 0, shaded by face (see `shadedBox`). */
-function gableGeometry(): BufferGeometry {
-  const a = (x: number) => [x, 0, -0.5];
-  const b = (x: number) => [x, 0, 0.5];
-  const c = (x: number) => [x, 1, 0];
-  const quad = (p: number[], q: number[], r: number[], s: number[]) => [...p, ...q, ...r, ...p, ...r, ...s];
-  const positions = [
-    ...quad(a(-0.5), c(-0.5), c(0.5), a(0.5)), // slope facing -z (the road)
-    ...quad(b(0.5), c(0.5), c(-0.5), b(-0.5)), // slope facing +z
-    ...a(0.5), ...c(0.5), ...b(0.5), // end at +x
-    ...b(-0.5), ...c(-0.5), ...a(-0.5), // end at -x
-  ];
-  const geometry = new BufferGeometry();
-  geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
-  // Shaded by face: the slope facing the road lit, the back one darker, the ends between.
-  const tones = [...Array(6).fill(1), ...Array(6).fill(0.7), ...Array(6).fill(0.86)] as number[];
-  geometry.setAttribute("color", new Float32BufferAttribute(tones.flatMap((t) => [t, t, t]), 3));
-  return geometry;
 }
 
 /** A unit box shaded by face in its vertex colours, lit from above: top full, the x ends a step darker, the rest darker still. */

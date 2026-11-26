@@ -15,22 +15,26 @@ export const ROLE = { kit: 0, walls: 1, roof: 2, glass: 3 } as const;
 type Role = (typeof ROLE)[keyof typeof ROLE];
 
 /** The kit's palette (sRGB), for the parts that keep their own colour. */
-const KIT = {
+export const KIT = {
   white: 0xf4f1ea,
   slab: 0xa19e97,
   door: 0x7a5230,
   glass: 0x7fb3e0,
+  glassDark: 0x4f7fb5,
   metal: 0xb9c3cc,
   metalDark: 0x6f7a86,
+  dark: 0x3b404b,
+  concrete: 0xcfccc4,
+  pipe: 0x2b86d6,
+  solar: 0x2a4b8f,
 };
 
 /** Wall and roof colours a villa is given (by where it stands) until it's given its own. */
 const WALLS = [0xf2ede4, 0xf2e2b6, 0x9fd3e0, 0xc9dcb3, 0xe8c9b0, 0xd9d3ea];
 const ROOFS = [0xc8553d, 0xb5543c, 0x8a4b3a, 0x4a5563];
 
-/** A villa's variant and its usual colours, the same each time for the same spot. */
-export function villaLook(centre: { x: number; y: number }): { variant: VillaVariant; colors: { primary: number; secondary: number } } {
-  // mulberry32, from the spot (neighbouring spots look unrelated).
+/** Picks from lists, the same each time for the same spot (mulberry32; neighbouring spots look unrelated). */
+export function pickerAt(centre: { x: number; y: number }): <T>(list: readonly T[]) => T {
   let seed = (Math.imul(Math.round(centre.x), 73856093) ^ Math.imul(Math.round(centre.y), 19349663)) >>> 0;
   const next = () => {
     seed = (seed + 0x6d2b79f5) >>> 0;
@@ -38,7 +42,12 @@ export function villaLook(centre: { x: number; y: number }): { variant: VillaVar
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
-  const pick = <T>(list: readonly T[]) => list[Math.floor(next() * list.length)];
+  return (list) => list[Math.floor(next() * list.length)];
+}
+
+/** A villa's variant and its usual colours, the same each time for the same spot. */
+export function villaLook(centre: { x: number; y: number }): { variant: VillaVariant; colors: { primary: number; secondary: number } } {
+  const pick = pickerAt(centre);
   return { variant: pick(VILLA_VARIANTS), colors: { primary: pick(WALLS), secondary: pick(ROOFS) } };
 }
 
@@ -50,8 +59,11 @@ export function faceTone(x: number, y: number, z: number): number {
   return (Math.max(0, y) + Math.abs(x) * 0.86 + Math.abs(z) * 0.7 + Math.max(0, -y) * 0.7) / (Math.abs(x) + Math.abs(y) + Math.abs(z) || 1);
 }
 
-/** A villa's geometry, and where on it things are (in its own units, our frame: x along the front, z back, y up). */
-export interface VillaModel {
+/**
+ * A kit building's geometry, and where on it things are (in its own units, our frame: x along the
+ * front, z back, y up): where its driveway should meet it (a garage door, a car park's entrance).
+ */
+export interface KitModel {
   geometry: BufferGeometry;
   /** Its extent across the front (x) and back from it (z). */
   minX: number;
@@ -60,12 +72,16 @@ export interface VillaModel {
   maxZ: number;
   /** The middle of its garage door, across the front. */
   garageX: number;
+  /** How tall it stands. */
+  height: number;
+  /** Where its name goes, if it has one: a board `w` × `h` centred on (x, y), on the front at z. */
+  sign?: { x: number; y: number; w: number; h: number; z: number };
 }
 
-const models = new Map<VillaVariant, VillaModel>();
+const models = new Map<VillaVariant, KitModel>();
 
 /** The model for `variant` (built the first time it's asked for). */
-export function villaModel(variant: VillaVariant): VillaModel {
+export function villaModel(variant: VillaVariant): KitModel {
   let model = models.get(variant);
   if (!model) {
     const house = new House();
@@ -183,11 +199,12 @@ const BUILDERS: Record<VillaVariant, (h: House) => void> = {
  * so its faces are turned to face away from its middle. Shaded by face like `shadedBox`; parts
  * that take the house's colours keep only the shading (the material tints them).
  */
-class House {
+export class House {
   private positions: number[] = [];
   private colours: number[] = [];
   private roles: number[] = [];
   private garageX = 0;
+  private sign?: KitModel["sign"];
 
   /** A box `w` × `d` × `h` (across, back, up), centred on (x, y), its base at height z. */
   box(w: number, d: number, h: number, x: number, y: number, z: number, colour: number, role: Role): void {
@@ -197,6 +214,20 @@ class House {
       [0, 1, 3, 2], [4, 5, 7, 6], [0, 1, 5, 4], [2, 3, 7, 6], [0, 2, 6, 4], [1, 3, 7, 5],
     ];
     this.piece(faces.map((f) => f.map(c)), colour, role);
+  }
+
+  /**
+   * The kit's `prisma` along x: the convex outline `profile` (points (y, z): back from the front,
+   * up), `length` long, centred across on x, raised by z.
+   */
+  prism(profile: [number, number][], length: number, x: number, z: number, colour: number, role: Role): void {
+    const at = (side: number) => profile.map(([py, pz]): [number, number, number] => [x + (side * length) / 2, py, z + pz]);
+    const [a, b] = [at(-1), at(1)];
+    const sides = profile.map((_, i) => {
+      const j = (i + 1) % profile.length;
+      return [a[i], a[j], b[j], b[i]];
+    });
+    this.piece([a, b, ...sides], colour, role);
   }
 
   /** The kit's four-sided roof over `w` × `d`, `h` high, centred on (x, y) at height z, overhanging by `eave`. */
@@ -245,6 +276,11 @@ class House {
   /** A thin panel on the front wall at `front` (a door, a window), `w` × `h`, its middle at (x, z). */
   panel(w: number, h: number, x: number, front: number, z: number, colour: number, role: Role, thick = 0.04): void {
     this.box(w, thick, h, x, front - thick / 2, z - h / 2, colour, role);
+  }
+
+  /** Where the building's name goes: a board `w` × `h` centred on (x, z), on the front at `front` (kit frame). */
+  signAt(x: number, z: number, w: number, h: number, front: number): void {
+    this.sign = { x: -x, y: z, w, h, z: front };
   }
 
   /** Where the garage door is, across the front (kit x). */
@@ -298,7 +334,7 @@ class House {
     }
   }
 
-  done(): VillaModel {
+  done(): KitModel {
     const geometry = new BufferGeometry();
     geometry.setAttribute("position", new Float32BufferAttribute(this.positions, 3));
     geometry.setAttribute("color", new Float32BufferAttribute(this.colours, 3));
@@ -306,6 +342,6 @@ class House {
     geometry.computeBoundingBox();
     geometry.computeBoundingSphere();
     const { min, max } = geometry.boundingBox!;
-    return { geometry, minX: min.x, maxX: max.x, minZ: min.z, maxZ: max.z, garageX: this.garageX };
+    return { geometry, minX: min.x, maxX: max.x, minZ: min.z, maxZ: max.z, garageX: this.garageX, height: max.y, sign: this.sign };
   }
 }

@@ -241,9 +241,18 @@ export class Engine {
     this.listen(canvas, "pointerleave", () => gameStore.getState().setHint(null));
     this.listen(canvas, "contextmenu", (e: Event) => e.preventDefault());
     this.listen(window, "keydown", (e: KeyboardEvent) => {
-      // Esc leaves the lane connector; otherwise it cancels what the tool is doing.
-      if (e.key === "Escape" && gameStore.getState().laneEditNode !== null) gameStore.getState().setLaneEditNode(null);
-      else if (e.key === "Escape") this.tool.cancel();
+      // Esc leaves the lane connector (an options panel closes itself); otherwise it cancels what
+      // the tool is doing, or with nothing to cancel, puts the tool down (back to Select, closing
+      // its options). Open menus take Esc first (see MainMenu).
+      if (e.key === "Escape") {
+        const state = gameStore.getState();
+        if (state.laneEditNode !== null) state.setLaneEditNode(null);
+        else if (state.junctionOpen === null) {
+          const busy = this.tool.busy?.() ?? false;
+          this.tool.cancel();
+          if (!busy && state.tool !== "select") state.setTool("select");
+        }
+      }
       if (e.key === "Alt") {
         // Stops Windows/Linux from moving focus to the menu bar.
         e.preventDefault();

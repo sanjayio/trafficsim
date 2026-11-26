@@ -1,37 +1,27 @@
 import { AdditiveBlending, BoxGeometry, CanvasTexture, Color, Float32BufferAttribute, Group, InstancedMesh, Matrix4, MeshBasicMaterial, PlaneGeometry, Quaternion, Vector3 } from "three";
 import { COVERED } from "../core/grade";
-import { CAR_LENGTH, CAR_WIDTH, type CarType, type Simulation } from "../core/simulation";
+import { CAR_TYPES, type CarType, type Simulation } from "../core/simulation";
+import { carModel } from "./cars";
 
-/**
- * Each type's shape: overall length, body height (above the wheels' clearance), and the glass
- * greenhouse's length, offset back from the middle, and height. All fit the simulation's
- * CAR_LENGTH × CAR_WIDTH, which spaces cars.
- */
-const SHAPES: Record<CarType, { length: number; body: number; cabin: number; back: number; glass: number }> = {
-  sedan: { length: CAR_LENGTH, body: 2.4, cabin: 6.4, back: 0.6, glass: 1.9 },
-  hatch: { length: CAR_LENGTH * 0.88, body: 2.6, cabin: 6.6, back: 1.6, glass: 2.1 },
-  suv: { length: CAR_LENGTH, body: 3.4, cabin: 8.6, back: 1.4, glass: 2.4 },
-};
-/** Body height off the ground (the wheels show below it), and the wheels' size. */
-const CLEARANCE = 0.9;
-const WHEEL = { length: 2.8, height: 2.2, inset: 2.6 };
-const GLASS_COLOR = 0x26323f;
-const WHEEL_COLOR = 0x141518;
 const DRL_COLOR = 0xf4f8ff;
 /** Tail lights: dim while driving, bright on the brakes (slowing or held stopped), off when parked. */
 const TAIL = { running: 0x8e0f17, braking: 0xff2b2b, off: 0x2a1012 };
 /** Slowing faster than this (units/s²) counts as braking. */
 const BRAKING = 2;
 /** Indicator lamps: size, colour, and flashes per second (on the simulation clock, so they pause with it). */
-const LAMP = { length: 1.6, height: 1.2, width: 1.4 };
+const LAMP = { length: 0.7, height: 0.45, width: 0.5 };
 const LAMP_COLOR = 0xffa31a;
 const BLINK_HZ = 1.5;
 /** Cars draw after the flat road layers, with normal depth testing. */
 const CAR_ORDER = 20;
 
-type Part = "body" | "glass" | "roof" | "wheels" | "drl" | "tail" | "lamps" | "beams";
-/** Boxes of each part per car (lamps: up to two, on the side signalling; beams: the pool of headlight on the road, at night). */
-const PER_CAR: Record<Part, number> = { body: 1, glass: 1, roof: 1, wheels: 2, drl: 2, tail: 2, lamps: 2, beams: 1 };
+/** The car itself, per type: its paint (tinted per car) and the rest (see `cars`). */
+type Body = `${CarType}:${"paint" | "rest"}`;
+/** Each type's paint and rest; a type painted all its own colours (a taxi) has no paint. */
+const BODIES = CAR_TYPES.flatMap((type) => [...(carModel(type).paint.getAttribute("position").count ? [`${type}:paint`] : []), `${type}:rest`] as Body[]);
+type Part = Body | "drl" | "tail" | "lamps" | "beams";
+/** Instances of each part per car (lamps: up to two, on the side signalling; beams: the pool of headlight on the road, at night). */
+const PER_CAR: Record<Part, number> = { ...(Object.fromEntries(BODIES.map((b) => [b, 1])) as Record<Body, number>), drl: 2, tail: 2, lamps: 2, beams: 1 };
 /** Headlights' pool of light on the road ahead: its length and width, and colour at full strength. */
 const BEAM = { length: 28, width: 18 };
 const BEAM_COLOR = 0xffe6a8;
@@ -39,17 +29,14 @@ const BEAM_COLOR = 0xffe6a8;
 const BEAM_ORDER = 15;
 
 /**
- * Draws every car from a few instanced unit boxes, stretched per car to its type (sedan, hatch,
- * SUV): body and roof in its paint, glass, wheels, daytime running lights, tail lights, and
- * flashing indicators on the side it's signalling. One draw call per part, however many cars.
+ * Draws every car, each its type's kit model (see `cars`) in its own paint, with daytime running
+ * lights, tail lights, and flashing indicators on the side it's signalling, from boxes. One draw
+ * call per part, however many cars.
  */
 export class CarLayer extends Group {
   private box = shadedBox();
   private materials: Record<Part, MeshBasicMaterial> = {
-    body: shaded(0xffffff),
-    glass: shaded(GLASS_COLOR),
-    roof: shaded(0xffffff),
-    wheels: shaded(WHEEL_COLOR),
+    ...(Object.fromEntries(BODIES.map((b) => [b, new MeshBasicMaterial({ vertexColors: true })])) as Record<Body, MeshBasicMaterial>),
     // Lights glow: the same from every side, and as bright at night (no tone mapping).
     drl: new MeshBasicMaterial({ color: DRL_COLOR, toneMapped: false }),
     tail: new MeshBasicMaterial({ toneMapped: false }),
@@ -78,9 +65,9 @@ export class CarLayer extends Group {
   /** Places every car; `night` (0–1) turns the headlights on. */
   update(sim: Simulation, night: number): void {
     const cars = sim.cars;
-    if (!this.meshes.body || this.capacity < cars.length) this.grow(Math.max(64, cars.length * 2));
+    if (!this.meshes.drl || this.capacity < cars.length) this.grow(Math.max(64, cars.length * 2));
     const m = this.meshes as Record<Part, InstancedMesh>;
-    const counts: Record<Part, number> = { body: 0, glass: 0, roof: 0, wheels: 0, drl: 0, tail: 0, lamps: 0, beams: 0 };
+    const counts = Object.fromEntries(Object.keys(PER_CAR).map((p) => [p, 0])) as Record<Part, number>;
     this.materials.beams.opacity = night * 0.32;
     const lit = Math.floor(sim.time * BLINK_HZ * 2) % 2 === 0;
     for (const car of cars) {
@@ -90,7 +77,7 @@ export class CarLayer extends Group {
       // Up on a bridge or down in a tunnel; out of sight where the tunnel's covered.
       const lift = sim.heightOf(car);
       if (lift < COVERED) continue;
-      const shape = SHAPES[car.type];
+      const shape = carModel(car.type);
       const cos = Math.cos(heading);
       const sin = Math.sin(heading);
       // World (x, y) is three.js (x, 0, y); turning by -heading about y points a box's length along travel.
@@ -102,29 +89,33 @@ export class CarLayer extends Group {
         m[part].setMatrixAt(counts[part]++, this.tmpMatrix.compose(this.tmpPosition, this.tmpRotation, this.tmpScale));
       };
       const half = shape.length / 2;
-      const top = CLEARANCE + shape.body;
-      this.tmpColor.setHex(car.color);
-      m.body.setColorAt(counts.body, this.tmpColor);
-      m.roof.setColorAt(counts.roof, this.tmpColor);
-      put("body", 0, 0, CLEARANCE, shape.length, shape.body, CAR_WIDTH);
+      // The car: its model where it stands, its paint in its colour.
+      this.tmpPosition.set(x, lift, y);
+      this.tmpScale.set(1, 1, 1);
+      this.tmpMatrix.compose(this.tmpPosition, this.tmpRotation, this.tmpScale);
+      const paint = m[`${car.type}:paint`] as InstancedMesh | undefined;
+      if (paint) {
+        paint.setColorAt(counts[`${car.type}:paint`], this.tmpColor.setHex(car.color));
+        paint.setMatrixAt(counts[`${car.type}:paint`]++, this.tmpMatrix);
+      }
+      m[`${car.type}:rest`].setMatrixAt(counts[`${car.type}:rest`]++, this.tmpMatrix);
+      const light = shape.lightHeight;
       const parked = car.leaveAt !== null;
       this.tmpColor.setHex(parked ? TAIL.off : car.accel < -BRAKING || car.v < 0.5 ? TAIL.braking : TAIL.running);
       m.tail.setColorAt(counts.tail, this.tmpColor);
       m.tail.setColorAt(counts.tail + 1, this.tmpColor);
-      // Glass all round the cabin, with a slightly smaller roof in the paint on top: windows show at the sides, front and back.
-      put("glass", -shape.back, 0, top, shape.cabin, shape.glass, CAR_WIDTH * 0.86);
-      put("roof", -shape.back, 0, top + shape.glass, shape.cabin - 1.2, 0.35, CAR_WIDTH * 0.8);
-      for (const along of [half - WHEEL.inset, -(half - WHEEL.inset)]) put("wheels", along, 0, 0, WHEEL.length, WHEEL.height, CAR_WIDTH + 0.3);
+      // Head and tail lights where the kit has them, either side at the front and back.
       for (const side of [1, -1]) {
-        if (!parked) put("drl", half + 0.05, side * (CAR_WIDTH / 2 - 1.1), top - 1, 0.3, 0.45, 1.8);
-        put("tail", -half - 0.05, side * (CAR_WIDTH / 2 - 1.1), top - 1.1, 0.3, 0.7, 1.6);
+        if (!parked) put("drl", shape.lightAt, side * shape.lightOut, light - 0.3, 0.3, 0.6, 1.2);
+        put("tail", -shape.lightAt, side * shape.lightOut, light - 0.3, 0.3, 0.6, 1);
       }
       if (night > 0 && !parked) put("beams", half + BEAM.length / 2 - 1, 0, 0.05, BEAM.length, 1, BEAM.width);
       const side = lit ? sim.signal(car) : 0;
       if (!side) continue;
       // Front and rear corners on the signalling side (+1: right of travel, which is world +y when heading +x).
-      for (const along of [half - LAMP.length / 2, -(half - LAMP.length / 2)]) {
-        put("lamps", along, side * (CAR_WIDTH / 2), top - 1.4, LAMP.length, LAMP.height, LAMP.width);
+      // Small lamps on the body's corners, at headlight height, just proud of its front, back and side.
+      for (const along of [shape.lightAt - LAMP.length / 2 + 0.1, -(shape.lightAt - LAMP.length / 2 + 0.1)]) {
+        put("lamps", along, side * (shape.bodyHalfWidth - LAMP.width / 2 + 0.1), shape.lightHeight - LAMP.height / 2, LAMP.length, LAMP.height, LAMP.width);
       }
     }
     for (const part of Object.keys(counts) as Part[]) {
@@ -142,11 +133,13 @@ export class CarLayer extends Group {
         this.remove(old);
         old.dispose();
       }
-      const mesh = new InstancedMesh(part === "beams" ? this.plane : this.box, this.materials[part], capacity * PER_CAR[part]);
-      // Painted parts take their colour per car.
-      if (part === "body" || part === "roof" || part === "tail") mesh.setColorAt(0, this.tmpColor.setHex(0xffffff));
+      const [type, piece] = part.split(":") as [CarType, "paint" | "rest" | undefined];
+      const geometry = piece ? carModel(type)[piece] : part === "beams" ? this.plane : this.box;
+      const mesh = new InstancedMesh(geometry, this.materials[part], capacity * PER_CAR[part]);
+      // Paint and tail lights take their colour per car.
+      if (piece === "paint" || part === "tail") mesh.setColorAt(0, this.tmpColor.setHex(0xffffff));
       mesh.renderOrder = part === "beams" ? BEAM_ORDER : CAR_ORDER;
-      mesh.castShadow = part === "body" || part === "glass" || part === "roof" || part === "wheels";
+      mesh.castShadow = !!piece;
       // Instances move every frame; their combined bounds aren't worth recomputing.
       mesh.frustumCulled = false;
       this.meshes[part] = mesh;
@@ -161,11 +154,6 @@ export class CarLayer extends Group {
     this.plane.dispose();
     this.materials.beams.map?.dispose();
   }
-}
-
-/** A material whose colour is darkened per face by the box's vertex colours (the scene has no lights). */
-function shaded(color: number): MeshBasicMaterial {
-  return new MeshBasicMaterial({ color, vertexColors: true });
 }
 
 /** A unit box with light from above baked into its vertex colours: top lit, ends a step darker, sides darker still. */

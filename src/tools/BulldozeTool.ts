@@ -60,6 +60,10 @@ export class BulldozeTool implements Tool {
     this.cancel();
   }
 
+  busy(): boolean {
+    return this.dragStart !== null;
+  }
+
   cancel(): void {
     this.dragStart = null;
     this.ctx.overlay.clear();

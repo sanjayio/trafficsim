@@ -173,7 +173,7 @@ export class Camera {
     const speedScale = ((this.fast ? KEY_FAST_MULTIPLIER : 1) * deltaMS) / 1000;
     const right = held(PAN_RIGHT) - held(PAN_LEFT);
     const forward = held(PAN_UP) - held(PAN_DOWN);
-    // Turning the camera anticlockwise makes the world appear to turn clockwise.
+    // Q turns the view anticlockwise (to the left), E clockwise.
     const spin = held(ROTATE_CW) - held(ROTATE_CCW);
     const zoomDir = held(ZOOM_IN) - held(ZOOM_OUT);
     const tiltDir = held(TILT_UP) - held(TILT_DOWN);
@@ -195,7 +195,7 @@ export class Camera {
       const back = this.distance * Math.cos(this.pitch);
       const before = this.groundAxes().forward;
       const stand = { x: this.focus.x - before.x * back, y: this.focus.y - before.y * back };
-      this.yaw = (this.yaw - spin * KEY_ROTATE_SPEED * speedScale) % (Math.PI * 2);
+      this.yaw = (this.yaw + spin * KEY_ROTATE_SPEED * speedScale) % (Math.PI * 2);
       const after = this.groundAxes().forward;
       this.focus = { x: stand.x + after.x * back, y: stand.y + after.y * back };
       moved = true;

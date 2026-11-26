@@ -985,7 +985,9 @@ describe("terminals", () => {
 
   it("load maps from before buildings, and use each building's footprint", () => {
     const old = (rate: number) => parseTerminal({ kind: "source", enabled: true, rate, sinks: [] });
-    expect([old(1), old(3), old(10)].map((t) => t.building)).toEqual(["villa", "townhouse", "apartment"]);
+    expect([old(1), old(10)].map((t) => t.building)).toEqual(["villa", "apartment"]);
+    // Townhouses, no longer built, come back as villas.
+    expect(parseTerminal({ kind: "source", building: "townhouse", enabled: true, rate: 3, sinks: [] }).building).toBe("villa");
     // At today's rate for that kind of home.
     expect(old(10)).toMatchObject({ rate: SOURCE_RATE.apartment });
     expect(parseTerminal({ kind: "sink" })).toEqual({ kind: "sink", building: "smallShop" });

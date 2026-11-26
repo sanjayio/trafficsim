@@ -1,5 +1,5 @@
 import { Activity, Check, Cloud, CloudRain, Moon, RotateCcw, Sun, Sunset, Wind, type LucideIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Engine } from "../render/Engine";
 import { gameStore, useGame, type Weather } from "../state/store";
 import { keepFocusOnGame } from "./Panel";
@@ -70,6 +70,17 @@ function TrafficStatsPanel({ engine }: { engine: Engine | null }) {
 
 export function StatusBar({ engine }: { engine: Engine | null }) {
   const [showStats, setShowStats] = useState(false);
+  // Escape closes the stats panel and nothing else (taken before the game sees it), as for the menu.
+  useEffect(() => {
+    if (!showStats) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopImmediatePropagation();
+      setShowStats(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [showStats]);
   const fps = useGame((s) => s.stats.fps);
   const autosave = useGame((s) => s.autosave);
   const timeOfDay = useGame((s) => s.timeOfDay);

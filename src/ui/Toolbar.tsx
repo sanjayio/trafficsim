@@ -4,7 +4,6 @@ import {
   Building as BuildingIcon,
   Hotel,
   House,
-  Houses,
   ShoppingCart,
   Store,
   Car,
@@ -195,7 +194,6 @@ function BulldozeOptions() {
 
 const BUILDING_ICON: Record<Building, LucideIcon> = {
   villa: House,
-  townhouse: Houses,
   apartment: BuildingIcon,
   smallShop: Store,
   largeShop: ShoppingCart,

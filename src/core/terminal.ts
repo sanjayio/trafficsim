@@ -1,15 +1,14 @@
 /** Buildings cars come out of. */
-export type SourceBuilding = "villa" | "townhouse" | "apartment";
+export type SourceBuilding = "villa" | "apartment";
 /** Buildings cars drive to. */
 export type SinkBuilding = "smallShop" | "largeShop" | "smallOffice" | "largeOffice";
 export type Building = SourceBuilding | SinkBuilding;
 
-export const SOURCE_BUILDINGS: SourceBuilding[] = ["villa", "townhouse", "apartment"];
+export const SOURCE_BUILDINGS: SourceBuilding[] = ["villa", "apartment"];
 export const SINK_BUILDINGS: SinkBuilding[] = ["smallShop", "largeShop", "smallOffice", "largeOffice"];
 
 export const BUILDING_LABEL: Record<Building, string> = {
   villa: "Villa",
-  townhouse: "Townhouse",
   apartment: "Apartment",
   smallShop: "Small shop",
   largeShop: "Large shop",
@@ -18,9 +17,9 @@ export const BUILDING_LABEL: Record<Building, string> = {
 };
 
 /** Cars per minute each kind of home sends out. */
-export const SOURCE_RATE: Record<SourceBuilding, number> = { villa: 0.2, townhouse: 0.6, apartment: 1.2 };
+export const SOURCE_RATE: Record<SourceBuilding, number> = { villa: 0.2, apartment: 1.2 };
 /** Cars per minute a home sends at the top level; in between, it rises evenly from SOURCE_RATE. */
-export const SOURCE_RATE_MAX: Record<SourceBuilding, number> = { villa: 0.6, townhouse: 1.2, apartment: 2.4 };
+export const SOURCE_RATE_MAX: Record<SourceBuilding, number> = { villa: 0.6, apartment: 2.4 };
 /** Rates were this many times higher before: maps from before buildings were saved at the old rates. */
 const OLD_RATE_SCALE = 5;
 
@@ -36,7 +35,6 @@ export const ZONE_ROWS = 4;
 /** How many tiles each building takes: along the road, and back from it. */
 export const BUILDING_TILES: Record<Building, [number, number]> = {
   villa: [2, 2],
-  townhouse: [3, 2],
   apartment: [3, 3],
   smallShop: [2, 4],
   largeShop: [4, 4],
@@ -226,7 +224,8 @@ export function parseTerminal(raw: unknown): Terminal {
     const saved = t.rate as number;
     const old = (b: SourceBuilding) => Math.abs(SOURCE_RATE[b] * OLD_RATE_SCALE - saved);
     const nearest = SOURCE_BUILDINGS.reduce((a, b) => (old(b) < old(a) ? b : a));
-    const building = t.building ?? nearest;
+    // Townhouses are no more: those on older maps become villas.
+    const building = t.building === "townhouse" ? "villa" : (t.building ?? nearest);
     if (!(SOURCE_BUILDINGS as unknown[]).includes(building)) fail();
     if (t.to !== undefined && !(DESTINATIONS as readonly unknown[]).includes(t.to)) fail();
     const to = t.to === undefined ? {} : { to: t.to as Destinations };

@@ -42,14 +42,17 @@ export function MainMenu({
     const onPointer = (e: PointerEvent) => {
       if (!rootRef.current?.contains(e.target as Node)) setOpen(null);
     };
+    // Esc closes the menu and nothing else (taken before the game sees it).
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(null);
+      if (e.key !== "Escape") return;
+      e.stopImmediatePropagation();
+      setOpen(null);
     };
     window.addEventListener("pointerdown", onPointer, true);
-    window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     return () => {
       window.removeEventListener("pointerdown", onPointer, true);
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
     };
   }, [open]);
 

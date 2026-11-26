@@ -28,6 +28,7 @@ export const CONTROL_GROUPS: ControlGroup[] = [
       { keys: ["2"], action: "Road" },
       { keys: ["3"], action: "Traffic: place sources and sinks" },
       { keys: ["B"], action: "Bulldoze: roads with the Road tool, buildings with Traffic" },
+      { keys: ["Esc"], action: "Close a menu; else cancel what the tool is doing; else back to Select" },
     ],
   },
   {
