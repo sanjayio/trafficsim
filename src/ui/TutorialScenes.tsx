@@ -1,4 +1,4 @@
-import { Car, MousePointer2, Road, Tractor } from "lucide-react";
+import { Building2, MousePointer2, Road, Tractor } from "lucide-react";
 import type { ReactNode } from "react";
 
 /**
@@ -104,11 +104,11 @@ const SCENES: Record<string, () => ReactNode> = {
   ),
 
   Tools: () => {
-    // The three tools, then the bulldozer beside them (for Road and Traffic), each lit in turn.
-    const tools: [typeof Car, string][] = [
+    // The three tools, then the bulldozer beside them (for Road and Buildings), each lit in turn.
+    const tools: [typeof Road, string][] = [
       [MousePointer2, "1"],
       [Road, "2"],
-      [Car, "3"],
+      [Building2, "3"],
       [Tractor, "B"],
     ];
     return (
@@ -178,7 +178,7 @@ const SCENES: Record<string, () => ReactNode> = {
     </Frame>
   ),
 
-  Traffic: () => (
+  Buildings: () => (
     <Frame>
       <HRoad y={84} />
       <rect x={44} y={40} width={12} height={32} fill={ASPHALT} />

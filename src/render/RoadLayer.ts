@@ -18,10 +18,14 @@ import type { Curve, SampledCurve } from "../core/curve";
 const STRAIGHT_ENOUGH = (10 * Math.PI) / 180;
 /** Clearance between a junction's crossing road and where markings stop. */
 const JUNCTION_MARGIN = 2;
+/** How far a driveway ramps down from the footpath to the road, across the footpath's edge. */
+const DRIVEWAY_RAMP = 3.5;
 /** A junction's arm follows its road this far at most (through splits, see `armOf`): further than any corner reaches. */
 const ARM_REACH = 320;
 /** Two road pieces meeting at less than this angle (cos of about 10°) carry on as one road. */
 const SMOOTH_JOIN = Math.cos((10 * Math.PI) / 180);
+/** Two pieces this close to straight on (cos of about 2°): a road split in two, its ends left square. */
+const STRAIGHT_ON = Math.cos((2 * Math.PI) / 180);
 /** Roads meeting at less than ~20° to each other (sin < this) carry on rather than cross. */
 const MIN_CLEARANCE_SINE = 0.35;
 /** Width of a source's or sink's driveway. */
@@ -149,23 +153,27 @@ export class RoadLayer extends Group {
     // from the building's front to the carriageway's edge, across any footpath.
     const at = (a: number, o: number) => ({ x: door.x + along.x * a - out.x * o, y: door.y + along.y * a - out.y * o });
     const toFront = front - carriagewayWidth(segment.spec) / 2;
+    // Level with the footpath from the building to just short of the kerb, then a ramp down to the
+    // road (a dropped kerb), as two pieces.
+    const ramp = Math.min(DRIVEWAY_RAMP, toFront);
     const strip = (middle: number, width: number) => [
-      at(middle - width / 2, 0),
-      at(middle + width / 2, 0),
-      at(middle + width / 2, toFront),
-      at(middle - width / 2, toFront),
+      [at(middle - width / 2, 0), at(middle + width / 2, 0), at(middle + width / 2, toFront - ramp), at(middle - width / 2, toFront - ramp)],
+      [at(middle - width / 2, toFront - ramp), at(middle + width / 2, toFront - ramp), at(middle + width / 2, toFront), at(middle - width / 2, toFront)],
     ];
     // With a car park behind the building, the driveway is the side path to it instead.
     const { path } = isSourceBuilding(lot.building) ? { path: null } : carPark(lot);
     const doorAt = (door.x - lot.centre.x) * along.x + (door.y - lot.centre.y) * along.y;
     const drive = path === null ? strip(0, DRIVEWAY_WIDTH) : strip(path - doorAt, SIDE_PATH);
-    const driveway = new Mesh(
-      pavedGeometry([drive]),
-      this.materials.footpath,
-    );
-    // Paved like the footpath, at its height, and over the kerb.
+    const geometry = pavedGeometry(drive);
+    // Each point's height: the footpath's, falling to the road's over the ramp by the kerb.
+    const position = geometry.getAttribute("position");
+    for (let i = 0; i < position.count; i++) {
+      const o = -((position.getX(i) - door.x) * out.x + (position.getZ(i) - door.y) * out.y);
+      position.setY(i, KERB_HEIGHT * Math.min(1, Math.max(0, (toFront - o) / ramp)));
+    }
+    const driveway = new Mesh(geometry, this.materials.footpath);
+    // Paved like the footpath, and over the kerb.
     driveway.renderOrder = ROAD_PART_STYLE.asphalt.layer;
-    driveway.position.y = KERB_HEIGHT;
     const terminal = this.graph.terminal(nodeId)!;
     const name = terminal.kind === "sink" ? terminal.name || defaultName(terminal.building, nodeId) : undefined;
     const building = this.buildings.model(lot, { ...terminal, name });
@@ -452,6 +460,15 @@ export class RoadLayer extends Group {
   }
 
   /** Whether the bend at `nodeId` is paved as a curve joining its two roads (not on a bridge or in a tunnel). */
+  /** Whether `segment` carries straight on at `node` into the one other road there, the same layout. */
+  private carriesOn(segment: RoadSegment, node: NodeId): boolean {
+    const meeting = this.graph.segmentsAt(node);
+    const other = meeting.length === 2 ? meeting.find((s) => s !== segment) : undefined;
+    if (!other || roadWidth(other.spec) !== roadWidth(segment.spec) || carriagewayWidth(other.spec) !== carriagewayWidth(segment.spec)) return false;
+    const [a, b] = [this.graph.directionAway(segment, node), this.graph.directionAway(other, node)];
+    return a.x * b.x + a.y * b.y < -STRAIGHT_ON;
+  }
+
   private pavedBend(nodeId: NodeId): boolean {
     return this.bendEdge(nodeId) !== null && !this.graph.segmentsAt(nodeId).some((s) => s.spec.level);
   }
@@ -535,7 +552,9 @@ export class RoadLayer extends Group {
     const scale = this.graph.path(segment).length / (path.length || 1);
     const height = (s: number) => this.graph.heightAt(segment, s * scale);
     // A bridge or tunnel is drawn over the roads it meets: no rounded end lying on top of them there.
-    const joined = (node: NodeId) => !graded || this.graph.segmentsAt(node).length < 2;
+    // Nor where it's only split (as at a driveway) and carries straight on, the same road: the two
+    // pieces meet flush, their kerbs unbroken (a round end would cut across the other's kerb).
+    const joined = (node: NodeId) => (!graded || this.graph.segmentsAt(node).length < 2) && !this.carriesOn(segment, node);
     // Round a paved bend, the bend's curve carries on from where this road stops.
     const trim = (node: NodeId) => (this.pavedBend(node) ? this.bendInset(segment, node) : 0);
     const [trimA, trimB] = [trim(segment.a), trim(segment.b)];

@@ -2,11 +2,11 @@ import {
   ArrowBigUp,
   Briefcase,
   Building as BuildingIcon,
+  Building2,
   Hotel,
   House,
   ShoppingCart,
   Store,
-  Car,
   ChevronLeft,
   ChevronRight,
   Equal,
@@ -37,7 +37,7 @@ import { IconButton, keepFocusOnGame, Panel, PanelButton } from "./Panel";
 const TOOLS: { id: ToolId; label: string; key: string; icon: LucideIcon }[] = [
   { id: "select", label: "Select", key: "1", icon: MousePointer2 },
   { id: "road", label: "Road", key: "2", icon: Road },
-  { id: "traffic", label: "Traffic", key: "3", icon: Car },
+  { id: "traffic", label: "Buildings", key: "3", icon: Building2 },
 ];
 
 /** A bridge, drawn in the lucide style: a deck on two arches. */
@@ -100,7 +100,7 @@ const ROAD_MODES: { id: RoadMode; label: string; icon: LucideIcon | typeof Curve
 export function Toolbar() {
   const tool = useGame((s) => s.tool);
   const bulldozing = useGame((s) => s.bulldozing);
-  // Bulldozing belongs to the Road tool (roads) and the Traffic tool (buildings).
+  // Bulldozing belongs to the Road tool (roads) and the Buildings tool (buildings).
   const canBulldoze = tool === "road" || tool === "traffic";
   const speed = useGame((s) => s.speed);
 
@@ -201,7 +201,7 @@ const BUILDING_ICON: Record<Building, LucideIcon> = {
   largeOffice: Hotel,
 };
 
-/** Second-level options shown while the Traffic tool is active: homes (sources), then shops and offices (sinks). */
+/** Second-level options shown while the Buildings tool is active: homes (sources), then shops and offices (sinks). */
 function TrafficOptions() {
   const mode = useGame((s) => s.trafficMode);
   const button = (b: Building) => {

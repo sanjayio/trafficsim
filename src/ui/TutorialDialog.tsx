@@ -1,6 +1,6 @@
 import {
   Camera,
-  Car,
+  Building2,
   ChevronLeft,
   ChevronRight,
   Gauge,
@@ -22,7 +22,7 @@ import { TutorialScene } from "./TutorialScenes";
 const INTRO: Record<string, { icon: LucideIcon; text: string }> = {
   Tools: {
     icon: MousePointer2,
-    text: "Three tools sit at the bottom left: pick one with its button or its number key. With Road or Traffic, the bulldozer beside them (B) removes roads or buildings.",
+    text: "Three tools sit at the bottom left: pick one with its button or its number key. With Road or Buildings, the bulldozer beside them (B) removes roads or buildings.",
   },
   "Building roads": {
     icon: Road,
@@ -32,13 +32,13 @@ const INTRO: Record<string, { icon: LucideIcon; text: string }> = {
     icon: Settings2,
     text: "Where three or more roads meet, hover for the ⚙ button: give way, stop or signals, a roundabout, corner smoothness, and the lane connector.",
   },
-  Traffic: {
-    icon: Car,
+  Buildings: {
+    icon: Building2,
     text: "Homes send cars out to shops and offices along the fastest route. Place them on the tiles that line every road.",
   },
   Bulldozing: {
     icon: Tractor,
-    text: "Turn on the bulldozer beside the tools: with the Road tool it clears roads, with Traffic buildings. One by one, or by dragging a box.",
+    text: "Turn on the bulldozer beside the tools: with the Road tool it clears roads, with Buildings it clears buildings. One by one, or by dragging a box.",
   },
   Camera: { icon: Camera, text: "Move round the city, turn it, zoom and tilt for a 3D view." },
   Simulation: { icon: Gauge, text: "Pause, or speed time up, with the buttons at the bottom right." },

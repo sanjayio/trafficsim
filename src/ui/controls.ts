@@ -26,8 +26,8 @@ export const CONTROL_GROUPS: ControlGroup[] = [
     rows: [
       { keys: ["1"], action: "Select" },
       { keys: ["2"], action: "Road" },
-      { keys: ["3"], action: "Traffic: place sources and sinks" },
-      { keys: ["B"], action: "Bulldoze: roads with the Road tool, buildings with Traffic" },
+      { keys: ["3"], action: "Buildings: place homes, shops and offices" },
+      { keys: ["B"], action: "Bulldoze: roads with the Road tool, buildings with Buildings" },
       { keys: ["Esc"], action: "Close a menu; else cancel what the tool is doing; else back to Select" },
     ],
   },
@@ -57,16 +57,16 @@ export const CONTROL_GROUPS: ControlGroup[] = [
     ],
   },
   {
-    title: "Traffic",
+    title: "Buildings",
     rows: [
-      { keys: ["Click"], action: "Traffic tool: place the chosen home, shop or office on the zoning tiles beside a road (click a building to remove or swap it)" },
+      { keys: ["Click"], action: "Buildings tool: place the chosen home, shop or office on the zoning tiles beside a road (click a building to remove or swap it)" },
       { keys: ["Hover"], action: "Show a building's ⚙ button: name (shops and offices), colours, level; for homes on/off, kind of home, destinations" },
     ],
   },
   {
     title: "Bulldozing",
     rows: [
-      { keys: ["Click"], action: "One by one: remove the highlighted road (Road tool) or building (Traffic tool)" },
+      { keys: ["Click"], action: "One by one: remove the highlighted road (Road tool) or building (Buildings tool)" },
       { keys: ["Drag"], action: "Area: remove every road the rectangle touches, or every building in it" },
       { keys: ["Esc", "or", "Right-click"], action: "Abandon an area selection" },
     ],
