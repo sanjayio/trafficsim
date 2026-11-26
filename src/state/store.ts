@@ -102,12 +102,13 @@ interface GameState {
  * (via `gameStore.getState()` / `gameStore.subscribe`).
  */
 export const gameStore = createStore<GameState>()((set, get) => ({
-  tool: "road",
+  tool: "select",
   timeOfDay: 13,
   weather: "sunny",
   setTimeOfDay: (timeOfDay) => set({ timeOfDay }),
   setWeather: (weather) => set({ weather }),
-  speed: 1,
+  // Starts paused, so the player looks around before traffic moves.
+  speed: 0,
   lastSpeed: 1,
   snapToGrid: true,
   snapInverted: false,

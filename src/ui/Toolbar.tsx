@@ -15,6 +15,7 @@ import {
   TreeDeciduous,
   Grid3x3,
   Magnet,
+  Play,
   MousePointer2,
   MousePointerClick,
   Road,
@@ -146,10 +147,11 @@ export function Toolbar() {
           <PanelButton
             key={s.speed}
             active={speed === s.speed}
-            title={s.speed === 0 ? "Pause" : `Speed ${s.label}`}
-            onClick={() => gameStore.getState().setSpeed(s.speed)}
+            title={s.speed === 0 ? (speed === 0 ? "Play" : "Pause") : `Speed ${s.label}`}
+            // The pause button plays again (at the last speed) while paused.
+            onClick={() => (s.speed === 0 ? gameStore.getState().togglePause() : gameStore.getState().setSpeed(s.speed))}
           >
-            <span className="tabular-nums">{s.label}</span>
+            {s.speed === 0 && speed === 0 ? <Play size={14} fill="currentColor" aria-hidden /> : <span className="tabular-nums">{s.label}</span>}
           </PanelButton>
         ))}
       </Panel>
