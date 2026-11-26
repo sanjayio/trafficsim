@@ -17,7 +17,8 @@ In the app: ☰ menu (top right) → **Controls**. That list is generated from `
 
 | Input | Action |
 | --- | --- |
-| `1` / `2` / `3` / `4` | Select / Road / Bulldoze / Traffic |
+| `1` / `2` / `3` | Select / Road / Traffic |
+| `B` (Road or Traffic) | Bulldoze toggle: with Road it removes roads, with Traffic it removes buildings |
 | Road → Straight / Curve / Complex curve | Click start → end; start → bend → end; or start → bend → bend → end. A preview follows the cursor; it turns red if the bend is too tight for the road |
 | Road → Continuous | Click start → end, then each further click extends the road with a smooth curve. Right-click or `Esc` ends it |
 | Road → magnet toggle | Snap onto road ends, onto roads (making a T-junction), to guidelines (road extensions and perpendiculars, 45° steps from your start) and their crossings. A readout by the cursor shows length and angle |
@@ -26,14 +27,14 @@ In the app: ☰ menu (top right) → **Controls**. That list is generated from `
 | Road → one-way / median / footpath toggles | One-way roads flow from your first click to your second. A median applies to two-way roads only |
 | Road → snap-to-grid toggle (grid icon) | Snap endpoints to the grid (default) or place them freely. Either way, clicking near an existing road end attaches to it |
 | Hold `Alt` / `Option` (Road) | Place freely: flips grid snapping and turns off guides and angles |
-| Bulldoze → one by one / area | Click a road to remove it, or drag a rectangle to remove every road it touches (`Esc` / right-click abandons the drag) |
+| Bulldoze → one by one / area | Click a road (or building) to remove it, or drag a rectangle to remove every one it touches (`Esc` / right-click abandons the drag) |
 | Traffic → a building, click the zoning tiles | The Traffic tool shows zoning tiles beside every road (left out where they'd overlap a road, belong to a nearer road, or crowd a junction). Hover to see the tiles the chosen building takes: green where it fits, red where it doesn't; click to place it, facing the road. Homes are sources: villa (1 car a minute, 2×2 tiles), townhouse (4, 3×2), apartment (12, 3×3). Shops and offices are sinks, where cars head: small shop and small office (2×2), large shop (4×3), large office (3×3). Click a building to remove it, or with another building selected to swap. Saved with the map |
 | Hover a home → ⚙ (or click it with Select) | Home options: on/off, the kind of home (which sets its cars a minute), and destinations (any shop or office, or chosen ones) |
 | Hover a junction → ⚙ (or click it with Select) | Junction options: control (none / give way / stop / signals), roundabout, corner smoothness, lane connector. Saved with the map |
 | Junction options → Lane connector | Click an incoming lane's end (amber), then outgoing lanes' starts (green) to connect or disconnect them; cars only drive connected lanes, and the painted lane arrows follow. Reset restores the defaults; `Esc` or Done leaves. Changing a road at the junction resets it |
 | ☰ → Settings → Driving side | Right- or left-hand traffic (decides which lanes get stop lines, and later which lanes cars use). Saved with the map |
 | Crossing or ending on a road | Forms a junction: both roads are split there. Too-shallow crossings (< 20°) or ones leaving tiny road pieces show red and can't be built |
-| Click (Bulldoze) | Remove the highlighted road |
+| Click (Bulldoze) | Remove the highlighted road or building |
 | Wheel / pinch | Zoom at cursor |
 | `R` / `F` | Zoom in / out at the screen centre (hold `Shift` for faster) |
 | `W` `A` `S` `D` / arrow keys | Pan (hold `Shift` for faster) |
@@ -51,7 +52,7 @@ In the app: ☰ menu (top right) → **Controls**. That list is generated from `
 src/
   core/       Pure simulation + data: RoadGraph, routing, car tracks, Simulation (fixed 60 Hz step). No three.js, no Tauri.
   render/     three.js: Engine (renderer, loop, input routing), Camera (orbit + ground ray casts), RoadLayer, Grid, OverlayLayer.
-  tools/      Build tools (Road, Bulldoze, Select) — turn world-space pointer input into graph edits.
+  tools/      Build tools (Select, Road, Traffic, and Bulldoze within Road and Traffic) — turn world-space pointer input into graph edits.
               Renderer-agnostic: previews go through the `Overlay` interface.
   platform/   Tauri vs browser differences (file open/save). Only place that imports Tauri plugins.
   state/      Zustand store shared by the HUD (hooks) and the engine (getState/subscribe).

@@ -68,5 +68,11 @@ describe("RoadGraph", () => {
       expect(() => graph.load(bad as never)).toThrow();
       expect(graph.segments.size).toBe(4);
     }
+
+    // Fails on its last check (a building on a missing node): nothing about the current map changes.
+    const graph = crossroads();
+    const late = { ...map, name: "Other town", drivingSide: "left", terminals: [{ node: 9999, kind: "sink" }] };
+    expect(() => graph.load(late as never)).toThrow();
+    expect([graph.name, graph.drivingSide]).toEqual([map.name ?? "Untitled map", map.drivingSide ?? "right"]);
   });
 });

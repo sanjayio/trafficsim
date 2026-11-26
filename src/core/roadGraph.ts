@@ -724,11 +724,6 @@ export class RoadGraph {
       junctions.set(j.node, settings);
     }
 
-    this.side = map.drivingSide ?? "right";
-    this.trafficRules = parseRules(map.rules);
-    this.plants = parseScenery(map.scenery);
-    this.unplanted = map.scenery === undefined;
-    this.title = map.name?.trim() || DEFAULT_MAP_NAME;
     // Sources and sinks sit on dead ends; sources only list real sinks.
     const ends = new Map<NodeId, number>();
     for (const s of segments) for (const n of [s.a, s.b]) ends.set(n, (ends.get(n) ?? 0) + 1);
@@ -744,6 +739,12 @@ export class RoadGraph {
       }
     }
 
+    // Only now, after every check: a map that fails to load leaves the current one as it was.
+    this.side = map.drivingSide ?? "right";
+    this.trafficRules = parseRules(map.rules);
+    this.plants = parseScenery(map.scenery);
+    this.unplanted = map.scenery === undefined;
+    this.title = map.name?.trim() || DEFAULT_MAP_NAME;
     this.junctionSettings = junctions;
     this.terminals = terminals;
     this.nodes.clear();
