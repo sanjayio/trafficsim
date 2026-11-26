@@ -9,7 +9,8 @@ import type { BulldozeMode, RoadMode, TrafficMode } from "../tools/Tool";
 export const PARALLEL_OFFSET_STEP = 8;
 export const PARALLEL_OFFSET_MAX = 512;
 
-export type ToolId = "select" | "road" | "traffic";
+export const TOOL_IDS = ["select", "road", "traffic"] as const;
+export type ToolId = (typeof TOOL_IDS)[number];
 
 /** A junction or source offering its ⚙ button or options panel, at its screen position in canvas pixels. */
 export interface NodeAnchor {
@@ -98,6 +99,9 @@ interface GameState {
   setMapName: (name: string) => void;
   setJunctionHover: (hover: GameState["junctionHover"]) => void;
   setJunctionOpen: (open: GameState["junctionOpen"]) => void;
+  /** The radio station picked (an index into the radio's list). */
+  station: number;
+  setStation: (station: number) => void;
 }
 
 /**
@@ -111,6 +115,8 @@ export const gameStore = createStore<GameState>()((set, get) => ({
   weather: "sunny",
   setTimeOfDay: (timeOfDay) => set({ timeOfDay }),
   setWeather: (weather) => set({ weather }),
+  station: 0,
+  setStation: (station) => set({ station }),
   // Starts paused, so the player looks around before traffic moves.
   speed: 0,
   lastSpeed: 1,

@@ -1,5 +1,6 @@
 import { Pause, Play, Radio as RadioIcon, Volume2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { gameStore, useGame } from "../state/store";
 import { keepFocusOnGame } from "./Panel";
 
 /** Radio Paradise: listener-supported, ad-free streams, played straight from their servers. */
@@ -12,15 +13,13 @@ const STATIONS = [
 
 const STORAGE_KEY = "radio";
 
-/** The station and volume picked last time, remembered in this browser (if it lets us). */
-function remembered(): { station: number; volume: number } {
+/** The volume picked last time, remembered in this browser (if it lets us). The station is kept with the map's session. */
+function remembered(): number {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}");
-    const station = Number.isInteger(saved.station) && STATIONS[saved.station] ? saved.station : 0;
-    const volume = typeof saved.volume === "number" && saved.volume >= 0 && saved.volume <= 1 ? saved.volume : 0.5;
-    return { station, volume };
+    return typeof saved.volume === "number" && saved.volume >= 0 && saved.volume <= 1 ? saved.volume : 0.5;
   } catch {
-    return { station: 0, volume: 0.5 };
+    return 0.5;
   }
 }
 
@@ -30,16 +29,19 @@ function remembered(): { station: number; volume: number } {
  */
 export function Radio() {
   const audio = useRef<HTMLAudioElement>(null);
-  const [{ station, volume }, setChoice] = useState(remembered);
+  // A station from a newer or older list falls back to the first.
+  const picked = useGame((s) => s.station);
+  const station = STATIONS[picked] ? picked : 0;
+  const [volume, setVolume] = useState(remembered);
   const [state, setState] = useState<"off" | "connecting" | "playing" | "failed">("off");
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ station, volume }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ volume }));
     } catch {
       // Private windows and blocked storage just don't remember.
     }
-  }, [station, volume]);
+  }, [volume]);
 
   useEffect(() => {
     if (audio.current) audio.current.volume = volume;
@@ -96,7 +98,7 @@ export function Radio() {
             value={station}
             onChange={(e) => {
               const next = Number(e.target.value);
-              setChoice((c) => ({ ...c, station: next }));
+              gameStore.getState().setStation(next);
               if (state !== "off") play(next);
               // Hand keyboard focus back to the game.
               e.currentTarget.blur();
@@ -123,7 +125,7 @@ export function Radio() {
             max={1}
             step={0.05}
             value={volume}
-            onChange={(e) => setChoice((c) => ({ ...c, volume: Number(e.target.value) }))}
+            onChange={(e) => setVolume(Number(e.target.value))}
             onPointerUp={(e) => e.currentTarget.blur()}
             className="w-20 accent-sky-500"
           />

@@ -16,7 +16,7 @@ import { CarLayer } from "./CarLayer";
 import { RouteLine } from "./RouteLine";
 import { ZoneLayer } from "./ZoneLayer";
 import { keepUnreadableAutosave, loadAutosave, loadView, openMapFile, saveAutosave, saveMapFile, saveView } from "../platform";
-import { gameStore, isSnapping, WEATHERS, type NodeAnchor, type ToolId, type Weather } from "../state/store";
+import { gameStore, isSnapping, TOOL_IDS, WEATHERS, type NodeAnchor, type ToolId, type Weather } from "../state/store";
 import { BulldozeTool } from "../tools/BulldozeTool";
 import { RoadTool } from "../tools/RoadTool";
 import { SelectTool } from "../tools/SelectTool";
@@ -51,6 +51,8 @@ export const HINT_OFFSET = 18;
 const CLICK_SLOP_PX = 5;
 /** Cap on real time fed to the simulation per frame, so a stall doesn't trigger a catch-up spiral. */
 const MAX_FRAME_MS = 250;
+/** Simulated seconds per hour of the day: the clock runs with the traffic (a minute every 12 s at 1×). */
+const HOUR_SECONDS = 12 * 60;
 /** A click this close to a car (in pixels, at least) selects it. */
 const CAR_PICK_PX = 12;
 /** The map is kept in the browser this long after the last change. */
@@ -111,6 +113,8 @@ export class Engine {
 
   private lastFrameTime: number | null = null;
   private accumulator = 0;
+  /** The time of day to the second, and what was last shown of it (to the minute; see `tick`). */
+  private clock: { hours: number; shown: number } | null = null;
   private statsElapsed = 0;
   private statsFrames = 0;
   private cleanups: (() => void)[] = [];
@@ -274,7 +278,6 @@ export class Engine {
    * moment after the last one), so the city is still there next visit without saving a file.
    */
   private restoreAutosave(): void {
-    this.restoreView();
     const saved = loadAutosave();
     // A map kept from before scenery is planted as it loads: kept again straight away, with its trees.
     let planted = false;
@@ -284,19 +287,22 @@ export class Engine {
         this.graph.load(map);
         planted = map.scenery === undefined;
         gameStore.getState().setDrivingSide(this.graph.drivingSide);
+        this.applySession((map as { session?: unknown }).session);
       } catch {
         // Kept aside before the next save replaces it.
         keepUnreadableAutosave(saved);
         gameStore.getState().showMessage("Couldn't restore your last map");
       }
     }
+    // The view, kept more often than the map, has the latest session.
+    this.restoreView();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let warned = false;
     const unsubscribe = this.graph.subscribe(() => {
       clearTimeout(timer);
       gameStore.getState().setAutosave("saving");
       timer = setTimeout(() => {
-        const saved = saveAutosave(JSON.stringify(this.graph.toJSON()));
+        const saved = saveAutosave(this.mapJSON());
         gameStore.getState().setAutosave(saved ? "saved" : "failed");
         if (saved || warned) return;
         warned = true;
@@ -307,20 +313,45 @@ export class Engine {
       clearTimeout(timer);
       unsubscribe();
     });
-    if (planted) saveAutosave(JSON.stringify(this.graph.toJSON()));
+    if (planted) saveAutosave(this.mapJSON());
+  }
+
+  /** The map as saved: the network, and the session it was last played in (see `session`). */
+  private mapJSON(space?: number): string {
+    return JSON.stringify({ ...this.graph.toJSON(), session: this.session() }, null, space);
+  }
+
+  /** How the map was last played: weather, tool, the speed it resumes at, and radio station. */
+  private session(): { weather: Weather; tool: ToolId; speed: number; station: number } {
+    const { weather, tool, lastSpeed, station } = gameStore.getState();
+    return { weather, tool, speed: lastSpeed, station };
+  }
+
+  /** Puts back a saved session (a map's `session`, or the kept view), ignoring anything missing or invalid. */
+  private applySession(raw: unknown): void {
+    if (!raw || typeof raw !== "object") return;
+    const session = raw as Record<string, unknown>;
+    const state = gameStore.getState();
+    if (WEATHERS.includes(session.weather as Weather)) state.setWeather(session.weather as Weather);
+    if (TOOL_IDS.includes(session.tool as ToolId)) state.setTool(session.tool as ToolId);
+    // Still opens paused: this is the speed play resumes at.
+    if (session.speed === 1 || session.speed === 2 || session.speed === 4) gameStore.setState({ lastSpeed: session.speed });
+    if (Number.isSafeInteger(session.station) && (session.station as number) >= 0) state.setStation(session.station as number);
   }
 
   async saveMap(): Promise<boolean> {
-    return saveMapFile(JSON.stringify(this.graph.toJSON(), null, 2), this.graph.name);
+    return saveMapFile(this.mapJSON(2), this.graph.name);
   }
 
   async openMap(): Promise<boolean> {
     const contents = await openMapFile();
     if (contents === null) return false;
     this.tool.cancel();
-    this.graph.load(JSON.parse(contents) as SavedMap);
-    // The map brings its own driving side; reflect it in the settings.
+    const map = JSON.parse(contents) as SavedMap;
+    this.graph.load(map);
+    // The map brings its own driving side, and the session it was saved in; reflect them.
     gameStore.getState().setDrivingSide(this.graph.drivingSide);
+    this.applySession((map as { session?: unknown }).session);
     return true;
   }
 
@@ -368,16 +399,16 @@ export class Engine {
     this.visitsCheck = 0;
     if (this.graph.visits === 0) return;
     this.graph.visits = 0;
-    saveAutosave(JSON.stringify(this.graph.toJSON()));
+    saveAutosave(this.mapJSON());
   }
 
-  /** The view (camera, time of day, weather) as last kept, then kept again whenever it changes. */
+  /** The view (camera, time of day, and the session: see `session`) as last kept, then kept again whenever it changes. */
   private restoreView(): void {
     try {
       const view = JSON.parse(loadView() ?? "{}") as Record<string, unknown>;
       const state = gameStore.getState();
       if (typeof view.timeOfDay === "number" && view.timeOfDay >= 0 && view.timeOfDay <= 24) state.setTimeOfDay(view.timeOfDay);
-      if (WEATHERS.includes(view.weather as Weather)) state.setWeather(view.weather as Weather);
+      this.applySession(view);
       if (view.camera && typeof view.camera === "object") this.camera.setView(view.camera as Record<string, unknown>);
     } catch {
       // A broken view just starts from the default.
@@ -386,8 +417,8 @@ export class Engine {
   }
 
   private currentView(): string {
-    const { timeOfDay, weather } = gameStore.getState();
-    return JSON.stringify({ timeOfDay, weather, camera: this.camera.view });
+    const { timeOfDay } = gameStore.getState();
+    return JSON.stringify({ timeOfDay, ...this.session(), camera: this.camera.view });
   }
 
   /** Keeps the view a moment after it last changed (checked once a second, not every frame). */
@@ -399,6 +430,21 @@ export class Engine {
     if (view === this.keptView) return;
     this.keptView = view;
     saveView(view);
+  }
+
+  /**
+   * Moves the time of day on by `seconds` of simulated time. Shown to the minute, so the slider and
+   * the scene's look change once a game minute, not every frame; moved by hand, it carries on from there.
+   */
+  private tick(seconds: number): void {
+    if (seconds <= 0) return;
+    const { timeOfDay, setTimeOfDay } = gameStore.getState();
+    if (this.clock?.shown !== timeOfDay) this.clock = { hours: timeOfDay, shown: timeOfDay };
+    this.clock.hours = (this.clock.hours + seconds / HOUR_SECONDS) % 24;
+    const shown = Math.floor(this.clock.hours * 60) / 60;
+    if (shown === this.clock.shown) return;
+    this.clock.shown = shown;
+    setTimeOfDay(shown);
   }
 
   /** The look for the chosen time of day and weather, applied to the scene when it changes. */
@@ -424,6 +470,7 @@ export class Engine {
       this.sim.step(SIM_DT);
       this.accumulator -= SIM_DT;
     }
+    this.tick((deltaMS / 1000) * speed);
 
     // The cursor now sits over a different ground point; let the tool's preview follow it.
     if (this.camera.update(deltaMS) && this.pointer && !this.camera.isPanning) {
