@@ -818,6 +818,36 @@ describe("stuck in a queue", () => {
     expect(zipper(true)).toBeLessThan(5);
   }, 30000);
 
+  it("lets two cars side by side swap lanes, rather than each waiting for the other forever", () => {
+    // Two lanes east to a T: north only from the inner lane, south only from the kerb lane. Cars
+    // from the start (kerb lane) go north; cars joining from a side road (inner lane) go south.
+    // They queue at the T side by side, each needing the other's lane.
+    const swapping = () => {
+      const graph = new RoadGraph();
+      const two = { ...DEFAULT_ROAD_SPEC, lanes: 2, oneWay: true };
+      road(graph, 0, 0, 150, 0, two);
+      road(graph, 150, 0, 600, 0, two);
+      road(graph, 150, -300, 150, 0);
+      road(graph, 600, -300, 600, 300);
+      const north = at(graph, 600, -300);
+      const south = at(graph, 600, 300);
+      graph.setTerminal(north, SINK);
+      graph.setTerminal(south, SINK);
+      graph.setTerminal(at(graph, 0, 0), { ...DEFAULT_SOURCE, rate: 25, sinks: [north] });
+      graph.setTerminal(at(graph, 150, -300), { ...DEFAULT_SOURCE, rate: 25, sinks: [south] });
+      graph.setJunction(at(graph, 600, 0), { control: "stop" });
+      graph.setRules({ ...graph.rules, laneChange: { ...graph.rules.laneChange, deadlockReroute: false } });
+      const sim = new Simulation(graph);
+      sim.parking = false;
+      run(sim, 240, () => noOverlap(sim));
+      const before = sim.delivered;
+      run(sim, 120, () => noOverlap(sim));
+      return sim.delivered - before;
+    };
+    // Still delivering in the last two minutes: nobody locked side by side.
+    expect(swapping()).toBeGreaterThan(10);
+  });
+
   it("moves over to a free lane that goes the same way, when the rules say so", () => {
     const stuck = queued(false);
     const free = queued(true);

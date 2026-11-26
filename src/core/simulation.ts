@@ -40,6 +40,8 @@ interface Movement extends Leg {
    * a gap left for it (see `letIn`).
    */
   squeeze?: "stuck" | "merge";
+  /** A lane change swapping lanes with the car beside, going first (see `swapPartner`). */
+  swap?: boolean;
   /** Roundabout legs: distance along the leg where the car is on the ring, and where it leaves it; which exit it takes. */
   onRing?: number;
   offRing?: number;
@@ -106,6 +108,8 @@ const LOOK_AHEAD = 250;
 const LET_IN_PAUSE = 5;
 /** Moving over sideways out of a stuck queue: how far along the road it takes (mostly sideways). */
 const SQUEEZE_LENGTH = CAR_LENGTH * 0.8;
+/** Swapping lanes with the car beside from a standstill: how far along the road the change takes. */
+const SWAP_LENGTH = CAR_LENGTH * 2;
 /** Slower than this (units/s), a car ahead counts as held up when choosing a lane. */
 const CRAWL = 5;
 /** A home that can't send a car out (its door busy, or the road outside jammed) looks again after this many seconds. */
@@ -455,15 +459,30 @@ export class Simulation {
     const pending = car.legs[car.leg + 1] as Movement;
     const slide = pending.slide!;
     const scale = legLength(slide.entry) / (legLength(slide.exit) || 1);
+    const here = this.at(car) / scale;
+    // Beside a car waiting to swap lanes with it, going first (see `swapPartner`): a full lane change
+    // ending ahead of that car, not a short sideways move into where it stands. And with cars no
+    // longer letting others in, a sideways move set up for that goes back to an ordinary change.
+    const partner = this.swapPartner(car, pending);
+    const { letIn } = this.graph.rules.laneChange;
+    if ((pending.squeeze === "merge" && !letIn) || (partner && car.v < 1 && !pending.swap)) {
+      // Swapping from a standstill: two car lengths, or more to end a car's length clear ahead of
+      // the other car, while fitting before any queue ahead.
+      const length = partner ? Math.max(SWAP_LENGTH, this.at(partner) + CAR_LENGTH + MIN_GAP - (here + 1)) : undefined;
+      const [entry, change, exit] = this.tracks.changeAt(slide.entry, slide.exit, here - slide.exit.from + 1, length);
+      const [oldEntry, oldChange, oldExit] = car.legs.slice(car.leg, car.leg + 3);
+      car.legs.splice(car.leg, 3, { ...oldEntry, ...entry }, { ...oldChange, ...change, squeeze: undefined, swap: !!partner }, { ...oldExit, ...exit });
+      return true;
+    }
+    if (pending.swap) return false;
     // Standing at its last chance waiting for a gap (where cars let others in): a short sideways
     // move from where it stands instead, to fit a gap left for it (see `letIn`), if there's room in
     // front to swing out.
     if (pending.squeeze) return false;
-    if (car.v < 1 && car.stopped > 1 && slide.lead >= slide.maxLead - 0.5 && this.graph.rules.laneChange.letIn) {
+    if (car.v < 1 && car.stopped > 1 && slide.lead >= slide.maxLead - 0.5 && letIn && !partner) {
       const lane = this.lanes.get(car.legs[car.leg].key) ?? [];
       const front = lane[lane.indexOf(car) + 1];
       if (!front || this.at(front) - this.at(car) >= CAR_LENGTH * 0.62 + SQUEEZE_LENGTH / 2 + 1) {
-        const here = this.at(car) / scale;
         const [entry, change, exit] = this.tracks.changeAt(slide.entry, slide.exit, here - slide.exit.from + 1, SQUEEZE_LENGTH);
         const [oldEntry, oldChange, oldExit] = car.legs.slice(car.leg, car.leg + 3);
         car.legs.splice(car.leg, 3, { ...oldEntry, ...entry }, { ...oldChange, ...change, squeeze: "merge" }, { ...oldExit, ...exit });
@@ -478,6 +497,22 @@ export class Simulation {
     const [oldEntry, oldChange, oldExit] = car.legs.slice(car.leg, car.leg + 3);
     car.legs.splice(car.leg, 3, { ...oldEntry, ...entry }, { ...oldChange, ...change }, { ...oldExit, ...exit });
     return true;
+  }
+
+  /**
+   * The car beside `car`, in the lane `change` takes it into, waiting to change into `car`'s lane:
+   * the two would block each other, so the lower-numbered one goes first (the other is its partner).
+   * Undefined when there's none, or `car` is the one that waits.
+   */
+  private swapPartner(car: Car, change: Movement): Car | undefined {
+    if (!change.slide) return undefined;
+    const from = car.legs[car.leg].key;
+    const beside = this.at(car) * (change.slide.exit.track.length / (car.legs[car.leg].track.length || 1));
+    // The furthest on of any beside it wanting to swap (it's to end clear ahead of all of them).
+    const swapping = (this.lanes.get(change.outKey!) ?? []).filter(
+      (c) => c.id > car.id && !c.cleared && c.legs[c.leg + 1]?.outKey === from && Math.abs(this.at(c) - beside) < CAR_LENGTH * 1.5,
+    );
+    return swapping.reduce<Car | undefined>((best, c) => (!best || this.at(c) > this.at(best) ? c : best), undefined);
   }
 
   /**
@@ -1033,8 +1068,8 @@ export class Simulation {
         if (deadlockReroute) this.reroute(car);
       }
       // Stop with the front bumper just behind the line; for a lane change, only at its last chance.
-      // (A short sideways move starts where it stands: no further.)
-      const slide = (next as Movement).squeeze ? undefined : next.slide;
+      // (A short sideways move, or a swap, starts where it stands: no further.)
+      const slide = (next as Movement).squeeze || (next as Movement).swap ? undefined : next.slide;
       const toStop = slide ? (slide.maxLead * legLength(slide.entry)) / (legLength(slide.exit) || 1) - car.s : toLine;
       const toBumper = toStop - CAR_LENGTH / 2 - 0.5;
       if (!car.cleared && toBumper < gap) {
@@ -1322,17 +1357,28 @@ export class Simulation {
     const door = change.key.startsWith("out:") ? Number(change.key.split(":")[1]) : null;
     if (door !== null && this.cars.some((c) => c !== car && this.nearDoor(c, door))) return false;
     const from = car.legs[car.leg].key;
+    // Swapping lanes with the car beside, going first: that car, and those queued behind it, wait.
+    // It must end clear ahead of that car.
+    const partner = this.swapPartner(car, change);
+    if (partner && join < this.at(partner) + CAR_LENGTH + MIN_GAP) return false;
     // Room where it joins, past any short roads beyond, for the car to fit in.
     if (this.ahead(car, car.leg + 2, join) < CAR_LENGTH + MIN_GAP * 2) return false;
     for (const other of this.cars) {
       if (other === car) continue;
       const leg = other.legs[other.leg];
-      // Another car changing into the same lane (moving over sideways, only one close by matters).
-      if (leg.outKey === change.outKey && leg.joinAt !== undefined && (!change.squeeze || Math.abs(leg.joinAt - join) < CAR_LENGTH * 4)) return false;
+      // A car changing the other way, out of that lane into this one (swapping with it): let it finish,
+      // so the cars behind it don't move up into where it's going.
+      if (leg.joinAt !== undefined && leg.outKey === from && other.legs[other.leg - 1]?.key === change.outKey) return false;
+      // Another car changing into the same lane (moving over sideways, only one close by matters). One
+      // well behind where this change starts doesn't: it sees this car joining ahead and keeps back.
+      if (leg.outKey === change.outKey && leg.joinAt !== undefined) {
+        // (Where it is now, counted along the lane it's joining.)
+        const behind = leg.joinAt - (legLength(leg) - other.s) < join - legLength(change) - CAR_LENGTH;
+        if (!behind && (!change.squeeze || Math.abs(leg.joinAt - join) < CAR_LENGTH * 4)) return false;
+      }
       let position: number;
       if (leg.key === change.outKey) {
-        const waitingToSwap = !other.cleared && other.legs[other.leg + 1]?.outKey === from && other.id > car.id;
-        if (waitingToSwap) continue;
+        if (partner && this.at(other) <= this.at(partner)) continue;
         position = this.at(other);
       } else if (leg.node !== undefined && leg.outKey === change.outKey) {
         // Still in the junction behind, about to come out into the target lane: count it from there.
