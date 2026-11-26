@@ -722,6 +722,28 @@ describe("stuck in a queue", () => {
     return sim;
   }
 
+  it("waiting to change into a jammed lane, carries on in its own empty lane rather than stopping short", () => {
+    const graph = new RoadGraph();
+    road(graph, 0, 0, 900, 0, { ...DEFAULT_ROAD_SPEC, lanes: 2, oneWay: true });
+    // A shop on the inner side where nobody gets to turn in: its lane jams back from it.
+    const shop = graph.nodeOnRoad({ x: 700, y: -10 })!;
+    graph.setTerminal(shop.id, { ...SINK, side: -1 });
+    graph.setTerminal(at(graph, 900, 0), SINK);
+    graph.setTerminal(at(graph, 0, 0), { ...DEFAULT_SOURCE, rate: 30, sinks: [shop.id] });
+    graph.setRules({ ...graph.rules, laneChange: { ...graph.rules.laneChange, stuckChange: false, deadlockReroute: false } });
+    const sim = new Simulation(graph);
+    sim.parking = false;
+    const blockable = sim as unknown as { mayTurnIn: (car: Car, turn: Car["legs"][number]) => boolean };
+    blockable.mayTurnIn = () => false;
+    run(sim, 90, () => noOverlap(sim));
+    // Out of the home in the kerb lane, they need the inner one: those still waiting to change
+    // have driven on along the kerb lane, empty but for them.
+    const waiting = sim.cars.filter((c) => c.legs[c.leg + 1]?.slide && !c.cleared);
+    expect(waiting.length).toBeGreaterThan(0);
+    const front = Math.max(...waiting.map((c) => sim.pose(c).x));
+    expect(front).toBeGreaterThan(550);
+  });
+
   it("moves over to a free lane that goes the same way, when the rules say so", () => {
     const stuck = queued(false);
     const free = queued(true);
