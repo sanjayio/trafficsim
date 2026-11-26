@@ -24,8 +24,8 @@ describe("parseRules", () => {
   });
 
   it("knows which preset rules match", () => {
-    expect(matchingPreset(DEFAULT_RULES)).toBe("default");
-    expect(matchingPreset(presetRules("polite"))).toBe("polite");
+    expect(matchingPreset(DEFAULT_RULES)).toBe("standard");
+    expect(matchingPreset(presetRules("chill"))).toBe("chill");
     expect(matchingPreset({ ...DEFAULT_RULES, signals: { green: 12, amber: 2 } })).toBeNull();
   });
 });
@@ -42,11 +42,11 @@ describe("rules on a map", () => {
   it("are saved only when changed, and load back", () => {
     const graph = map();
     expect(graph.toJSON().rules).toBeUndefined();
-    graph.setRules(presetRules("aggressive"));
+    graph.setRules(presetRules("madMax"));
     const saved = JSON.parse(JSON.stringify(graph.toJSON())) as SavedMap;
     const loaded = new RoadGraph();
     loaded.load(saved);
-    expect(loaded.rules).toEqual(presetRules("aggressive"));
+    expect(loaded.rules).toEqual(presetRules("madMax"));
     // Older maps have none: the defaults.
     loaded.load({ ...saved, rules: undefined });
     expect(loaded.rules).toEqual(DEFAULT_RULES);
@@ -59,7 +59,7 @@ describe("rules on a map", () => {
     for (let i = 0; i < 8 / SIM_DT; i++) sim.step(SIM_DT);
     const cars = [...sim.cars];
     expect(cars.length).toBeGreaterThan(0);
-    graph.setRules(presetRules("polite"));
+    graph.setRules(presetRules("chill"));
     expect(sim.cars).toEqual(cars);
   });
 

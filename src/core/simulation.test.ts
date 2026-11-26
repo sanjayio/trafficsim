@@ -9,7 +9,8 @@ import { findRoute } from "./routing";
 import { DEFAULT_ROAD_SPEC, LANE_WIDTH, normalizeRoadSpec, parseRoadSpec, type RoadSpec } from "./roadSpec";
 import { CAR_LENGTH, CAR_WIDTH, SIM_DT, Simulation, type Car } from "./simulation";
 import { buildingSize, DEFAULT_SOURCE, carPark, newTerminal, parseTerminal, SINK } from "./terminal";
-import { lanesInnerToKerb } from "./lanes";
+import { defaultConnections, lanesInnerToKerb } from "./lanes";
+import { planLanes, type LaneFacts } from "./lanePlan";
 import { legLength, TrackBuilder } from "./track";
 
 const road = (graph: RoadGraph, ax: number, ay: number, bx: number, by: number, spec: RoadSpec = DEFAULT_ROAD_SPEC) =>
@@ -499,8 +500,63 @@ describe("roundabout lanes", () => {
         seen.add(`${exit}:${leg.ring.radius === outer ? "outer" : "inner"}`);
       }
     });
-    // Every exit was used, and second-exit traffic used both lanes.
-    expect([...seen].sort()).toEqual(["1:outer", "2:inner", "2:outer", "3:inner"]);
+    // Every exit was used (second-exit traffic may use either lane: the one needing the fewest changes after).
+    expect([...seen].sort()).toEqual(expect.arrayContaining(["1:outer", "3:inner"]));
+    expect([...seen].some((k) => k.startsWith("2:"))).toBe(true);
+  });
+});
+
+describe("lane choice", () => {
+  /** Two roads of two lanes (0 inner, 1 kerb), each lane carrying straight on into the same lane of the next. */
+  const facts = (valid: number[][], congestion: number[] = [0, 0]): LaneFacts => ({
+    roads: valid.length,
+    valid: (i) => valid[i],
+    next: (_i, lane) => [lane],
+    changes: (_i, a, b) => Math.abs(a - b),
+    congestion: (i, lane) => (i === 0 ? congestion[lane] : 0),
+  });
+  const rules = (order: ("fewestChanges" | "keepLane" | "leastCongested")[]) => ({ lookahead: 3, order });
+
+  it("keeps its lane when either lane goes where it's going", () => {
+    expect(planLanes(facts([[0, 1], [1]]), 0, 1, rules(["fewestChanges", "keepLane", "leastCongested"])).exit[0]).toBe(1);
+    expect(planLanes(facts([[0, 1], [0, 1]]), 0, 0, rules(["fewestChanges", "keepLane", "leastCongested"])).exit[0]).toBe(0);
+  });
+
+  it("only ever takes a lane that leads on, and weighs queues by the order given", () => {
+    expect(planLanes(facts([[0], [0, 1]]), 0, 1, rules(["keepLane", "fewestChanges", "leastCongested"])).exit[0]).toBe(0);
+    // A queue in its own lane: moves over only when least congested comes before staying in lane.
+    const queued = facts([[0, 1], [0, 1]], [0, 3]);
+    expect(planLanes(queued, 0, 1, rules(["fewestChanges", "keepLane", "leastCongested"])).exit[0]).toBe(1);
+    expect(planLanes(queued, 0, 1, rules(["leastCongested", "fewestChanges", "keepLane"])).exit[0]).toBe(0);
+  });
+
+  it("doesn't change lane before a turn both lanes may make", () => {
+    const changes = (bothLanesTurn: boolean) => {
+      const graph = new RoadGraph();
+      const spec = { ...DEFAULT_ROAD_SPEC, lanes: 2 };
+      road(graph, -400, 0, 0, 0, spec);
+      road(graph, 0, 0, 400, 0, spec);
+      road(graph, 0, 0, 0, -400, spec);
+      const tee = at(graph, 0, 0);
+      graph.setTerminal(at(graph, -400, 0), { ...DEFAULT_SOURCE, rate: 30 });
+      graph.setTerminal(at(graph, 0, -400), SINK);
+      if (bothLanesTurn) {
+        const west = graph.segmentsAt(tee).find((s) => graph.directionAway(s, tee).x < -0.9)!;
+        const north = graph.segmentsAt(tee).find((s) => graph.directionAway(s, tee).y < -0.9)!;
+        const turns = defaultConnections(graph, tee).filter((c) => !(c.from.segment === west.id && c.to.segment === north.id));
+        const lanes = lanesInnerToKerb(spec, graph.drivingSide);
+        for (const lane of lanes) turns.push({ from: { segment: west.id, lane }, to: { segment: north.id, lane } });
+        graph.setJunction(tee, { connections: turns });
+      }
+      const sim = new Simulation(graph);
+      sim.parking = false;
+      run(sim, 60, () => noOverlap(sim));
+      expect(sim.delivered).toBeGreaterThan(10);
+      return sim.stats().laneChanges;
+    };
+    // Out of the home in the kerb lane, turning across traffic: by default only the inner lane may.
+    expect(changes(false)).toBeGreaterThan(0);
+    expect(changes(true)).toBe(0);
   });
 });
 

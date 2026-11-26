@@ -27,11 +27,13 @@ export function TrafficRulesSettings({ engine }: { engine: Engine }) {
   return (
     <section className="flex flex-col gap-3">
       <div>
-        <h3 className="text-xs font-medium uppercase tracking-wide text-neutral-500">Traffic rules</h3>
+        <h3 className="text-xs font-medium uppercase tracking-wide text-neutral-500">
+          Traffic rules{preset === null && <span className="ml-2 normal-case tracking-normal text-sky-300">Custom</span>}
+        </h3>
         <p className="text-xs text-neutral-500">How cars drive, give way and choose their way. Saved with the map; changes apply at once.</p>
       </div>
       <div className="flex items-center gap-2">
-        <div role="radiogroup" aria-label="Preset" className="flex flex-1 flex-wrap rounded-lg border border-white/10 bg-white/5 p-0.5">
+        <div role="radiogroup" aria-label="Preset" className="grid flex-1 grid-cols-4 rounded-lg border border-white/10 bg-white/5 p-0.5">
           {PRESETS.map((p) => (
             <button
               key={p.id}
@@ -40,20 +42,19 @@ export function TrafficRulesSettings({ engine }: { engine: Engine }) {
               aria-checked={preset === p.id}
               onClick={() => engine.graph.setRules(presetRules(p.id))}
               onMouseDown={keepFocusOnGame}
-              className={`rounded-md px-3 py-1 text-sm font-medium transition-colors duration-100 ${
+              className={`rounded-md px-2 py-1 text-sm font-medium transition-colors duration-100 ${
                 preset === p.id ? "bg-sky-500/90 text-white" : "text-neutral-300 hover:text-white"
               }`}
             >
               {p.label}
             </button>
           ))}
-          {preset === null && <span className="px-3 py-1 text-sm font-medium text-sky-300">Custom</span>}
         </div>
         <button
           type="button"
           onClick={() => engine.graph.setRules(DEFAULT_RULES)}
           onMouseDown={keepFocusOnGame}
-          disabled={preset === "default"}
+          disabled={preset === "standard"}
           className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm text-neutral-300 transition-colors duration-100 hover:bg-white/10 hover:text-white disabled:opacity-40 disabled:hover:bg-transparent"
         >
           <RotateCcw size={14} aria-hidden />

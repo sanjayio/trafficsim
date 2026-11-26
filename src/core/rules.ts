@@ -11,6 +11,10 @@ export type RightOfWay = (typeof RIGHT_OF_WAY)[number];
 export const TURN_ORDER = ["straight", "kerb", "across"] as const;
 export type TurnPriority = (typeof TURN_ORDER)[number];
 
+/** How a car compares the lanes it could take on a road, most important first (see `planLanes`). */
+export const LANE_CRITERIA = ["fewestChanges", "keepLane", "leastCongested"] as const;
+export type LaneCriterion = (typeof LANE_CRITERIA)[number];
+
 export interface TrafficRules {
   following: { accel: number; brake: number; minGap: number; headway: number };
   junctions: {
@@ -25,6 +29,7 @@ export interface TrafficRules {
     turnInGap: number;
   };
   signals: { green: number; amber: number };
+  lanes: { order: LaneCriterion[]; lookahead: number; congestionAware: boolean; sight: number };
   routing: { speedLimits: boolean; turnKerb: number; turnAcross: number; delayNone: number; delayYield: number; delayStop: number; delaySignals: number };
   trips: { parkMin: number; parkMax: number; signalAhead: number };
 }
@@ -45,36 +50,42 @@ export const DEFAULT_RULES: TrafficRules = {
     turnInGap: 3,
   },
   signals: { green: 8, amber: 2 },
+  lanes: { order: [...LANE_CRITERIA], lookahead: 3, congestionAware: true, sight: 150 },
   routing: { speedLimits: true, turnKerb: 2, turnAcross: 5, delayNone: 0.5, delayYield: 1, delayStop: 3, delaySignals: 4 },
   trips: { parkMin: 20, parkMax: 100, signalAhead: 60 },
 };
 
 type Patch = { [S in RuleSection]?: Partial<TrafficRules[S]> };
 
-/** Named starting points; each changes a few rules from the default. */
+/** Named starting points, from calm to reckless drivers; each changes a few rules from Standard (the default). */
 export const PRESETS: { id: string; label: string; patch: Patch }[] = [
-  { id: "default", label: "Default", patch: {} },
   {
-    id: "polite",
-    label: "Polite",
+    id: "chill",
+    label: "Chill",
     patch: {
       following: { headway: 1.6, minGap: 5, accel: 10 },
       junctions: { stopHold: 1.5, yieldHorizon: 5, ringGap: 3, giveWayTime: 4, turnInGap: 4.5 },
+      lanes: { order: ["keepLane", "fewestChanges", "leastCongested"] },
     },
   },
+  { id: "standard", label: "Standard", patch: {} },
   {
-    id: "aggressive",
-    label: "Aggressive",
+    id: "hurry",
+    label: "Hurry",
     patch: {
-      following: { headway: 0.5, minGap: 1.5, accel: 25, brake: 40 },
-      junctions: { stopHold: 0, yieldHorizon: 1.5, ringGap: 1, giveWayTime: 1.2, turnInGap: 1.5, amberStopIfSafe: false },
+      following: { headway: 0.7, minGap: 2, accel: 20, brake: 32 },
+      junctions: { stopHold: 0.2, yieldHorizon: 2, ringGap: 1.5, giveWayTime: 1.8, turnInGap: 2 },
+      lanes: { order: ["fewestChanges", "leastCongested", "keepLane"] },
     },
   },
   {
-    id: "cityBuilder",
-    label: "City-builder",
-    // Like Cities: Skylines: routes stick to fast roads and avoid turning, especially across traffic.
-    patch: { routing: { turnKerb: 4, turnAcross: 10, delayStop: 4, delaySignals: 6 } },
+    id: "madMax",
+    label: "Mad Max",
+    patch: {
+      following: { headway: 0.4, minGap: 1, accel: 30, brake: 50 },
+      junctions: { stopHold: 0, yieldHorizon: 1, ringGap: 0.8, giveWayTime: 1, turnInGap: 1.2, amberStopIfSafe: false },
+      lanes: { order: ["leastCongested", "fewestChanges", "keepLane"] },
+    },
   },
 ];
 
@@ -136,6 +147,23 @@ export const RULE_SECTIONS: { section: RuleSection; title: string; fields: RuleF
     fields: [
       { kind: "number", section: "signals", key: "green", label: "Green", help: "Seconds of green per phase.", min: 3, max: 30, step: 1, unit: "s" },
       { kind: "number", section: "signals", key: "amber", label: "Amber", help: "Seconds of amber after each green.", min: 0, max: 6, step: 0.5, unit: "s" },
+    ],
+  },
+  {
+    section: "lanes",
+    title: "Lane choice",
+    fields: [
+      {
+        kind: "order",
+        section: "lanes",
+        key: "order",
+        label: "Lane preference",
+        help: "On each road, cars take the lane that goes where they're going and wins on these, in order; later ones only break ties.",
+        items: { fewestChanges: "Fewest lane changes ahead", keepLane: "Stay in this lane", leastCongested: "Least held-up lane" },
+      },
+      { kind: "number", section: "lanes", key: "lookahead", label: "Plan ahead", help: "How many roads ahead cars plan their lanes for.", min: 1, max: 5, step: 1, unit: "roads" },
+      { kind: "toggle", section: "lanes", key: "congestionAware", label: "Avoid queues", help: "Count stopped or slow cars ahead in each lane, entering a road." },
+      { kind: "number", section: "lanes", key: "sight", label: "Sight distance", help: "How far ahead cars see queues.", min: 30, max: 400, step: 10, unit: "u" },
     ],
   },
   {

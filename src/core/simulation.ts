@@ -5,6 +5,7 @@ import { LANE_WIDTH, speedOf } from "./roadSpec";
 import { connectionsAt, hasLaneConnector, laneOffsets, lanesInnerToKerb, turnAt, type Turn } from "./lanes";
 import { carPark, DRIVEWAY_BLEND, headsTo, type Terminal } from "./terminal";
 import { TURN_ORDER } from "./rules";
+import { planLanes, type LaneFacts, type LanePlan } from "./lanePlan";
 import { legAt, legLength, TrackBuilder, type Leg } from "./track";
 
 /** Fixed simulation timestep in seconds, so traffic logic never sees a variable dt. */
@@ -61,6 +62,10 @@ export interface Car {
   home: NodeId;
   /** The trip being driven: from and to which buildings, and the parking bay at either end (to plan it again, see `replan`). */
   trip: Trip;
+  /** The roads it's driving, the lanes planned on each, and which road (index into `route.segments`) it's on. */
+  route: Route;
+  lanes: LanePlan;
+  road: number;
   /** The bay it holds at a shop or office (its index in `carPark`'s bays), from setting off until it has backed out. */
   parking: { sink: NodeId; bay: number } | null;
   /** Parked: the simulation time it leaves. */
@@ -85,6 +90,8 @@ export interface TrafficStats {
   reroutes: number;
 }
 
+/** Slower than this (units/s), a car ahead counts as held up when choosing a lane. */
+const CRAWL = 5;
 /** A car standing still this long counts as stuck. */
 const STUCK_AFTER = 10;
 
@@ -247,6 +254,8 @@ export class Simulation {
         car.s -= legLength(car.legs[car.leg]);
         car.leg++;
         if (car.legs[car.leg].key.startsWith("c:")) this.counts.laneChanges++;
+        // Onto the next road out of a junction: choose its lanes again, seeing the traffic on it now.
+        if (car.legs[car.leg - 1].node !== undefined && car.legs[car.leg].key.startsWith("r:")) this.enterRoad(car);
         car.cleared = false;
         car.arrival = null;
         car.stopped = 0;
@@ -361,6 +370,29 @@ export class Simulation {
   }
 
   /**
+   * `car` has just driven onto the next road of its route: plan its lanes from here (in the lane
+   * it's in) by the lane rules, and if that changes anything, rebuild the legs ahead.
+   */
+  private enterRoad(car: Car): void {
+    const leg = car.legs[car.leg];
+    const road = car.route.segments.indexOf(leg.segment!, car.road);
+    if (road < 0) return;
+    car.road = road;
+    const entry = Number(leg.key.split(":")[3]);
+    const plan = this.planFor(car.route, road, entry, car);
+    const lanes: LanePlan = {
+      entry: [...car.lanes.entry.slice(0, road), ...plan.entry.slice(road)],
+      exit: [...car.lanes.exit.slice(0, road), ...plan.exit.slice(road)],
+    };
+    if (JSON.stringify(lanes) === JSON.stringify(car.lanes)) return;
+    const fresh = this.legsFor(car.route, car.trip.bays, lanes);
+    // The roads behind keep their lanes, so the legs up to here are the same: it carries on from the same leg.
+    if (fresh[car.leg]?.key !== leg.key) return;
+    car.legs = fresh;
+    car.lanes = lanes;
+  }
+
+  /**
    * Junction `node`'s settings changed. Only its control (stop, give way, signals, which roads have
    * them): cars keep their routes and take up the new rules. Its shape (a roundabout, its corners,
    * its lane connections): cars through it go (their paths no longer fit).
@@ -397,7 +429,9 @@ export class Simulation {
     if (car.leaveAt !== null) return true;
     const route = this.route(car.trip.from, car.trip.to);
     if (!route) return false;
-    const fresh = this.legsFor(route, car.trip.bays);
+    const lanes = this.planTrip(route);
+    const fresh = this.legsFor(route, car.trip.bays, lanes);
+    Object.assign(car, { route, lanes, road: Math.max(0, route.segments.indexOf(car.legs[car.leg].segment ?? -1)) });
     const current = car.legs[car.leg];
     if (current.node === node) {
       const next = car.legs[car.leg + 1];
@@ -458,7 +492,9 @@ export class Simulation {
       if (!reachable.length) continue;
       const sink = reachable[Math.floor(this.random() * reachable.length)];
       const bay = this.parking ? this.freeBay(sink) : null;
-      const legs = this.legsFor(this.route(source, sink)!, bay === null ? {} : { parkAt: bay });
+      const route = this.route(source, sink)!;
+      const lanes = this.planTrip(route);
+      const legs = this.legsFor(route, bay === null ? {} : { parkAt: bay }, lanes);
       // Not while the last car is still at the door or near the top of the driveway (either way out).
       const blocked = this.cars.some((c) => c.legs[c.leg].key === legs[0].key || this.nearDoor(c, source));
       if (blocked) continue;
@@ -478,6 +514,9 @@ export class Simulation {
         stopped: 0,
         home: source,
         trip: { from: source, to: sink, bays: bay === null ? {} : { parkAt: bay } },
+        route,
+        lanes,
+        road: 0,
         parking: bay === null ? null : { sink, bay },
         leaveAt: null,
         started: this.time,
@@ -505,7 +544,8 @@ export class Simulation {
     const { sink, bay } = car.parking!;
     const route = this.graph.terminal(car.home)?.kind === "source" ? this.route(sink, car.home) : null;
     if (!route) return false;
-    const legs = this.legsFor(route, { leaveFrom: bay });
+    const lanes = this.planTrip(route);
+    const legs = this.legsFor(route, { leaveFrom: bay }, lanes);
     // Out of an underground or rear car park, one at a time: through the entrance, or out of a bay and up the side driveway.
     const leaving = (key: string, reverse?: boolean) =>
       key === `exit:${sink}` || key === `path:${sink}` || (key.startsWith(`bay:${sink}:`) && !reverse);
@@ -524,14 +564,95 @@ export class Simulation {
       stopped: 0,
       started: this.time,
       trip: { from: sink, to: car.home, bays: { leaveFrom: bay } },
+      route,
+      lanes,
+      road: 0,
     });
     // Out of an underground car park (no backing out of a bay): its space is free once it sets off.
     if (!legs.some((l) => l.reverse)) car.parking = null;
     return true;
   }
 
-  /** The legs driving `route`: a lane on each road (by the turn at its end), and the junctions between. */
-  private legsFor(route: Route, bays: { parkAt?: number; leaveFrom?: number } = {}): Movement[] {
+  /**
+   * The lanes for `route` from road `from` on, entering it in lane `entry` (see `planLanes`). `car`,
+   * driving it, sees how held up the lanes of that road are.
+   */
+  private planFor(route: Route, from: number, entry: number, car?: Car): LanePlan {
+    const { graph, tracks } = this;
+    const rules = graph.rules.lanes;
+    const segments = route.segments.map((id) => graph.segments.get(id)!);
+    const order = segments.map((s) => lanesInnerToKerb(s.spec, graph.drivingSide));
+    const last = segments.length - 1;
+    // The lane connections from road i onto road i + 1, where its end has a lane connector.
+    const connections = (i: number) =>
+      hasLaneConnector(graph, route.nodes[i + 1])
+        ? connectionsAt(graph, route.nodes[i + 1]).filter((c) => c.from.segment === segments[i].id && c.to.segment === segments[i + 1].id)
+        : null;
+    const facts: LaneFacts = {
+      roads: segments.length,
+      // At the sink, the lane nearest its building; before a roundabout, the kerb lane for the first
+      // exit, the inner lane for the third and later, either for the second; at a junction, the lanes
+      // with a connection where the route goes; through a joint, any.
+      valid: (i) => {
+        if (i === last) return [this.nearestToBuilding(segments[i], route.nodes[i + 1], false)];
+        const node = route.nodes[i + 1];
+        if (tracks.isRoundabout(node)) {
+          const exit = tracks.exitNumber(node, segments[i], segments[i + 1]);
+          return exit === 1 ? [order[i][order[i].length - 1]] : exit >= 3 ? [order[i][0]] : order[i];
+        }
+        const from = new Set(connections(i)?.map((c) => c.from.lane) ?? order[i]);
+        const lanes = order[i].filter((l) => from.has(l));
+        return lanes.length ? lanes : order[i];
+      },
+      // Out of a roundabout, the lane matching the ring lane (inner to inner, outer to outer);
+      // through a joint, the same lane position; after a junction, the lanes its connections lead to.
+      next: (i, lane) => {
+        const node = route.nodes[i + 1];
+        if (graph.segmentsAt(node).length === 2) return [order[i + 1][Math.min(order[i].indexOf(lane), order[i + 1].length - 1)]];
+        if (tracks.isRoundabout(node)) return [tracks.exitLane(node, tracks.ringLane(node, segments[i], lane), segments[i + 1])];
+        const to = connections(i)?.filter((c) => c.from.lane === lane).map((c) => c.to.lane) ?? [];
+        return to.length ? to : order[i + 1];
+      },
+      changes: (i, a, b) => Math.abs(order[i].indexOf(a) - order[i].indexOf(b)),
+      congestion: (i, lane) => (car && i === from && rules.congestionAware ? this.heldUp(car, segments[i], route.nodes[i], lane) : 0),
+    };
+    return planLanes(facts, from, entry, rules);
+  }
+
+  /** Cars stopped or crawling in lane `lane` of `segment` (driven away from `fromNode`), within sight ahead of `car`. */
+  private heldUp(car: Car, segment: RoadSegment, fromNode: NodeId, lane: number): number {
+    const key = this.tracks.roadLeg(segment, fromNode, lane).key;
+    const mine = this.at(car);
+    const sight = this.graph.rules.lanes.sight;
+    return this.cars.filter((c) => {
+      if (c === car || c.v >= CRAWL || c.legs[c.leg].key !== key) return false;
+      const ahead = this.at(c) - mine;
+      return ahead > 0 && ahead < sight;
+    }).length;
+  }
+
+  /** The lane of `segment` nearest the building of the source it leaves (or the sink it arrives at) at `node`. */
+  private nearestToBuilding(segment: RoadSegment, node: NodeId, leaving: boolean): number {
+    const { graph } = this;
+    const lot = graph.terminalLot(node)!;
+    const away = graph.directionAway(segment, node);
+    const travel = leaving ? away : { x: -away.x, y: -away.y };
+    // Right of travel: world y points down the screen.
+    const right = lot.out.x * -travel.y + lot.out.y * travel.x > 0 ? 1 : -1;
+    const offsets = laneOffsets(segment.spec, graph.drivingSide);
+    return offsets.indexOf(right > 0 ? Math.max(...offsets) : Math.min(...offsets));
+  }
+
+  /** The lanes for all of `route`, from the lane nearest the building it sets off from. */
+  private planTrip(route: Route): LanePlan {
+    return this.planFor(route, 0, this.nearestToBuilding(this.graph.segments.get(route.segments[0])!, route.nodes[0], true));
+  }
+
+  /**
+   * The legs driving `route` in `lanes`: each road from its entry lane (changing lane halfway along
+   * where its exit lane differs), and the junctions between.
+   */
+  private legsFor(route: Route, bays: { parkAt?: number; leaveFrom?: number }, lanes: LanePlan): Movement[] {
     const { graph } = this;
     const segments = route.segments.map((id) => graph.segments.get(id)!);
     const turns: (Turn | null)[] = segments.map((s, i) => {
@@ -541,66 +662,7 @@ export class Simulation {
       if (slip) return segments[i + 1].id === slip.slip ? "kerb" : s.id === slip.slip ? "across" : "straight";
       return turnAt(graph, route.nodes[i + 1], s, segments[i + 1]);
     });
-    // At each plain junction, one of the lane connections for this turn (they fix the lanes either side).
-    const via = segments.map((s, i) => {
-      if (i === segments.length - 1 || !hasLaneConnector(graph, route.nodes[i + 1])) return null;
-      const options = connectionsAt(graph, route.nodes[i + 1]).filter(
-        (c) => c.from.segment === s.id && c.to.segment === segments[i + 1].id,
-      );
-      return options[Math.floor(this.random() * options.length)] ?? null;
-    });
-    // The lane of road `i` nearest the building of the source it leaves (or sink it arrives at).
-    const nearestToBuilding = (i: number, node: NodeId, leaving: boolean): number => {
-      const lot = graph.terminalLot(node)!;
-      const away = graph.directionAway(segments[i], node);
-      const travel = leaving ? away : { x: -away.x, y: -away.y };
-      // Right of travel: world y points down the screen.
-      const right = lot.out.x * -travel.y + lot.out.y * travel.x > 0 ? 1 : -1;
-      const offsets = laneOffsets(segments[i].spec, graph.drivingSide);
-      return offsets.indexOf(right > 0 ? Math.max(...offsets) : Math.min(...offsets));
-    };
-    // The lane each road is left in, for what comes next: before a roundabout, the kerb lane for the
-    // first exit, the inner lane for the third and later, either for the second; at the sink, the
-    // lane nearest its building; by the turn at a junction; through a joint, the next road's lane position.
-    const exitLanes: number[] = [];
-    for (let i = segments.length - 1; i >= 0; i--) {
-      const order = lanesInnerToKerb(segments[i].spec, graph.drivingSide);
-      const joint = i < segments.length - 1 && graph.segmentsAt(route.nodes[i + 1]).length === 2;
-      if (joint) {
-        const rank = lanesInnerToKerb(segments[i + 1].spec, graph.drivingSide).indexOf(exitLanes[i + 1]);
-        exitLanes[i] = order[Math.min(rank, order.length - 1)];
-        continue;
-      }
-      const connection = via[i];
-      if (connection) {
-        exitLanes[i] = connection.from.lane;
-        continue;
-      }
-      const node = route.nodes[i + 1];
-      const exit = i < segments.length - 1 && this.tracks.isRoundabout(node) ? this.tracks.exitNumber(node, segments[i], segments[i + 1]) : 0;
-      const turn = exit ? (exit === 1 ? "kerb" : exit >= 3 ? "across" : "straight") : turns[i];
-      if (i === segments.length - 1) exitLanes[i] = nearestToBuilding(i, route.nodes[i + 1], false);
-      else if (turn === "kerb") exitLanes[i] = order[order.length - 1];
-      else if (turn === "across") exitLanes[i] = order[0];
-      else exitLanes[i] = order[Math.floor(this.random() * order.length)];
-    }
-    // The lane each road is entered in: the one nearest the source's building; out of a
-    // roundabout, the lane matching the ring lane (inner to inner, outer to outer); through a joint,
-    // the lane position it was left in; after a junction, the lane its lane connection leads to.
-    // Where entry and exit lanes differ, the car changes lane halfway along the road.
-    const entryLanes = segments.map((segment, i) => {
-      const order = lanesInnerToKerb(segment.spec, graph.drivingSide);
-      const from = route.nodes[i];
-      if (i === 0) return nearestToBuilding(0, route.nodes[0], true);
-      if (this.tracks.isRoundabout(from)) {
-        return this.tracks.exitLane(from, this.tracks.ringLane(from, segments[i - 1], exitLanes[i - 1]), segment);
-      }
-      if (graph.segmentsAt(from).length === 2) {
-        const rank = lanesInnerToKerb(segments[i - 1].spec, graph.drivingSide).indexOf(exitLanes[i - 1]);
-        return order[Math.min(rank, order.length - 1)];
-      }
-      return via[i - 1]?.to.lane ?? exitLanes[i];
-    });
+    const { entry: entryLanes, exit: exitLanes } = lanes;
     // The first and last roads start and end where the driveways join them.
     const source = route.nodes[0];
     const sink = route.nodes[route.nodes.length - 1];
