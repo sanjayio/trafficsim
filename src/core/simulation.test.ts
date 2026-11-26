@@ -696,6 +696,40 @@ describe("stuck before a turn", () => {
   });
 });
 
+describe("stuck in a queue", () => {
+  /**
+   * Two lanes east from a home to the far end, past a shop on the kerb side where cars never get to
+   * turn in: they wait in the kerb lane, and cars going on past queue up behind them.
+   */
+  function queued(moveOver: boolean) {
+    const graph = new RoadGraph();
+    road(graph, 0, 0, 900, 0, { ...DEFAULT_ROAD_SPEC, lanes: 2, oneWay: true });
+    const shop = graph.nodeOnRoad({ x: 450, y: 10 })!;
+    graph.setTerminal(shop.id, { ...SINK, side: 1 });
+    graph.setTerminal(at(graph, 900, 0), SINK);
+    graph.setTerminal(at(graph, 0, 0), { ...DEFAULT_SOURCE, rate: 20 });
+    graph.setRules({
+      ...graph.rules,
+      lanes: { ...graph.rules.lanes, congestionAware: false },
+      laneChange: { ...graph.rules.laneChange, stuckChange: moveOver, stuckAfter: 3 },
+    });
+    const sim = new Simulation(graph);
+    sim.parking = false;
+    const blockable = sim as unknown as { mayTurnIn: (car: Car, turn: Car["legs"][number]) => boolean };
+    const mayTurnIn = blockable.mayTurnIn.bind(sim);
+    blockable.mayTurnIn = (car, turn) => !turn.key.startsWith(`in:${shop.id}`) && mayTurnIn(car, turn);
+    run(sim, 120, () => noOverlap(sim));
+    return sim;
+  }
+
+  it("moves over to a free lane that goes the same way, when the rules say so", () => {
+    const stuck = queued(false);
+    const free = queued(true);
+    expect(free.delivered).toBeGreaterThan(stuck.delivered + 5);
+    expect(free.stats().laneChanges).toBeGreaterThan(0);
+  });
+});
+
 describe("sources and sinks along a road", () => {
   it("give way pulling out of a driveway: they never pull out in front of a car close by on the road", () => {
     const graph = new RoadGraph();

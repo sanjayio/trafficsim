@@ -35,6 +35,8 @@ type Rule = JunctionControl | "roundabout" | "merge" | "priority" | "turnIn" | n
 
 interface Movement extends Leg {
   rule: Rule;
+  /** A short sideways lane change from a standstill, out of a stuck queue (see `moveOver`). */
+  squeeze?: boolean;
   /** Roundabout legs: distance along the leg where the car is on the ring, and where it leaves it; which exit it takes. */
   onRing?: number;
   offRing?: number;
@@ -74,6 +76,8 @@ export interface Car {
   started: number;
   /** Seconds standing still, anywhere but parked (for the stats' stuck count). */
   idle: number;
+  /** When it last moved over out of a stuck queue (see `moveOver`). */
+  movedOver?: number;
 }
 
 /** Traffic measures since the stats were last reset, to compare how rules play out. */
@@ -92,6 +96,8 @@ export interface TrafficStats {
 
 /** How far ahead along its route a car looks for the car in front (more than it needs to stop from top speed). */
 const LOOK_AHEAD = 250;
+/** Moving over sideways out of a stuck queue: how far along the road it takes (mostly sideways). */
+const SQUEEZE_LENGTH = CAR_LENGTH * 0.8;
 /** Slower than this (units/s), a car ahead counts as held up when choosing a lane. */
 const CRAWL = 5;
 /** A car standing still this long counts as stuck. */
@@ -398,13 +404,16 @@ export class Simulation {
 
   /**
    * Switches `car` to driving `route` in `lanes` from where it is. The roads behind are the same in
-   * the same lanes, so the legs up to its current one are too; false (changing nothing) if they aren't.
+   * the same lanes, so the legs up to its current one are too; false (changing nothing) if they
+   * aren't, or if a lane change on this road would be behind it.
    */
-  private follow(car: Car, route: Route, lanes: LanePlan): boolean {
+  private follow(car: Car, route: Route, lanes: LanePlan, replaceChange = false): boolean {
     if (route === car.route && JSON.stringify(lanes) === JSON.stringify(car.lanes)) return true;
     const fresh = this.legsFor(route, car.trip.bays, lanes);
     const leg = car.legs[car.leg];
-    if (fresh[car.leg]?.key !== leg.key || fresh[car.leg].from !== leg.from) return false;
+    // The same leg it's on, and not one that ends behind it (a lane change planned before where it is).
+    // (Unless the caller puts the lane change in place itself, see `moveOver`.)
+    if (fresh[car.leg]?.key !== leg.key || fresh[car.leg].from !== leg.from || (!replaceChange && car.s > legLength(fresh[car.leg]))) return false;
     Object.assign(car, { legs: fresh, route, lanes });
     return true;
   }
@@ -424,6 +433,73 @@ export class Simulation {
     const [oldEntry, oldChange, oldExit] = car.legs.slice(car.leg, car.leg + 3);
     car.legs.splice(car.leg, 3, { ...oldEntry, ...entry }, { ...oldChange, ...change }, { ...oldExit, ...exit });
     return true;
+  }
+
+  /**
+   * `car` has stood still a while in its lane: it moves over to a lane beside it that still goes
+   * where it's going (with no more lane changes needed on this road), if there's room right beside
+   * it, in a short sideways change from where it stands. Not again soon after, so it doesn't
+   * hop back and forth.
+   */
+  private moveOver(car: Car): void {
+    const { graph } = this;
+    const leg = car.legs[car.leg];
+    if (!leg.key.startsWith("r:") || (car.movedOver !== undefined && this.time - car.movedOver < graph.rules.laneChange.stuckAfter * 3)) return;
+    if ((car.legs[car.leg + 1] as Movement | undefined)?.squeeze) return;
+    const segment = graph.segments.get(leg.segment!);
+    if (!segment || car.route.segments[car.road] !== segment.id) return;
+    const [, , dir, laneKey] = leg.key.split(":");
+    const fromNode = dir === "1" ? segment.a : segment.b;
+    const lane = Number(laneKey);
+    const order = lanesInnerToKerb(segment.spec, graph.drivingSide);
+    const rank = order.indexOf(lane);
+    const { minSafeGap, reaction } = graph.rules.laneChange;
+    for (const beside of [order[rank - 1], order[rank + 1]]) {
+      if (beside === undefined) continue;
+      const plan = this.planFor(car.route, car.road, beside, car);
+      if (plan.forced[car.road] || plan.exit[car.road] !== beside) continue;
+      // Where it would be in that lane (both lanes' tracks run the length of the road).
+      const target = this.tracks.roadLeg(segment, fromNode, beside);
+      const here = this.at(car) * (target.track.length / (leg.track.length || 1));
+      // Room to finish before the road's end.
+      if (here + CAR_LENGTH * 2 + 15 > target.to) continue;
+      const crowded = this.cars.some((c) => {
+        if (c === car) return false;
+        const theirs = c.legs[c.leg];
+        if (theirs.outKey === target.key && theirs.joinAt !== undefined) return Math.abs(theirs.joinAt - here) < CAR_LENGTH * 3;
+        if (theirs.key !== target.key) return false;
+        const d = this.at(c) - here;
+        return d > -(CAR_LENGTH + minSafeGap + c.v * reaction) && d < CAR_LENGTH * 2 + minSafeGap;
+      });
+      if (crowded) continue;
+      // Room in front, in its own lane, for its nose to swing out: half way over (the cars side by
+      // side no longer), it's gone half the change's length on.
+      const lane0 = this.lanes.get(leg.key) ?? [];
+      const front = lane0[lane0.indexOf(car) + 1];
+      if (front && this.at(front) - this.at(car) < CAR_LENGTH * 0.62 + SQUEEZE_LENGTH / 2 + 1) continue;
+      const lanes = this.joinPlans(car.lanes, plan, car.road);
+      lanes.entry[car.road] = lane;
+      const before = { legs: car.legs, lanes: car.lanes };
+      if (!this.follow(car, car.route, lanes, true)) continue;
+      // The change just ahead of where it stands, short and steep.
+      const slide = car.legs[car.leg + 1].slide;
+      if (!slide) {
+        Object.assign(car, before);
+        continue;
+      }
+      const lead = here - slide.exit.from + 1;
+      const [entry, step, exit] = this.tracks.changeAt(slide.entry, slide.exit, lead, SQUEEZE_LENGTH);
+      const [oldEntry, oldChange, oldExit] = car.legs.slice(car.leg, car.leg + 3);
+      car.legs.splice(car.leg, 3, { ...oldEntry, ...entry }, { ...oldChange, ...step, squeeze: true }, { ...oldExit, ...exit });
+      // Only if it may go now; otherwise it stays as it was.
+      if (!this.mayChangeLane(car, car.legs[car.leg + 1])) {
+        Object.assign(car, before);
+        continue;
+      }
+      car.cleared = false;
+      car.movedOver = this.time;
+      return;
+    }
   }
 
   /**
@@ -824,6 +900,16 @@ export class Simulation {
 
   /** IDM acceleration towards the car ahead, or a stop line the car may not cross yet. */
   private accelerate(car: Car, lanes: Map<string, Car[]>): number {
+    // Stuck a while: move over to the lane beside, if it goes the same way and has room (checked
+    // about once a second).
+    const { stuckChange, stuckAfter } = this.graph.rules.laneChange;
+    if (stuckChange && car.idle > stuckAfter && (this.ticks + car.id) % 60 === 0) this.moveOver(car);
+    // A move over that couldn't start straight away (the gap closed): stay in lane after all.
+    const pending = car.legs[car.leg + 1] as Movement | undefined;
+    if (pending?.squeeze && !car.cleared && this.time - (car.movedOver ?? 0) > 2) {
+      const lane = Number(car.legs[car.leg].key.split(":")[3]);
+      this.follow(car, car.route, this.joinPlans(car.lanes, this.planFor(car.route, car.road, lane, car), car.road));
+    }
     let { gap, speed } = this.leader(car, lanes);
     const { accel, brake, minGap, headway } = this.graph.rules.following;
 
@@ -874,11 +960,11 @@ export class Simulation {
 
   /**
    * Top speed on `car`'s leg `i`: its road's limit (see `speedOf`), the slower of the roads either
-   * side through a junction, and walking pace in a car park bay.
+   * side through a junction, and walking pace in a car park bay or moving over sideways.
    */
   private speedLimit(i: number, car: Car): number {
-    const leg = car.legs[i];
-    if (leg.key.startsWith("bay:")) return PARK_SPEED;
+    const leg = car.legs[i] as Movement;
+    if (leg.key.startsWith("bay:") || leg.squeeze) return PARK_SPEED;
     const road = (l: Leg | undefined) => {
       const segment = l?.segment === undefined ? undefined : this.graph.segments.get(l.segment);
       return segment ? speedOf(segment.spec) : Infinity;
@@ -896,7 +982,9 @@ export class Simulation {
     // Turning off into a driveway: a car queued on along the road, its back already past the
     // driveway, isn't in the way.
     const turningOff = car.legs[car.leg + 1]?.rule === "turnIn" && ahead && this.at(ahead) - CAR_LENGTH / 2 > mine.to;
-    if (ahead && !turningOff) best = { gap: this.at(ahead) - this.at(car) - CAR_LENGTH, speed: ahead.v };
+    // Moving over sideways out of a queue (allowed to go): the car in front in this lane isn't in the way.
+    const movingOver = (car.legs[car.leg + 1] as Movement | undefined)?.squeeze && car.cleared;
+    if (ahead && !turningOff && !movingOver) best = { gap: this.at(ahead) - this.at(car) - CAR_LENGTH, speed: ahead.v };
     else {
       // Look along the legs ahead (however short: roads can be a few units long between buildings),
       // as far as it could need to stop, at the first car past where each starts.
@@ -913,8 +1001,9 @@ export class Simulation {
     }
     // Changing lane, the car is still partly in the lane it's leaving: keep back from cars ahead there
     // too, until it's mostly over (a road lane change; out of a driveway it's never in a lane before).
-    const changing = car.legs[car.leg];
-    if (changing.joinAt !== undefined && (!changing.slide || car.s < legLength(changing) * 0.4)) {
+    // Moving over sideways from a standstill, it's clear of them from the start.
+    const changing = car.legs[car.leg] as Movement;
+    if (changing.joinAt !== undefined && !changing.squeeze && (!changing.slide || car.s < legLength(changing) * 0.4)) {
       const left = car.legs[car.leg - 1];
       const mine = left.to + car.s;
       for (const other of lanes.get(left.key) ?? []) {
@@ -1071,7 +1160,7 @@ export class Simulation {
     const buffer = this.changeBuffer(car, change);
     // Not past cars standing in the lane it's leaving (waiting to change lane themselves): it would
     // be half in both lanes beside them, blocking each other.
-    if (change.slide) {
+    if (change.slide && !change.squeeze) {
       const leaving = car.legs[car.leg];
       const past = legLength(change) + CAR_LENGTH;
       const blocked = this.cars.some((c) => {
@@ -1090,7 +1179,8 @@ export class Simulation {
     for (const other of this.cars) {
       if (other === car) continue;
       const leg = other.legs[other.leg];
-      if (leg.outKey === change.outKey && leg.joinAt !== undefined) return false;
+      // Another car changing into the same lane (moving over sideways, only one close by matters).
+      if (leg.outKey === change.outKey && leg.joinAt !== undefined && (!change.squeeze || Math.abs(leg.joinAt - join) < CAR_LENGTH * 4)) return false;
       let position: number;
       if (leg.key === change.outKey) {
         const waitingToSwap = !other.cleared && other.legs[other.leg + 1]?.outKey === from && other.id > car.id;

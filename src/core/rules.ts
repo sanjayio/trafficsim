@@ -30,7 +30,17 @@ export interface TrafficRules {
   };
   signals: { green: number; amber: number };
   lanes: { order: LaneCriterion[]; lookahead: number; congestionAware: boolean; sight: number };
-  laneChange: { minSafeGap: number; reaction: number; urgency: boolean; minReaction: number; urgencyStart: number; deadlockReroute: boolean; rerouteWait: number };
+  laneChange: {
+    minSafeGap: number;
+    reaction: number;
+    urgency: boolean;
+    minReaction: number;
+    urgencyStart: number;
+    deadlockReroute: boolean;
+    rerouteWait: number;
+    stuckChange: boolean;
+    stuckAfter: number;
+  };
   routing: { speedLimits: boolean; turnKerb: number; turnAcross: number; delayNone: number; delayYield: number; delayStop: number; delaySignals: number };
   trips: { parkMin: number; parkMax: number; signalAhead: number };
 }
@@ -52,7 +62,7 @@ export const DEFAULT_RULES: TrafficRules = {
   },
   signals: { green: 8, amber: 2 },
   lanes: { order: [...LANE_CRITERIA], lookahead: 3, congestionAware: true, sight: 150 },
-  laneChange: { minSafeGap: 6, reaction: 1.4, urgency: true, minReaction: 0.4, urgencyStart: 200, deadlockReroute: true, rerouteWait: 15 },
+  laneChange: { minSafeGap: 6, reaction: 1.4, urgency: true, minReaction: 0.4, urgencyStart: 200, deadlockReroute: true, rerouteWait: 15, stuckChange: true, stuckAfter: 10 },
   routing: { speedLimits: true, turnKerb: 2, turnAcross: 5, delayNone: 0.5, delayYield: 1, delayStop: 3, delaySignals: 4 },
   trips: { parkMin: 20, parkMax: 100, signalAhead: 60 },
 };
@@ -182,6 +192,8 @@ export const RULE_SECTIONS: { section: RuleSection; title: string; fields: RuleF
       { kind: "number", section: "laneChange", key: "urgencyStart", label: "Get pushy from", help: "How far before the last chance to change lane cars start accepting smaller gaps.", min: 0, max: 600, step: 10, unit: "u" },
       { kind: "toggle", section: "laneChange", key: "deadlockReroute", label: "Give up and reroute", help: "A car stuck waiting to change lane finds another way from the lane it's in." },
       { kind: "number", section: "laneChange", key: "rerouteWait", label: "Wait before rerouting", help: "How long a car waits for a gap before rerouting.", min: 3, max: 60, step: 1, unit: "s" },
+      { kind: "toggle", section: "laneChange", key: "stuckChange", label: "Move over when stuck", help: "A car standing still moves into the lane beside it, if that lane still goes where it's going and there's room." },
+      { kind: "number", section: "laneChange", key: "stuckAfter", label: "Stuck after", help: "How long a car stands still before moving over.", min: 2, max: 60, step: 1, unit: "s" },
     ],
   },
   {

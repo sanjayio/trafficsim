@@ -133,10 +133,11 @@ export class TrackBuilder {
 
   /**
    * Driving lane `entry` (a whole road leg), a smooth change starting `lead` along the road (as
-   * measured along `exit`), then lane `exit` from where it joins.
+   * measured along `exit`) and taking `change` of it (at most the usual length), then lane `exit`
+   * from where it joins.
    */
-  changeAt(entry: Leg, exit: Leg, lead: number): Leg[] {
-    const change = changeLength(exit);
+  changeAt(entry: Leg, exit: Leg, lead: number, change = changeLength(exit)): Leg[] {
+    change = Math.min(change, changeLength(exit));
     const leave = entry.from + lead * (legLength(entry) / (legLength(exit) || 1));
     const join = exit.from + lead + change;
     const p0 = entry.track.at(leave);
