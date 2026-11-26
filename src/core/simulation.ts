@@ -890,9 +890,13 @@ export class Simulation {
   /** Gap to the car ahead (bumper to bumper) and its speed; Infinity when the road ahead is clear. */
   private leader(car: Car, lanes: Map<string, Car[]>): { gap: number; speed: number } {
     let best = { gap: Infinity, speed: 0 };
-    const lane = lanes.get(car.legs[car.leg].key)!;
+    const mine = car.legs[car.leg];
+    const lane = lanes.get(mine.key)!;
     const ahead = lane[lane.indexOf(car) + 1];
-    if (ahead) best = { gap: this.at(ahead) - this.at(car) - CAR_LENGTH, speed: ahead.v };
+    // Turning off into a driveway: a car queued on along the road, its back already past the
+    // driveway, isn't in the way.
+    const turningOff = car.legs[car.leg + 1]?.rule === "turnIn" && ahead && this.at(ahead) - CAR_LENGTH / 2 > mine.to;
+    if (ahead && !turningOff) best = { gap: this.at(ahead) - this.at(car) - CAR_LENGTH, speed: ahead.v };
     else {
       // Look along the legs ahead (however short: roads can be a few units long between buildings),
       // as far as it could need to stop, at the first car past where each starts.
@@ -920,7 +924,6 @@ export class Simulation {
     }
     // A car changing lane (or pulling out of a driveway) takes up room in both lanes: cars in the lane
     // it leaves see it where it is; cars with the lane it joins on their way ahead see it where it will join.
-    const mine = car.legs[car.leg];
     // How far ahead each lane on its way is: a point p along that lane's track is p + offset ahead.
     const offsets = new Map<string, number>();
     for (let k = car.leg, distance = 0; k < car.legs.length && distance < LOOK_AHEAD; k++) {
