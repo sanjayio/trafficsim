@@ -98,6 +98,24 @@ describe("zoning tiles", () => {
     }
   });
 
+  it("give facing villas their own driveways, each in front of its garage, without moving the tiles", () => {
+    const graph = new RoadGraph();
+    graph.buildRoad(straightCurve({ x: 0, y: 0 }, { x: 720, y: 0 }), spec);
+    const zones = new ZoneMap(graph);
+    const tiles = () => zones.all().map((t) => t.centre);
+    const before = tiles();
+    // A row each side, facing each other: the second of each pair finds the middle taken.
+    for (let x = 90; x < 640; x += 36) {
+      for (const y of [40, -40]) {
+        const block = zones.blockAt({ x, y }, "villa");
+        if (block?.fits) expect(zones.place(block, "villa")).toBe(true);
+      }
+    }
+    expect(graph.allTerminals().size).toBeGreaterThan(24);
+    for (const [, t] of graph.allTerminals()) expect(Math.abs(t.offset ?? 0)).toBeLessThanOrEqual(TILE / 2);
+    expect(tiles()).toEqual(before.map((c) => ({ x: expect.closeTo(c.x, 3), y: expect.closeTo(c.y, 3) })));
+  });
+
   it("only let a building be swapped for one that still stands clear", () => {
     const graph = new RoadGraph();
     graph.buildRoad(straightCurve({ x: 0, y: 0 }, { x: 720, y: 0 }), spec);

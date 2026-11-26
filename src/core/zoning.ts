@@ -6,13 +6,17 @@ import { BUILDING_TILES, newTerminal, TILE, ZONE_ROWS, type Building } from "./t
 
 /** How far a tile may reach over another road's edge (its front corners sit right on the edge where a road carries on). */
 const EDGE_TOLERANCE = 0.5;
+/** Pieces of road meeting at less than this angle (cos of about 10°) carry one tile grid on, as one road. */
+const SMOOTH = Math.cos((10 * Math.PI) / 180);
 
 /**
- * One zoning tile beside a road (like Cities: Skylines'): in column `column` along the road (from
- * its `a` end, TILE long each) and row `row` back from it, on `side` (1 right of a → b, -1 left).
+ * One zoning tile beside a road (like Cities: Skylines'): in column `column` along its run of road
+ * (see `RunPiece`, TILE long each) and row `row` back from it, on `side` (1 right of a → b, -1 left).
  */
 export interface Tile {
+  /** The road piece the tile starts beside, and the first piece of its run. */
   segment: SegmentId;
+  run: SegmentId;
   side: 1 | -1;
   column: number;
   row: number;
@@ -25,12 +29,13 @@ export interface Tile {
 
 /**
  * One piece of a run of road: a road split (at buildings' driveways) into pieces that carry on
- * one into the next, the same way. `from` is the run's column where this piece's columns start.
+ * smoothly one into the next, the same way. The tiles run on along the whole run, so a road can be
+ * split anywhere without moving them. `start` is how far along the run this piece starts.
  */
 export interface RunPiece {
   segment: SegmentId;
-  from: number;
-  columns: number;
+  start: number;
+  length: number;
 }
 
 /** A block of tiles a building would stand on, and whether it can. */
@@ -54,8 +59,9 @@ export interface Block {
  */
 export class ZoneMap {
   private tiles: Tile[] | null = null;
-  /** The same tiles, by road piece. */
-  private bySegment = new Map<SegmentId, Tile[]>();
+  /** The same tiles, by run (its first piece); and each road piece's run. */
+  private byRun = new Map<SegmentId, Tile[]>();
+  private runs = new Map<SegmentId, RunPiece[]>();
   private unsubscribe: () => void;
 
   constructor(private graph: RoadGraph) {
@@ -68,12 +74,18 @@ export class ZoneMap {
 
   all(): Tile[] {
     if (!this.tiles) {
+      this.runs.clear();
+      for (const segment of this.graph.segments.values()) {
+        if (this.runs.has(segment.id) || segment.spec.level) continue;
+        const run = this.run(segment.id);
+        for (const piece of run) this.runs.set(piece.segment, run);
+      }
       this.tiles = this.build();
-      this.bySegment.clear();
+      this.byRun.clear();
       for (const t of this.tiles) {
-        const list = this.bySegment.get(t.segment);
+        const list = this.byRun.get(t.run);
         if (list) list.push(t);
-        else this.bySegment.set(t.segment, [t]);
+        else this.byRun.set(t.run, [t]);
       }
     }
     return this.tiles;
@@ -87,8 +99,8 @@ export class ZoneMap {
     const under = this.all().find((t) => pointInConvexPolygon(p, t.corners));
     if (!under) return null;
     const [width, depth] = BUILDING_TILES[building];
-    const run = this.run(under.segment);
-    const at = run.find((piece) => piece.segment === under.segment)!.from + under.column;
+    const run = this.runs.get(under.segment)!;
+    const at = under.column;
     // Centred on the column under the cursor (for an even width, the cursor's half picks the side).
     const half = (p: Vec2) => {
       const [a, b] = under.corners;
@@ -97,14 +109,9 @@ export class ZoneMap {
     };
     const centred = width % 2 === 0 ? at - width / 2 + half(p) : at - (width - 1) / 2;
     // Kept on the run, nudged along if need be.
-    const total = run.reduce((sum, piece) => sum + piece.columns, 0);
-    const first = Math.max(0, Math.min(centred, total - width));
+    const first = Math.max(0, Math.min(centred, columnsOf(run) - width));
     const index = new Map<string, Tile>();
-    for (const piece of run) {
-      for (const t of this.bySegment.get(piece.segment) ?? []) {
-        if (t.side === under.side) index.set(`${piece.from + t.column}:${t.row}`, t);
-      }
-    }
+    for (const t of this.byRun.get(under.run) ?? []) if (t.side === under.side) index.set(`${t.column}:${t.row}`, t);
     const tiles: Tile[] = [];
     let fits = true;
     for (let c = first; c < first + width; c++) {
@@ -118,23 +125,26 @@ export class ZoneMap {
   }
 
   /**
-   * Puts `building` on `block`: its driveway meets the road at a tile boundary within the block
-   * (nearest its middle, clear of the run's ends; an existing split there is used as it is, else
-   * the road is split there), and it stands centred on the block. False if the block doesn't fit,
-   * or has no such boundary.
+   * Puts `building` on `block`: its driveway meets the road at the block's middle, or (where the
+   * building opposite already has its driveway there) just beside it, still in front of the garage;
+   * failing those, at a tile boundary within the block nearest its middle. Clear of the run's ends;
+   * an existing split there is used as it is, else the road is split there. It stands centred on
+   * the block. False if the block doesn't fit, or has no such point.
    */
   place(block: Block, building: Building): boolean {
     const { graph } = this;
     if (!block.fits) return false;
-    const total = block.run.reduce((sum, piece) => sum + piece.columns, 0);
+    const last = block.run[block.run.length - 1];
+    const total = last.start + last.length;
     const middle = block.column + block.width / 2;
-    const boundaries = Array.from({ length: block.width + 1 }, (_, i) => block.column + i)
-      .filter((k) => k * TILE >= MIN_ROAD_LENGTH && (total - k) * TILE >= MIN_ROAD_LENGTH)
-      .sort((p, q) => Math.abs(p - middle) - Math.abs(q - middle));
-    for (const k of boundaries) {
-      const piece = block.run.find((pc) => k >= pc.from && k <= pc.from + pc.columns)!;
+    // Just far enough from a driveway at the middle for the road to be split again.
+    const beside = (MIN_ROAD_LENGTH + 1) / TILE;
+    const boundaries = Array.from({ length: block.width + 1 }, (_, i) => block.column + i).sort((p, q) => Math.abs(p - middle) - Math.abs(q - middle));
+    const spots = [middle, middle - beside, middle + beside, ...boundaries].filter((k) => k * TILE >= MIN_ROAD_LENGTH && total - k * TILE >= MIN_ROAD_LENGTH);
+    for (const k of spots) {
+      const piece = pieceAt(block.run, k * TILE);
       const segment = graph.segments.get(piece.segment)!;
-      const node = graph.nodeOnRoad(graph.path(segment).at((k - piece.from) * TILE).p);
+      const node = graph.nodeOnRoad(graph.path(segment).at(k * TILE - piece.start).p);
       if (!node || graph.terminal(node.id)) continue;
       // Side and offset are measured along the road leaving that node, which runs the run's way.
       // The offset is to the middle of the block's front where it really is (pieces of a road
@@ -165,10 +175,10 @@ export class ZoneMap {
 
   /**
    * The run of road pieces `segmentId` is part of: back and on through nodes where just two
-   * pieces meet, each carrying on the same way (as a road split for driveways does), with each
-   * piece's first column counted along the whole run.
+   * pieces meet, each carrying on smoothly the same way (as a road split for driveways does),
+   * with how far along the whole run each piece starts. Not onto bridges or tunnels.
    */
-  run(segmentId: SegmentId): RunPiece[] {
+  private run(segmentId: SegmentId): RunPiece[] {
     const { graph } = this;
     const start = graph.segments.get(segmentId)!;
     const pieces = [start];
@@ -177,15 +187,17 @@ export class ZoneMap {
       const roads = graph.segmentsAt(node);
       if (roads.length !== 2) return undefined;
       const next = roads.find((r) => r !== from && (forward ? r.a === node : r.b === node));
-      return next && !pieces.includes(next) ? next : undefined;
+      if (!next || next.spec.level || pieces.includes(next)) return undefined;
+      const back = graph.directionAway(from, node);
+      const on = graph.directionAway(next, node);
+      return -(back.x * on.x + back.y * on.y) >= SMOOTH ? next : undefined;
     };
     for (let s = step(start, false); s; s = step(s, false)) pieces.unshift(s);
     for (let s = step(start, true); s; s = step(s, true)) pieces.push(s);
-    let from = 0;
+    let along = 0;
     return pieces.map((segment) => {
-      const columns = Math.floor(graph.path(segment).length / TILE + 1e-6);
-      const piece = { segment: segment.id, from, columns };
-      from += columns;
+      const piece = { segment: segment.id, start: along, length: graph.path(segment).length };
+      along += piece.length;
       return piece;
     });
   }
@@ -198,18 +210,23 @@ export class ZoneMap {
 
     // Every tile that could be zoned beside its own road.
     const candidates: Tile[] = [];
-    for (const segment of segments) {
-      // No buildings along a bridge or tunnel. (Tiles beside other roads still keep clear of them:
-      // shortcut: ground over a covered tunnel can't be zoned; allow it if tunnels under towns matter.)
-      if (segment.spec.level) continue;
-      const path = graph.path(segment);
-      const edge = roadWidth(segment.spec) / 2;
-      // A road split at a tile boundary can come out a hair short of it.
-      const columns = Math.floor(path.length / TILE + 1e-6);
+    // No buildings along a bridge or tunnel (they have no run). (Tiles beside other roads still keep clear of them:
+    // shortcut: ground over a covered tunnel can't be zoned; allow it if tunnels under towns matter.)
+    for (const run of new Set(this.runs.values())) {
+      const own = run.map((piece) => graph.segments.get(piece.segment)!);
+      // Pieces split from one road share its width.
+      const edge = roadWidth(own[0].spec) / 2;
+      const frame = (s: number) => {
+        const piece = pieceAt(run, s);
+        return { piece, f: graph.path(graph.segments.get(piece.segment)!).at(s - piece.start) };
+      };
+      const columns = columnsOf(run);
       for (const side of [1, -1] as const) {
         for (let column = 0; column < columns; column++) {
-          const f0 = path.at(column * TILE);
-          const f1 = path.at((column + 1) * TILE);
+          const { piece, f: f0 } = frame(column * TILE);
+          const { piece: end, f: f1 } = frame((column + 1) * TILE);
+          // The pieces it's beside (two where it spans a split).
+          const beside = [...new Set([piece, end])].map((p) => graph.segments.get(p.segment)!);
           const at = (f: typeof f0, d: number) => ({ x: f.p.x + f.normal.x * side * d, y: f.p.y + f.normal.y * side * d });
           for (let row = 0; row < ZONE_ROWS; row++) {
             const near = edge + row * TILE;
@@ -218,8 +235,8 @@ export class ZoneMap {
               x: corners.reduce((sum, c) => sum + c.x, 0) / 4,
               y: corners.reduce((sum, c) => sum + c.y, 0) / 4,
             };
-            if (this.zonable(segment, centre, corners, segments, junctions)) {
-              candidates.push({ segment: segment.id, side, column, row, corners, centre, free: true });
+            if (this.zonable(own, beside, centre, corners, segments, junctions)) {
+              candidates.push({ segment: piece.segment, run: run[0].segment, side, column, row, corners, centre, free: true });
             }
           }
         }
@@ -238,8 +255,8 @@ export class ZoneMap {
         for (let cy = Math.floor(Math.min(...ys) / CELL); cy <= Math.floor(Math.max(...ys) / CELL); cy++) {
           const key = `${cx}:${cy}`;
           for (const other of cells.get(key) ?? []) {
-            if (other.segment === tile.segment || !convexOverlap(tile.corners, other.corners)) continue;
-            const loser = tile.row !== other.row ? (tile.row > other.row ? tile : other) : tile.segment > other.segment ? tile : other;
+            if (other.run === tile.run || !convexOverlap(tile.corners, other.corners)) continue;
+            const loser = tile.row !== other.row ? (tile.row > other.row ? tile : other) : tile.run > other.run ? tile : other;
             removed.add(loser);
           }
           cells.set(key, [...(cells.get(key) ?? []), tile]);
@@ -251,7 +268,7 @@ export class ZoneMap {
     const tiles: Tile[] = [];
     const reach = new Map<string, number>();
     for (const tile of candidates) {
-      const key = `${tile.segment}:${tile.side}:${tile.column}`;
+      const key = `${tile.run}:${tile.side}:${tile.column}`;
       const next = reach.get(key) ?? 0;
       if (tile.row !== next || removed.has(tile)) {
         reach.set(key, Infinity);
@@ -265,11 +282,12 @@ export class ZoneMap {
     return tiles;
   }
 
-  private zonable(own: RoadSegment, centre: Vec2, corners: Vec2[], segments: RoadSegment[], junctions: { id: NodeId; x: number; y: number }[]): boolean {
+  /** Whether a tile beside `beside` (pieces of the run `own`) may be zoned. */
+  private zonable(own: RoadSegment[], beside: RoadSegment[], centre: Vec2, corners: Vec2[], segments: RoadSegment[], junctions: { id: NodeId; x: number; y: number }[]): boolean {
     const { graph } = this;
-    const mine = graph.path(own).distanceTo(centre);
+    const mine = Math.min(...beside.map((s) => graph.path(s).distanceTo(centre)));
     for (const other of segments) {
-      if (other === own) continue;
+      if (own.includes(other)) continue;
       const path = graph.path(other);
       const reach = roadWidth(other.spec) / 2 + TILE * ZONE_ROWS;
       const b = path.bounds;
@@ -284,6 +302,17 @@ export class ZoneMap {
     }
     return true;
   }
+}
+
+/** Whole tiles along `run` (a road split at a tile boundary can come out a hair short of it). */
+function columnsOf(run: RunPiece[]): number {
+  const last = run[run.length - 1];
+  return Math.floor((last.start + last.length) / TILE + 1e-6);
+}
+
+/** The piece of `run` that `s` along it falls on. */
+function pieceAt(run: RunPiece[], s: number): RunPiece {
+  return run.find((piece) => s < piece.start + piece.length) ?? run[run.length - 1];
 }
 
 function centroid(points: Vec2[]): Vec2 {
