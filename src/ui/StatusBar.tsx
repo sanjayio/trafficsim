@@ -39,6 +39,7 @@ function TrafficStatsPanel({ engine }: { engine: Engine | null }) {
         ["Trips in last minute", `${traffic.perMinute}`],
         ["Lane changes per trip", traffic.trips ? (traffic.laneChanges / traffic.trips).toFixed(2) : "–"],
         ["Reroutes", `${traffic.reroutes}`],
+        ["Gave up (stuck too long)", `${traffic.gaveUp}`],
       ]
     : [];
   return (

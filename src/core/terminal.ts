@@ -18,9 +18,11 @@ export const BUILDING_LABEL: Record<Building, string> = {
 };
 
 /** Cars per minute each kind of home sends out. */
-export const SOURCE_RATE: Record<SourceBuilding, number> = { villa: 1, townhouse: 3, apartment: 6 };
+export const SOURCE_RATE: Record<SourceBuilding, number> = { villa: 0.2, townhouse: 0.6, apartment: 1.2 };
 /** Cars per minute a home sends at the top level; in between, it rises evenly from SOURCE_RATE. */
-export const SOURCE_RATE_MAX: Record<SourceBuilding, number> = { villa: 3, townhouse: 6, apartment: 12 };
+export const SOURCE_RATE_MAX: Record<SourceBuilding, number> = { villa: 0.6, townhouse: 1.2, apartment: 2.4 };
+/** Rates were this many times higher before: maps from before buildings were saved at the old rates. */
+const OLD_RATE_SCALE = 5;
 
 /** Cars per minute a home of `building` sends at `level`. */
 export function sourceRate(building: SourceBuilding, level: number): number {
@@ -221,15 +223,16 @@ export function parseTerminal(raw: unknown): Terminal {
     Array.isArray(t.sinks) &&
     t.sinks.every((id) => Number.isSafeInteger(id))
   ) {
-    const rate = t.rate as number;
-    const nearest = SOURCE_BUILDINGS.reduce((a, b) => (Math.abs(SOURCE_RATE[b] - rate) < Math.abs(SOURCE_RATE[a] - rate) ? b : a));
+    const saved = t.rate as number;
+    const old = (b: SourceBuilding) => Math.abs(SOURCE_RATE[b] * OLD_RATE_SCALE - saved);
+    const nearest = SOURCE_BUILDINGS.reduce((a, b) => (old(b) < old(a) ? b : a));
     const building = t.building ?? nearest;
     if (!(SOURCE_BUILDINGS as unknown[]).includes(building)) fail();
     if (t.to !== undefined && !(DESTINATIONS as readonly unknown[]).includes(t.to)) fail();
     const to = t.to === undefined ? {} : { to: t.to as Destinations };
-    // No more than its kind of home sends at the top level (older maps let levels multiply it).
-    const capped = Math.min(rate, SOURCE_RATE_MAX[building as SourceBuilding]);
-    return { kind: "source", building: building as SourceBuilding, enabled: t.enabled, rate: capped, sinks: [...(t.sinks as number[])], ...to, ...side };
+    // What its kind of home sends at its level (as saved, from older maps, it could be more).
+    const rate = sourceRate(building as SourceBuilding, levelOf(side));
+    return { kind: "source", building: building as SourceBuilding, enabled: t.enabled, rate, sinks: [...(t.sinks as number[])], ...to, ...side };
   }
   return fail();
 }

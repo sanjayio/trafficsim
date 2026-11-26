@@ -8,7 +8,7 @@ import { RoadGraph, type NodeId } from "./roadGraph";
 import { findRoute } from "./routing";
 import { DEFAULT_ROAD_SPEC, LANE_WIDTH, normalizeRoadSpec, parseRoadSpec, type RoadSpec } from "./roadSpec";
 import { CAR_LENGTH, CAR_WIDTH, SIM_DT, Simulation, type Car } from "./simulation";
-import { buildingSize, DEFAULT_SOURCE, carPark, newTerminal, parseTerminal, SINK } from "./terminal";
+import { buildingSize, DEFAULT_SOURCE, carPark, newTerminal, parseTerminal, SINK, SOURCE_RATE } from "./terminal";
 import { defaultConnections, lanesInnerToKerb } from "./lanes";
 import { planLanes, type LaneFacts } from "./lanePlan";
 import { legLength, TrackBuilder } from "./track";
@@ -307,7 +307,7 @@ describe("Simulation", () => {
     graph.setTerminal(at(graph, 2000, 0), SINK);
     for (let x = 100; x <= 1900; x += 60) {
       const node = graph.nodeOnRoad({ x, y: 5 })!;
-      graph.setTerminal(node.id, { ...DEFAULT_SOURCE, side: 1 });
+      graph.setTerminal(node.id, { ...DEFAULT_SOURCE, side: 1, rate: 1 });
     }
     const sim = new Simulation(graph);
     sim.parking = false;
@@ -795,7 +795,13 @@ describe("stuck in a queue", () => {
       graph.setTerminal(at(graph, 0, 0), { ...DEFAULT_SOURCE, rate: 40, sinks: [south] });
       const side = at(graph, 200, -300);
       graph.setTerminal(side, { ...DEFAULT_SOURCE, rate: 15, sinks: [south] });
-      graph.setRules({ ...graph.rules, laneChange: { ...graph.rules.laneChange, letIn, deadlockReroute: false, stuckChange: false } });
+      // Only letting in at work here: no other way out of the jam.
+      graph.setRules({
+        ...graph.rules,
+        laneChange: { ...graph.rules.laneChange, letIn, deadlockReroute: false, stuckChange: false },
+        junctions: { ...graph.rules.junctions, rerouteAfter: 0 },
+        trips: { ...graph.rules.trips, giveUpAfter: 0, holdWhenJammed: 0 },
+      });
       const sim = new Simulation(graph);
       sim.parking = false;
       let step = 0;
@@ -956,8 +962,8 @@ describe("sources and sinks along a road", () => {
 describe("terminals", () => {
   it("survive save and load, stay on a road that's extended, and are dropped when it becomes a junction", () => {
     const { graph } = crossroads({ control: "stop" });
-    // Rates a home could really have (loading caps them at its kind's top rate).
-    for (const [id, t] of graph.allTerminals()) if (t.kind === "source") graph.setTerminal(id, { ...t, rate: 2 });
+    // The rate a home really has (loading sets it from its kind and level).
+    for (const [id, t] of graph.allTerminals()) if (t.kind === "source") graph.setTerminal(id, { ...t, rate: SOURCE_RATE[t.building] });
     const loaded = new RoadGraph();
     loaded.load(JSON.parse(JSON.stringify(graph.toJSON())));
     expect(loaded.toJSON()).toEqual(graph.toJSON());
@@ -980,7 +986,8 @@ describe("terminals", () => {
   it("load maps from before buildings, and use each building's footprint", () => {
     const old = (rate: number) => parseTerminal({ kind: "source", enabled: true, rate, sinks: [] });
     expect([old(1), old(3), old(10)].map((t) => t.building)).toEqual(["villa", "townhouse", "apartment"]);
-    expect(old(10)).toMatchObject({ rate: 10 });
+    // At today's rate for that kind of home.
+    expect(old(10)).toMatchObject({ rate: SOURCE_RATE.apartment });
     expect(parseTerminal({ kind: "sink" })).toEqual({ kind: "sink", building: "smallShop" });
     expect(() => parseTerminal({ kind: "sink", building: "castle" })).toThrow();
 
@@ -1215,4 +1222,109 @@ describe("turning into driveways", () => {
     expect(sim.cars.filter((c) => c.legs[c.leg + 1]?.rule === "turnIn" && c.idle > 5)).toHaveLength(0);
     expect(sim.delivered).toBeGreaterThan(30);
   });
+});
+
+describe("gridlock", () => {
+  /** West to a junction, on east to a shop; or round by the north, three times as far. */
+  function detour(rerouteAfter: number) {
+    const graph = new RoadGraph();
+    road(graph, -300, 0, 0, 0);
+    road(graph, 0, 0, 300, 0);
+    road(graph, 300, 0, 600, 0);
+    road(graph, 0, 0, 0, -300);
+    road(graph, 0, -300, 300, -300);
+    road(graph, 300, -300, 300, 0);
+    const shop = at(graph, 600, 0);
+    graph.setTerminal(shop, SINK);
+    graph.setTerminal(at(graph, -300, 0), { ...DEFAULT_SOURCE, rate: 6, sinks: [shop] });
+    graph.setRules({
+      ...graph.rules,
+      junctions: { ...graph.rules.junctions, rerouteAfter },
+      trips: { ...graph.rules.trips, giveUpAfter: 0, holdWhenJammed: 0 },
+    });
+    const sim = new Simulation(graph);
+    sim.parking = false;
+    return sim;
+  }
+
+  /** Runs until the first car is part way along the direct road east, then stalls it there for good. */
+  function stallOnDirectRoad(sim: Simulation): void {
+    for (let i = 0; i < 120 / SIM_DT; i++) {
+      sim.step(SIM_DT);
+      const car = sim.cars.find((c) => c.legs[c.leg].key.startsWith("r:") && sim.pose(c).x > 100 && sim.pose(c).x < 200 && Math.abs(sim.pose(c).y) < 10);
+      if (car) {
+        car.v = 0;
+        car.leaveAt = Infinity;
+        return;
+      }
+    }
+    expect.fail("no car reached the direct road");
+  }
+
+  it("finds another way round a junction whose road out stays blocked", () => {
+    const sim = detour(10);
+    stallOnDirectRoad(sim);
+    const before = sim.delivered;
+    run(sim, 150);
+    expect(sim.stats().reroutes).toBeGreaterThan(0);
+    // Round by the north instead.
+    expect(sim.delivered).toBeGreaterThan(before);
+
+    const waiting = detour(0);
+    stallOnDirectRoad(waiting);
+    const stuck = waiting.delivered;
+    run(waiting, 150);
+    expect(waiting.stats().reroutes).toBe(0);
+    expect(waiting.delivered).toBe(stuck);
+  }, 30000);
+
+  it("gives up a car stuck too long, freeing its place", () => {
+    const sim = detour(0);
+    stallOnDirectRoad(sim);
+    sim.graph.setRules({ ...sim.graph.rules, trips: { ...sim.graph.rules.trips, giveUpAfter: 30 } });
+    run(sim, 60);
+    // The cars queued behind the stalled one gave up (it's parked, so it stays).
+    expect(sim.stats().gaveUp).toBeGreaterThan(0);
+    expect(sim.cars.filter((c) => c.leaveAt === null && c.idle > 30)).toHaveLength(0);
+  }, 30000);
+
+  it("keeps a queue from standing across a driveway", () => {
+    // East to lights with a short green, so a queue backs up past a home's driveway.
+    const blocking = (keepDrivewaysClear: boolean) => {
+      const graph = new RoadGraph();
+      road(graph, 0, 0, 600, 0);
+      road(graph, 600, 0, 900, 0);
+      road(graph, 600, 0, 600, 300);
+      graph.setJunction(at(graph, 600, 0), { control: "signals" });
+      const east = at(graph, 900, 0);
+      graph.setTerminal(east, SINK);
+      graph.setTerminal(at(graph, 600, 300), SINK);
+      graph.setTerminal(at(graph, 0, 0), { ...DEFAULT_SOURCE, rate: 40, sinks: [east] });
+      const home = graph.nodeOnRoad({ x: 450, y: 5 })!;
+      graph.setTerminal(home.id, { ...DEFAULT_SOURCE, side: 1, enabled: false });
+      graph.setRules({
+        ...graph.rules,
+        signals: { ...graph.rules.signals, green: 3 },
+        junctions: { ...graph.rules.junctions, keepDrivewaysClear },
+        trips: { ...graph.rules.trips, giveUpAfter: 0, holdWhenJammed: 0 },
+      });
+      const sim = new Simulation(graph);
+      sim.parking = false;
+      let across = 0;
+      let queued = 0;
+      run(sim, 150, () => {
+        for (const c of sim.cars) {
+          const p = sim.pose(c);
+          if (c.v > 0.5 || !c.legs[c.leg].key.startsWith("r:") || Math.abs(p.y) > 10) continue;
+          if (p.x < home.x - 30) queued++;
+          if (Math.abs(p.x - home.x) < CAR_LENGTH / 2) across++;
+        }
+      });
+      // The queue did back up past the driveway.
+      expect(queued).toBeGreaterThan(0);
+      return across;
+    };
+    expect(blocking(false)).toBeGreaterThan(0);
+    expect(blocking(true)).toBe(0);
+  }, 30000);
 });

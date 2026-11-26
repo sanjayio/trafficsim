@@ -30,8 +30,11 @@ const CAR_COLORS = [
 export const CAR_TYPES = ["sedan", "hatch", "suv"] as const;
 export type CarType = (typeof CAR_TYPES)[number];
 
-/** How entry to a leg is controlled: a junction's rule, "merge" for a lane change, null at a plain bend where two roads meet. */
-type Rule = JunctionControl | "roundabout" | "merge" | "priority" | "turnIn" | null;
+/**
+ * How entry to a leg is controlled: a junction's rule, "merge" for a lane change, "keepClear"
+ * past a building's driveway where two roads meet, null at a plain bend where two roads meet.
+ */
+type Rule = JunctionControl | "roundabout" | "merge" | "priority" | "turnIn" | "keepClear" | null;
 
 interface Movement extends Leg {
   rule: Rule;
@@ -100,6 +103,8 @@ export interface TrafficStats {
   perMinute: number;
   laneChanges: number;
   reroutes: number;
+  /** Cars that gave up, stuck too long (see `TrafficRules.trips.giveUpAfter`). */
+  gaveUp: number;
 }
 
 /** How far ahead along its route a car looks for the car in front (more than it needs to stop from top speed). */
@@ -116,6 +121,10 @@ const CRAWL = 5;
 const RETRY_SPAWN = 0.5;
 /** A car standing still this long counts as stuck. */
 const STUCK_AFTER = 10;
+/** Keeping a driveway clear, a car waits this far short of it, and goes on only with room this far past it. */
+const KEEP_CLEAR = 7;
+/** Fewer cars than this on the road never count as a jam (see `TrafficRules.trips.holdWhenJammed`). */
+const JAM_MIN_CARS = 20;
 
 /** A shop's or office's footprint: what its bays depend on. Null for a home or no building. */
 function lotKey(t: Terminal | undefined): string | null {
@@ -166,7 +175,9 @@ export class Simulation {
   /** Cars that have reached their sink (parked, unless `parking` is off). */
   delivered = 0;
   /** Counted since the stats were last reset (see `stats`). */
-  private counts = { trips: 0, tripTime: 0, laneChanges: 0, reroutes: 0, finished: [] as number[] };
+  private counts = { trips: 0, tripTime: 0, laneChanges: 0, reroutes: 0, gaveUp: 0, finished: [] as number[] };
+  /** More than the rules' share of cars stuck this step: homes keep their cars in, parked cars stay parked. */
+  private jammed = false;
   /**
    * Cars park in a free bay at their shop or office, stay a while and drive home; a shop with no
    * free bay gets no more until one leaves. Off, they vanish on arriving (traffic tests use this
@@ -245,9 +256,25 @@ export class Simulation {
   step(dt: number): void {
     this.time += dt;
     this.ticks++;
+    const { giveUpAfter, holdWhenJammed } = this.graph.rules.trips;
+    const driving = this.cars.filter((c) => c.leaveAt === null);
+    this.jammed = holdWhenJammed > 0 && driving.length >= JAM_MIN_CARS && driving.filter((c) => c.idle > STUCK_AFTER).length > (driving.length * holdWhenJammed) / 100;
     this.spawn(dt);
     const arrived = new Set<Car>();
-    for (const car of this.cars) if (car.leaveAt !== null && this.time >= car.leaveAt && !this.leave(car)) arrived.add(car);
+    for (const car of this.cars) {
+      if (car.leaveAt === null || this.time < car.leaveAt) continue;
+      // Parked while the roads are jammed: stays a moment longer.
+      if (this.jammed) car.leaveAt = this.time + RETRY_SPAWN;
+      else if (!this.leave(car)) arrived.add(car);
+    }
+    // Stuck too long: gives up, and leaves the road (its bay, if it held one, is free again).
+    if (giveUpAfter > 0) {
+      for (const car of driving) {
+        if (car.idle <= giveUpAfter) continue;
+        arrived.add(car);
+        this.counts.gaveUp++;
+      }
+    }
 
     const lanes = (this.lanes = this.byLane());
     this.index();
@@ -317,7 +344,7 @@ export class Simulation {
     const approach = (leg: Movement): -1 | 0 | 1 => {
       if (leg.shift !== undefined) return leg.shift;
       // Plain bends need no indicator; onto or off a slip road they do, though nothing there gives way.
-      if (!leg.rule && !(leg.node !== undefined && slipRoad(this.graph, leg.node))) return 0;
+      if ((!leg.rule || leg.rule === "keepClear") && !(leg.node !== undefined && slipRoad(this.graph, leg.node))) return 0;
       const turn = leg.ring ? (leg.exit === 1 ? "kerb" : leg.exit! >= 3 ? "across" : "straight") : leg.turn;
       return turn === "kerb" ? kerb : turn === "across" ? (-kerb as -1 | 1) : 0;
     };
@@ -333,7 +360,7 @@ export class Simulation {
 
   /** Traffic measures since the last `resetStats` (or map load). */
   stats(): TrafficStats {
-    const { trips, tripTime, laneChanges, reroutes, finished } = this.counts;
+    const { trips, tripTime, laneChanges, reroutes, gaveUp, finished } = this.counts;
     while (finished.length && finished[0] < this.time - 60) finished.shift();
     const driving = this.cars.filter((c) => c.leaveAt === null);
     return {
@@ -344,11 +371,12 @@ export class Simulation {
       perMinute: finished.length,
       laneChanges,
       reroutes,
+      gaveUp,
     };
   }
 
   resetStats(): void {
-    this.counts = { trips: 0, tripTime: 0, laneChanges: 0, reroutes: 0, finished: [] };
+    this.counts = { trips: 0, tripTime: 0, laneChanges: 0, reroutes: 0, gaveUp: 0, finished: [] };
   }
 
   private finishTrip(car: Car): void {
@@ -410,6 +438,8 @@ export class Simulation {
     // nothing else crosses there, so nothing else waits.
     const free = slip !== null && control !== "signals" && into !== slip.slip;
     const minor = control === "stop" || control === "yield" ? minorRoads(graph, node) : null;
+    // Where a building's driveway meets the road: kept clear (when the rules say so, see `mayEnter`).
+    if (graph.segmentsAt(node).length === 2 && graph.terminal(node)) return "keepClear";
     if (graph.segmentsAt(node).length < 3 || free) return null;
     if (settings.roundabout) return "roundabout";
     return minor && !minor.has(into) ? "priority" : control;
@@ -583,11 +613,12 @@ export class Simulation {
   }
 
   /**
-   * `car` has waited too long for a gap to change lane before the junction ahead: it gives up, and
-   * finds another way to where it's going from the lane it's in (one of the roads this lane's
-   * connections lead to). Nothing changes if there's none.
+   * `car` has waited too long for a gap to change lane before the junction ahead, or for room on
+   * the road out of it (`avoid`, then left out): it gives up, and finds another way to where it's
+   * going from the lane it's in (one of the roads this lane's connections lead to). Nothing changes
+   * if there's none.
    */
-  private reroute(car: Car): void {
+  private reroute(car: Car, avoid?: SegmentId): void {
     const { graph } = this;
     const leg = car.legs[car.leg];
     const i = car.road;
@@ -612,6 +643,7 @@ export class Simulation {
             })
             .map((s) => s.id),
     );
+    if (avoid !== undefined) only.delete(avoid);
     const rest = findRoute(graph, node, car.trip.to, { via: leg.segment!, only });
     if (!rest) return;
     const route: Route = {
@@ -706,6 +738,8 @@ export class Simulation {
     }
     const terminals = this.graph.allTerminals();
     const sinks = [...terminals].filter(([, t]) => t.kind === "sink");
+    // The roads jammed: homes keep their cars in (each sends its car once they clear).
+    const jammed = this.jammed;
     for (const [source, t] of terminals) {
       if (t.kind !== "source" || !t.enabled || t.rate <= 0) continue;
       // A source that can't release a car keeps one waiting, rather than a growing backlog.
@@ -713,7 +747,7 @@ export class Simulation {
       // through its wait, so homes don't all send their first car at once.
       const due = Math.min(1, (this.due.get(source) ?? this.random()) + (t.rate / 60) * dt);
       this.due.set(source, due);
-      if (due < 1 || (this.retryAt.get(source) ?? 0) > this.time) continue;
+      if (due < 1 || jammed || (this.retryAt.get(source) ?? 0) > this.time) continue;
       // Not while the last car is still at the door or near the top of the driveway (either way out):
       // checked before planning a trip, so a home that has to wait doesn't plan one every step.
       const door = `door:${source}`;
@@ -1053,7 +1087,7 @@ export class Simulation {
       const front = !ahead || this.at(ahead) > leg.to;
       if (front && toLine < QUEUE_DISTANCE && car.arrival === null) car.arrival = this.time;
       // A turn into a driveway, or the main road at a junction, is checked from further back, so a car with a clear way doesn't slow for nothing.
-      const ask = ASK_DISTANCE + (car.v * car.v) / (2 * brake) + (next.rule === "turnIn" || next.rule === "priority" ? QUEUE_DISTANCE : 0);
+      const ask = ASK_DISTANCE + (car.v * car.v) / (2 * brake) + (next.rule === "turnIn" || next.rule === "priority" || next.rule === "keepClear" ? QUEUE_DISTANCE : 0);
       if (toLine < ask) car.cleared = front && this.mayEnter(car, next, toLine);
       // No gap to change lane here: carry on in lane and try further along, up to the last chance.
       if (next.slide && toLine < ask && front && !car.cleared && this.slide(car)) {
@@ -1067,10 +1101,21 @@ export class Simulation {
         car.stopped = 0;
         if (deadlockReroute) this.reroute(car);
       }
+      // Held at a junction a while with no room on the road out: find another way, round the jam.
+      const { rerouteAfter } = this.graph.rules.junctions;
+      const atJunction = next.node !== undefined && next.rule !== "keepClear" && next.rule !== "merge" && next.rule !== "turnIn";
+      if (atJunction && rerouteAfter > 0 && front && !car.cleared && car.stopped > rerouteAfter && car.legs[car.leg + 2] && !this.exitHasRoom(car, next)) {
+        car.stopped = 0;
+        this.reroute(car, car.legs[car.leg + 2].segment);
+        [leg, next] = [car.legs[car.leg], car.legs[car.leg + 1]];
+        toLine = legLength(leg) - car.s;
+      }
       // Stop with the front bumper just behind the line; for a lane change, only at its last chance.
       // (A short sideways move, or a swap, starts where it stands: no further.)
       const slide = (next as Movement).squeeze || (next as Movement).swap ? undefined : next.slide;
-      const toStop = slide ? (slide.maxLead * legLength(slide.entry)) / (legLength(slide.exit) || 1) - car.s : toLine;
+      // Short of a driveway, keeping it clear.
+      const short = next.rule === "keepClear" && this.graph.rules.junctions.keepDrivewaysClear ? KEEP_CLEAR : 0;
+      const toStop = slide ? (slide.maxLead * legLength(slide.entry)) / (legLength(slide.exit) || 1) - car.s : toLine - short;
       const toBumper = toStop - CAR_LENGTH / 2 - 0.5;
       if (!car.cleared && toBumper < gap) {
         gap = toBumper;
@@ -1257,6 +1302,8 @@ export class Simulation {
     if (next.rule === "merge") return this.mayChangeLane(car, next);
     if (next.rule === "turnIn") return this.mayTurnIn(car, next);
     const { junctions, following } = this.graph.rules;
+    // Past a driveway only with room to stop beyond it, so a queue never stands across it.
+    if (next.rule === "keepClear") return !junctions.keepDrivewaysClear || this.exitHasRoom(car, next, KEEP_CLEAR);
     if (junctions.gridlockCheck && !this.exitHasRoom(car, next)) return false;
     // Cars already in the junction, or allowed in, on movements crossing or merging with this one.
     const here = this.atJunction(next.node);
@@ -1482,7 +1529,7 @@ export class Simulation {
   }
 
   /** Room for one more car where the movement comes out, counting cars already heading there. */
-  private exitHasRoom(car: Car, next: Movement): boolean {
+  private exitHasRoom(car: Car, next: Movement, beyond = 0): boolean {
     // Up to the first car in the lane it comes out in, however far along (the leg itself may stop
     // short at a lane change); a car changing out of that lane still takes room in it.
     const index = car.legs.indexOf(next) + 1;
@@ -1502,7 +1549,7 @@ export class Simulation {
       const heading = (leg.node !== undefined && leg.outKey === out.key) || (c.cleared && upcoming?.node !== undefined && upcoming.outKey === out.key);
       if (heading) room -= CAR_LENGTH + MIN_GAP;
     }
-    return room >= CAR_LENGTH + MIN_GAP;
+    return room >= CAR_LENGTH + MIN_GAP + beyond;
   }
 
   /**

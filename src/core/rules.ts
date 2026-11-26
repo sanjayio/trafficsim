@@ -27,6 +27,8 @@ export interface TrafficRules {
     ringGap: number;
     giveWayTime: number;
     turnInGap: number;
+    keepDrivewaysClear: boolean;
+    rerouteAfter: number;
   };
   signals: { green: number; amber: number };
   lanes: { order: LaneCriterion[]; lookahead: number; congestionAware: boolean; sight: number };
@@ -43,7 +45,7 @@ export interface TrafficRules {
     stuckAfter: number;
   };
   routing: { speedLimits: boolean; turnKerb: number; turnAcross: number; delayNone: number; delayYield: number; delayStop: number; delaySignals: number };
-  trips: { parkMin: number; parkMax: number; signalAhead: number };
+  trips: { parkMin: number; parkMax: number; signalAhead: number; giveUpAfter: number; holdWhenJammed: number };
 }
 
 export type RuleSection = keyof TrafficRules;
@@ -60,12 +62,14 @@ export const DEFAULT_RULES: TrafficRules = {
     ringGap: 2,
     giveWayTime: 2.5,
     turnInGap: 3,
+    keepDrivewaysClear: true,
+    rerouteAfter: 20,
   },
   signals: { green: 8, amber: 2 },
   lanes: { order: [...LANE_CRITERIA], lookahead: 3, congestionAware: true, sight: 150 },
   laneChange: { minSafeGap: 6, reaction: 1.4, urgency: true, minReaction: 0.4, urgencyStart: 200, deadlockReroute: true, rerouteWait: 15, stuckChange: true, letIn: true, stuckAfter: 10 },
   routing: { speedLimits: true, turnKerb: 2, turnAcross: 5, delayNone: 0.5, delayYield: 1, delayStop: 3, delaySignals: 4 },
-  trips: { parkMin: 20, parkMax: 100, signalAhead: 60 },
+  trips: { parkMin: 20, parkMax: 100, signalAhead: 60, giveUpAfter: 120, holdWhenJammed: 25 },
 };
 
 type Patch = { [S in RuleSection]?: Partial<TrafficRules[S]> };
@@ -155,6 +159,8 @@ export const RULE_SECTIONS: { section: RuleSection; title: string; fields: RuleF
       { kind: "number", section: "junctions", key: "ringGap", label: "Roundabout gap", help: "Gap wanted before ring traffic reaches an entry.", min: 0.5, max: 6, step: 0.1, unit: "s" },
       { kind: "number", section: "junctions", key: "giveWayTime", label: "Driveway gap", help: "Gap wanted pulling out of a driveway.", min: 0.5, max: 6, step: 0.1, unit: "s" },
       { kind: "number", section: "junctions", key: "turnInGap", label: "Turn-in gap", help: "Gap wanted turning into a driveway across oncoming traffic.", min: 0.5, max: 6, step: 0.1, unit: "s" },
+      { kind: "toggle", section: "junctions", key: "keepDrivewaysClear", label: "Keep driveways clear", help: "Queued cars don't stop across a driveway." },
+      { kind: "number", section: "junctions", key: "rerouteAfter", label: "Reroute when held", help: "A car held at a junction this long, with no room on its way out, looks for another way (0: never).", min: 0, max: 120, step: 1, unit: "s" },
     ],
   },
   {
@@ -227,6 +233,8 @@ export const RULE_SECTIONS: { section: RuleSection; title: string; fields: RuleF
     fields: [
       { kind: "number", section: "trips", key: "parkMin", label: "Shortest stay", help: "Shortest time a car stays parked.", min: 5, max: 300, step: 5, unit: "s" },
       { kind: "number", section: "trips", key: "parkMax", label: "Longest stay", help: "Longest time a car stays parked.", min: 5, max: 300, step: 5, unit: "s" },
+      { kind: "number", section: "trips", key: "giveUpAfter", label: "Give up when stuck", help: "A car standing still this long leaves the road, its trip given up (0: never).", min: 0, max: 600, step: 10, unit: "s" },
+      { kind: "number", section: "trips", key: "holdWhenJammed", label: "Stay home when jammed", help: "No new trips, and parked cars stay parked, while more than this share of cars are stuck (0: never).", min: 0, max: 100, step: 5, unit: "%" },
       { kind: "number", section: "trips", key: "signalAhead", label: "Indicate from", help: "How far before a turn or lane change cars indicate.", min: 0, max: 200, step: 10, unit: "u" },
     ],
   },
