@@ -250,92 +250,110 @@ function RoadOptions() {
   const guideSnapping = useGame((s) => s.guideSnapping);
   const inverted = useGame((s) => s.snapInverted);
   return (
-    <Panel>
-      {ROAD_MODES.map(({ id, label, icon: Icon }) => (
-        <IconButton key={id} label={label} pressed={mode === id} onClick={() => gameStore.getState().setRoadMode(id)}>
-          <Icon size={ICON_SIZE} strokeWidth={2} aria-hidden />
+    <Panel className="flex-col !items-stretch">
+      <Row label="Road shape">
+        {ROAD_MODES.map(({ id, label, icon: Icon }) => (
+          <IconButton key={id} label={label} pressed={mode === id} onClick={() => gameStore.getState().setRoadMode(id)}>
+            <Icon size={ICON_SIZE} strokeWidth={2} aria-hidden />
+          </IconButton>
+        ))}
+        <ParallelOptions />
+      </Row>
+      <RowDivider />
+      <Row label="Lanes">
+        {Array.from({ length: MAX_LANES }, (_, i) => i + 1).map((n) => (
+          <IconButton
+            key={n}
+            label={spec.oneWay ? laneWord(n) : `${laneWord(n)} each way`}
+            pressed={spec.lanes === n}
+            onClick={() => update({ lanes: n })}
+          >
+            <span className="text-sm font-semibold tabular-nums">{n}</span>
+          </IconButton>
+        ))}
+      </Row>
+      <RowDivider />
+      <Row label="Speed limit">
+        {SPEED_LIMITS.map((speed) => (
+          <IconButton
+            key={speed}
+            label={`Speed limit: ${speed} km/h`}
+            pressed={(spec.speed ?? DEFAULT_SPEED) === speed}
+            onClick={() => update({ speed: speed === DEFAULT_SPEED ? undefined : speed })}
+          >
+            <span className="grid size-6 place-items-center rounded-full border-[2.5px] border-red-500 bg-white text-[10px] font-bold tabular-nums text-neutral-900">
+              {speed}
+            </span>
+          </IconButton>
+        ))}
+      </Row>
+      <RowDivider />
+      <Row label="Road features">
+        <IconButton label="One-way" pressed={spec.oneWay} onClick={() => update({ oneWay: !spec.oneWay })}>
+          <ArrowBigUp size={ICON_SIZE} strokeWidth={2} aria-hidden />
         </IconButton>
-      ))}
-      <ParallelOptions />
-      <PanelDivider />
-      {Array.from({ length: MAX_LANES }, (_, i) => i + 1).map((n) => (
         <IconButton
-          key={n}
-          label={spec.oneWay ? laneWord(n) : `${laneWord(n)} each way`}
-          pressed={spec.lanes === n}
-          onClick={() => update({ lanes: n })}
+          label={spec.oneWay ? "Median (two-way roads only)" : "Median"}
+          pressed={spec.median && !spec.oneWay}
+          disabled={spec.oneWay}
+          onClick={() => update({ median: !spec.median })}
         >
-          <span className="text-sm font-semibold tabular-nums">{n}</span>
+          <SeparatorVertical size={ICON_SIZE} strokeWidth={2} aria-hidden />
         </IconButton>
-      ))}
-      <SpeedButton />
-      <PanelDivider />
-      <IconButton label="One-way" pressed={spec.oneWay} onClick={() => update({ oneWay: !spec.oneWay })}>
-        <ArrowBigUp size={ICON_SIZE} strokeWidth={2} aria-hidden />
-      </IconButton>
-      <IconButton
-        label={spec.oneWay ? "Median (two-way roads only)" : "Median"}
-        pressed={spec.median && !spec.oneWay}
-        disabled={spec.oneWay}
-        onClick={() => update({ median: !spec.median })}
-      >
-        <SeparatorVertical size={ICON_SIZE} strokeWidth={2} aria-hidden />
-      </IconButton>
-      <IconButton label="Footpath" pressed={spec.footpath} onClick={() => update({ footpath: !spec.footpath })}>
-        <Footprints size={ICON_SIZE} strokeWidth={2} aria-hidden />
-      </IconButton>
-      <IconButton
-        label={spec.footpath ? "Street trees" : "Street trees (roads with footpaths only)"}
-        pressed={!!spec.trees && spec.footpath}
-        disabled={!spec.footpath}
-        onClick={() => update({ trees: !spec.trees })}
-      >
-        <TreeDeciduous size={ICON_SIZE} strokeWidth={2} aria-hidden />
-      </IconButton>
-      <IconButton label="Bridge" pressed={(spec.level ?? 0) > 0} onClick={() => update({ level: (spec.level ?? 0) > 0 ? undefined : 1 })}>
-        <BridgeIcon size={ICON_SIZE} strokeWidth={2} aria-hidden />
-      </IconButton>
-      <IconButton label="Tunnel" pressed={(spec.level ?? 0) < 0} onClick={() => update({ level: (spec.level ?? 0) < 0 ? undefined : -1 })}>
-        <TunnelIcon size={ICON_SIZE} strokeWidth={2} aria-hidden />
-      </IconButton>
-      <PanelDivider />
-      {/* Holding Alt/Option switches guides off, and the button shows it. */}
-      <IconButton
-        label={`Snap to roads, guidelines and angles: ${guideSnapping && !inverted ? "on" : "off"}`}
-        pressed={guideSnapping && !inverted}
-        onClick={() => gameStore.getState().setGuideSnapping(!guideSnapping)}
-      >
-        <Magnet size={ICON_SIZE} strokeWidth={2} aria-hidden />
-      </IconButton>
-      <IconButton
-        label={`Snap to grid: ${snapping ? "on" : "off"}`}
-        pressed={snapping}
-        onClick={() => {
-          const { snapToGrid, setSnapToGrid } = gameStore.getState();
-          setSnapToGrid(!snapToGrid);
-        }}
-      >
-        <Grid3x3 size={ICON_SIZE} strokeWidth={2} aria-hidden />
-      </IconButton>
+        <IconButton label="Footpath" pressed={spec.footpath} onClick={() => update({ footpath: !spec.footpath })}>
+          <Footprints size={ICON_SIZE} strokeWidth={2} aria-hidden />
+        </IconButton>
+        <IconButton
+          label={spec.footpath ? "Street trees" : "Street trees (roads with footpaths only)"}
+          pressed={!!spec.trees && spec.footpath}
+          disabled={!spec.footpath}
+          onClick={() => update({ trees: !spec.trees })}
+        >
+          <TreeDeciduous size={ICON_SIZE} strokeWidth={2} aria-hidden />
+        </IconButton>
+        <IconButton label="Bridge" pressed={(spec.level ?? 0) > 0} onClick={() => update({ level: (spec.level ?? 0) > 0 ? undefined : 1 })}>
+          <BridgeIcon size={ICON_SIZE} strokeWidth={2} aria-hidden />
+        </IconButton>
+        <IconButton label="Tunnel" pressed={(spec.level ?? 0) < 0} onClick={() => update({ level: (spec.level ?? 0) < 0 ? undefined : -1 })}>
+          <TunnelIcon size={ICON_SIZE} strokeWidth={2} aria-hidden />
+        </IconButton>
+      </Row>
+      <RowDivider />
+      <Row label="Snapping">
+        {/* Holding Alt/Option switches guides off, and the button shows it. */}
+        <IconButton
+          label={`Snap to roads, guidelines and angles: ${guideSnapping && !inverted ? "on" : "off"}`}
+          pressed={guideSnapping && !inverted}
+          onClick={() => gameStore.getState().setGuideSnapping(!guideSnapping)}
+        >
+          <Magnet size={ICON_SIZE} strokeWidth={2} aria-hidden />
+        </IconButton>
+        <IconButton
+          label={`Snap to grid: ${snapping ? "on" : "off"}`}
+          pressed={snapping}
+          onClick={() => {
+            const { snapToGrid, setSnapToGrid } = gameStore.getState();
+            setSnapToGrid(!snapToGrid);
+          }}
+        >
+          <Grid3x3 size={ICON_SIZE} strokeWidth={2} aria-hidden />
+        </IconButton>
+      </Row>
     </Panel>
   );
 }
 
-/** The speed limit for new roads, as a speed sign; each click goes up a step, wrapping round to the slowest. */
-function SpeedButton() {
-  const speed = useGame((s) => s.roadSpec.speed ?? DEFAULT_SPEED);
-  const next = SPEED_LIMITS[(SPEED_LIMITS.indexOf(speed as (typeof SPEED_LIMITS)[number]) + 1) % SPEED_LIMITS.length];
+/** One row of the road options: a group of related buttons. */
+function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <IconButton
-      label={`Speed limit: ${speed} km/h (click for ${next})`}
-      pressed={false}
-      onClick={() => gameStore.getState().updateRoadSpec({ speed: next === DEFAULT_SPEED ? undefined : next })}
-    >
-      <span className="grid size-6 place-items-center rounded-full border-[2.5px] border-red-500 bg-white text-[10px] font-bold tabular-nums text-neutral-900">
-        {speed}
-      </span>
-    </IconButton>
+    <div role="group" aria-label={label} className="flex items-center gap-1">
+      {children}
+    </div>
   );
+}
+
+function RowDivider() {
+  return <span aria-hidden className="mx-1 h-px bg-white/10" />;
 }
 
 function StepButton({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
