@@ -35,8 +35,11 @@ type Rule = JunctionControl | "roundabout" | "merge" | "priority" | "turnIn" | n
 
 interface Movement extends Leg {
   rule: Rule;
-  /** A short sideways lane change from a standstill, out of a stuck queue (see `moveOver`). */
-  squeeze?: boolean;
+  /**
+   * A short sideways lane change from a standstill: out of a stuck queue (see `moveOver`), or into
+   * a gap left for it (see `letIn`).
+   */
+  squeeze?: "stuck" | "merge";
   /** Roundabout legs: distance along the leg where the car is on the ring, and where it leaves it; which exit it takes. */
   onRing?: number;
   offRing?: number;
@@ -78,6 +81,9 @@ export interface Car {
   idle: number;
   /** When it last moved over out of a stuck queue (see `moveOver`). */
   movedOver?: number;
+  /** The car it's holding back for, to let it in, and when it last let one in (see `letIn`). */
+  lettingIn?: number;
+  letInAt?: number;
 }
 
 /** Traffic measures since the stats were last reset, to compare how rules play out. */
@@ -96,6 +102,8 @@ export interface TrafficStats {
 
 /** How far ahead along its route a car looks for the car in front (more than it needs to stop from top speed). */
 const LOOK_AHEAD = 250;
+/** After letting a car in, how long before a car lets in another. */
+const LET_IN_PAUSE = 5;
 /** Moving over sideways out of a stuck queue: how far along the road it takes (mostly sideways). */
 const SQUEEZE_LENGTH = CAR_LENGTH * 0.8;
 /** Slower than this (units/s), a car ahead counts as held up when choosing a lane. */
@@ -423,8 +431,24 @@ export class Simulation {
    * no further than its last chance. False if it's there already.
    */
   private slide(car: Car): boolean {
-    const slide = car.legs[car.leg + 1].slide!;
+    const pending = car.legs[car.leg + 1] as Movement;
+    const slide = pending.slide!;
     const scale = legLength(slide.entry) / (legLength(slide.exit) || 1);
+    // Standing at its last chance waiting for a gap (where cars let others in): a short sideways
+    // move from where it stands instead, to fit a gap left for it (see `letIn`), if there's room in
+    // front to swing out.
+    if (pending.squeeze) return false;
+    if (car.v < 1 && car.stopped > 1 && slide.lead >= slide.maxLead - 0.5 && this.graph.rules.laneChange.letIn) {
+      const lane = this.lanes.get(car.legs[car.leg].key) ?? [];
+      const front = lane[lane.indexOf(car) + 1];
+      if (!front || this.at(front) - this.at(car) >= CAR_LENGTH * 0.62 + SQUEEZE_LENGTH / 2 + 1) {
+        const here = this.at(car) / scale;
+        const [entry, change, exit] = this.tracks.changeAt(slide.entry, slide.exit, here - slide.exit.from + 1, SQUEEZE_LENGTH);
+        const [oldEntry, oldChange, oldExit] = car.legs.slice(car.leg, car.leg + 3);
+        car.legs.splice(car.leg, 3, { ...oldEntry, ...entry }, { ...oldChange, ...change, squeeze: "merge" }, { ...oldExit, ...exit });
+        return true;
+      }
+    }
     // Far enough ahead that it doesn't start the change before it's checked again.
     const lead = Math.min(slide.maxLead, (car.s + car.v * 0.5 + CAR_LENGTH) / scale);
     // Not worth rebuilding for a small step, until the last chance.
@@ -490,7 +514,7 @@ export class Simulation {
       const lead = here - slide.exit.from + 1;
       const [entry, step, exit] = this.tracks.changeAt(slide.entry, slide.exit, lead, SQUEEZE_LENGTH);
       const [oldEntry, oldChange, oldExit] = car.legs.slice(car.leg, car.leg + 3);
-      car.legs.splice(car.leg, 3, { ...oldEntry, ...entry }, { ...oldChange, ...step, squeeze: true }, { ...oldExit, ...exit });
+      car.legs.splice(car.leg, 3, { ...oldEntry, ...entry }, { ...oldChange, ...step, squeeze: "stuck" }, { ...oldExit, ...exit });
       // Only if it may go now; otherwise it stays as it was.
       if (!this.mayChangeLane(car, car.legs[car.leg + 1])) {
         Object.assign(car, before);
@@ -906,7 +930,7 @@ export class Simulation {
     if (stuckChange && car.idle > stuckAfter && (this.ticks + car.id) % 60 === 0) this.moveOver(car);
     // A move over that couldn't start straight away (the gap closed): stay in lane after all.
     const pending = car.legs[car.leg + 1] as Movement | undefined;
-    if (pending?.squeeze && !car.cleared && this.time - (car.movedOver ?? 0) > 2) {
+    if (pending?.squeeze === "stuck" && !car.cleared && this.time - (car.movedOver ?? 0) > 2) {
       const lane = Number(car.legs[car.leg].key.split(":")[3]);
       this.follow(car, car.route, this.joinPlans(car.lanes, this.planFor(car.route, car.road, lane, car), car.road));
     }
@@ -935,12 +959,14 @@ export class Simulation {
       }
       // Stuck at the last chance: wait, indicating, and after a while find another way from this lane.
       const { deadlockReroute, rerouteWait } = this.graph.rules.laneChange;
-      if (next.slide && !car.cleared && car.stopped > rerouteWait && next.slide.lead >= next.slide.maxLead - 0.5) {
+      const lastChance = next.slide && (next.slide.lead >= next.slide.maxLead - 0.5 || (next as Movement).squeeze === "merge");
+      if (lastChance && !car.cleared && car.stopped > rerouteWait) {
         car.stopped = 0;
         if (deadlockReroute) this.reroute(car);
       }
       // Stop with the front bumper just behind the line; for a lane change, only at its last chance.
-      const slide = next.slide;
+      // (A short sideways move starts where it stands: no further.)
+      const slide = (next as Movement).squeeze ? undefined : next.slide;
       const toStop = slide ? (slide.maxLead * legLength(slide.entry)) / (legLength(slide.exit) || 1) - car.s : toLine;
       const toBumper = toStop - CAR_LENGTH / 2 - 0.5;
       if (!car.cleared && toBumper < gap) {
@@ -1026,14 +1052,18 @@ export class Simulation {
       if (leg.joinAt === undefined || other === car) continue;
       const left = other.legs[other.leg - 1];
       const joins = leg.outKey === undefined ? undefined : offsets.get(leg.outKey);
+      // The lane it's leaving, if that's on this car's way (the one it's in, or one ahead).
+      const leaves = left.key.startsWith("r:") ? offsets.get(left.key) : undefined;
       const ahead =
-        mine.key.startsWith("r:") && left.key === mine.key
-          ? left.to + other.s - this.at(car)
+        leaves !== undefined
+          ? left.to + other.s + leaves
           : joins !== undefined
             ? leg.joinAt - (legLength(leg) - other.s) + joins
             : null;
       if (ahead !== null && ahead > 0 && ahead - CAR_LENGTH < best.gap) best = { gap: ahead - CAR_LENGTH, speed: other.v };
     }
+    const courtesy = this.letIn(car, lanes);
+    if (courtesy < best.gap) best = { gap: courtesy, speed: 0 };
     // On a roundabout, also follow whoever is ahead round the ring in the same ring lane, whichever
     // way they came in. Leaving, a car crosses any lanes outside it, so it watches every lane.
     const leg = car.legs[car.leg];
@@ -1054,6 +1084,57 @@ export class Simulation {
       }
     }
     return best;
+  }
+
+  /**
+   * Letting a car in (when the rules say so): the nearest car behind one waiting at its last chance
+   * beside it to come into its lane holds back (if it can, braking comfortably), leaving it a gap to move over into sideways (see
+   * `slide`). One car at a time: not again for a while after one's in. The gap to hold back to, or
+   * Infinity when it's letting nobody in.
+   */
+  private letIn(car: Car, lanes: Map<string, Car[]>): number {
+    const mine = car.legs[car.leg];
+    const { letIn, minSafeGap } = this.graph.rules.laneChange;
+    if (!letIn || !mine.key.startsWith("r:")) return Infinity;
+    // The one it was letting in is in (or gave up): a while before the next.
+    const before = car.lettingIn === undefined ? undefined : this.cars.find((c) => c.id === car.lettingIn);
+    if (car.lettingIn !== undefined && !(before && this.waitingToJoin(before, mine.key))) {
+      car.lettingIn = undefined;
+      car.letInAt = this.time;
+    }
+    if (car.lettingIn === undefined && car.letInAt !== undefined && this.time - car.letInAt < LET_IN_PAUSE) return Infinity;
+    const lane = lanes.get(mine.key) ?? [];
+    const { brake } = this.graph.rules.following;
+    // Room it would leave behind a car `ahead` of it, and whether it can stop for that comfortably.
+    const room = (ahead: number) => ahead - SQUEEZE_LENGTH - minSafeGap - CAR_LENGTH;
+    const canStop = (c: Car, ahead: number) => room(ahead) >= (c.v * c.v) / (2 * brake);
+    let gap = Infinity;
+    for (const other of this.cars) {
+      if (other === car || (car.lettingIn !== undefined && other.id !== car.lettingIn) || !this.waitingToJoin(other, mine.key)) continue;
+      const theirs = other.legs[other.leg];
+      // Where it is, alongside in this lane (both lanes' tracks run the length of the road).
+      const beside = this.at(other) * (mine.track.length / (theirs.track.length || 1));
+      const ahead = beside - this.at(car);
+      if (ahead <= 0 || ahead > CAR_LENGTH * 3) continue;
+      if (car.lettingIn !== other.id) {
+        // Too close already to leave the gap, braking comfortably: carry on past. And it's the nearest
+        // car back that can: any between that could, do instead (those too close drive on past).
+        if (!canStop(car, ahead)) continue;
+        const between = lane.slice(lane.indexOf(car) + 1).filter((c) => this.at(c) < beside);
+        if (between.some((c) => canStop(c, beside - this.at(c)))) continue;
+      }
+      if (room(ahead) < gap) {
+        gap = room(ahead);
+        car.lettingIn = other.id;
+      }
+    }
+    return gap;
+  }
+
+  /** Whether `car` is standing at its last chance, waiting to move over into lane `key`. */
+  private waitingToJoin(car: Car, key: string): boolean {
+    const change = car.legs[car.leg + 1] as Movement | undefined;
+    return change?.squeeze === "merge" && change.outKey === key && !car.cleared;
   }
 
   private ringAngle(car: Car): number {

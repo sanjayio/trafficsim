@@ -744,6 +744,47 @@ describe("stuck in a queue", () => {
     expect(front).toBeGreaterThan(550);
   });
 
+  it("lets a car waiting at the end of its lane in, one at a time, without clipping it", () => {
+    // Two lanes east to lights; only the kerb lane turns south there, and it's busy. Cars from a side
+    // road join in the inner lane and must merge into it before the lights.
+    const zipper = (letIn: boolean) => {
+      const graph = new RoadGraph();
+      const two = { ...DEFAULT_ROAD_SPEC, lanes: 2, oneWay: true };
+      road(graph, 0, 0, 200, 0, two);
+      road(graph, 200, 0, 700, 0, two);
+      road(graph, 700, 0, 1000, 0, two);
+      road(graph, 200, -300, 200, 0);
+      road(graph, 700, 0, 700, 300);
+      graph.setJunction(at(graph, 700, 0), { control: "signals" });
+      const south = at(graph, 700, 300);
+      graph.setTerminal(south, SINK);
+      graph.setTerminal(at(graph, 1000, 0), SINK);
+      graph.setTerminal(at(graph, 0, 0), { ...DEFAULT_SOURCE, rate: 40, sinks: [south] });
+      const side = at(graph, 200, -300);
+      graph.setTerminal(side, { ...DEFAULT_SOURCE, rate: 15, sinks: [south] });
+      graph.setRules({ ...graph.rules, laneChange: { ...graph.rules.laneChange, letIn, deadlockReroute: false, stuckChange: false } });
+      const sim = new Simulation(graph);
+      sim.parking = false;
+      let step = 0;
+      run(sim, 180, () => {
+        noOverlap(sim);
+        if (step++ % 15) return;
+        const onRoad = sim.cars.filter((c) => /^[rc]:/.test(c.legs[c.leg].key));
+        for (const a of onRoad) {
+          for (const b of onRoad) {
+            if (a === b) continue;
+            const p = sim.pose(a);
+            const q = sim.pose(b);
+            apart(Math.hypot(p.x - q.x, p.y - q.y), CAR_LENGTH * 0.6);
+          }
+        }
+      });
+      return sim.cars.filter((c) => c.home === side && c.idle > 10).length;
+    };
+    expect(zipper(false)).toBeGreaterThan(20);
+    expect(zipper(true)).toBeLessThan(5);
+  }, 30000);
+
   it("moves over to a free lane that goes the same way, when the rules say so", () => {
     const stuck = queued(false);
     const free = queued(true);
