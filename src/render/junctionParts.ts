@@ -54,6 +54,8 @@ export function buildJunctionParts(
   const asphalt: Vec2[][] = [];
   const footpath: Vec2[][] = [];
   const kerbs: Vec2[][] = [];
+  // The kerb's face round each corner (the roads' own run along their edges).
+  const faces: Vec2[][] = [];
 
   for (let k = 0; k < order.length; k++) {
     const ia = order[k];
@@ -93,11 +95,12 @@ export function buildJunctionParts(
         maxShare,
       );
       if (stones) kerbs.push(...stones.triangles);
+      faces.push(kerb.curve);
     }
   }
 
   const parts: { part: "asphalt" | "footpath"; geometry: BufferGeometry }[] = [];
-  if (footpath.length) parts.push({ part: "footpath", geometry: pavedGeometry(footpath, kerbs) });
+  if (footpath.length) parts.push({ part: "footpath", geometry: pavedGeometry(footpath, kerbs, faces) });
   if (asphalt.length) parts.push({ part: "asphalt", geometry: convexGeometry(asphalt) });
   return { parts, reach: reachOut };
 }
@@ -121,7 +124,7 @@ function fillet(
   edgeB: Polyline,
   radius: number,
   maxShare: number,
-): { triangles: Vec2[][]; alongA: number; alongB: number; radius: number } | null {
+): { triangles: Vec2[][]; curve: Vec2[]; alongA: number; alongB: number; radius: number } | null {
   if (radius <= 0.5) return null;
   const crossing = crossPolylines(edgeA, edgeB);
   if (!crossing) return null;
@@ -162,6 +165,7 @@ function fillet(
   const triangles = fill([...sideA, ...kerb.slice(1, -1), ...sideB.slice(1).reverse()]);
   return {
     triangles,
+    curve: kerb,
     alongA: alongAt(edgeA, i, corner) + tangentLength,
     alongB: alongAt(edgeB, j, corner) + tangentLength,
     // The radius it was drawn with (smaller than asked for where the roads are short).

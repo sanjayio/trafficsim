@@ -1,5 +1,6 @@
-import { BufferGeometry, DoubleSide, Float32BufferAttribute, MeshBasicMaterial, ShapeUtils, Vector2 } from "three";
+import { BufferGeometry, Color, DoubleSide, Float32BufferAttribute, MeshBasicMaterial, ShapeUtils, Vector2 } from "three";
 import type { Vec2 } from "../core/geometry";
+import { palette } from "./palette";
 
 /**
  * Everything on the ground is flat and sits at y = 0. Instead of offsetting heights (which
@@ -24,6 +25,13 @@ const CAP_SEGMENTS = 12;
  * raised). Laid under the asphalt's edge, which covers all of the band but its outer strip.
  */
 export const KERB_WIDTH = 1;
+/**
+ * How far footpaths stand above the road (see Kit Cidade Low Poly's streets). The footpath's mesh is
+ * lifted by this; its kerb's face drops back down to the road (see `pavedGeometry`).
+ */
+export const KERB_HEIGHT = 1;
+/** The kerb's face, upright, drawn a step darker than its top. */
+const KERB_FACE_TONE = 0.6;
 
 export function flatMaterial(color: number, opacity = 1): MeshBasicMaterial {
   return new MeshBasicMaterial({
@@ -109,14 +117,64 @@ export function convexGeometry(outlines: Vec2[][]): BufferGeometry {
 /**
  * Footpath and its kerb stones in one geometry (one draw call): the kerb's triangles come after
  * the footpath's, so they draw over it, and their vertices are marked (attribute `kerb`: 1) for the
- * footpath material to colour them (see `textureSurface`). Every footpath-material geometry needs
+ * footpath material to colour them (see `kerbColouring`). Every footpath-material geometry needs
  * the mark, so pass no kerb for a plain one.
+ *
+ * `faces`: lines along the road's edge where the footpath (drawn `KERB_HEIGHT` up) meets it, each
+ * becoming the kerb's upright face down to the road (marked 2). Drawn before the road, they show
+ * where the footpath stands beyond the road and are covered by the road where it's in front.
  */
-export function pavedGeometry(footpath: Vec2[][], kerb: Vec2[][] = []): BufferGeometry {
-  const geometry = convexGeometry([...footpath, ...kerb]);
+export function pavedGeometry(footpath: Vec2[][], kerb: Vec2[][] = [], faces: Vec2[][] = []): BufferGeometry {
+  const positions: number[] = [];
+  const indices: number[] = [];
+  const marks: number[] = [];
+  const upright = (lines: Vec2[][], mark: number) => {
+    for (const line of lines) {
+      for (let i = 1; i < line.length; i++) {
+        const [a, b] = [line[i - 1], line[i]];
+        const base = positions.length / 3;
+        positions.push(a.x, -KERB_HEIGHT, a.y, b.x, -KERB_HEIGHT, b.y, b.x, 0, b.y, a.x, 0, a.y);
+        indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+        marks.push(mark, mark, mark, mark);
+      }
+    }
+  };
+  const flat = convexGeometry([...footpath, ...kerb]);
   // convexGeometry adds a centre vertex per outline.
   const plain = footpath.reduce((sum, outline) => sum + outline.length + 1, 0);
-  const count = geometry.getAttribute("position").count;
-  geometry.setAttribute("kerb", new Float32BufferAttribute(Array.from({ length: count }, (_, i) => (i < plain ? 0 : 1)), 1));
+  const base = positions.length / 3;
+  positions.push(...(flat.getAttribute("position").array as Float32Array));
+  indices.push(...Array.from(flat.getIndex()!.array, (i) => i + base));
+  marks.push(...Array.from({ length: flat.getAttribute("position").count }, (_, i) => (i < plain ? 0 : 1)));
+  flat.dispose();
+  upright(faces, 2);
+  const geometry = new BufferGeometry();
+  geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("kerb", new Float32BufferAttribute(marks, 1));
+  geometry.setIndex(indices);
   return geometry;
+}
+
+/**
+ * `material` (the footpath's) drawing the vertices `pavedGeometry` marks as kerb in the kerb's
+ * colour. Keeps the scene's own shader changes (tint, cloud shadows: see `installCloudShadows`).
+ */
+export function kerbColouring(material: MeshBasicMaterial): MeshBasicMaterial {
+  const kerbColour = { value: new Color(palette.kerb) };
+  material.onBeforeCompile = function (shader, renderer) {
+    MeshBasicMaterial.prototype.onBeforeCompile.call(this, shader, renderer);
+    shader.uniforms.kerbColour = kerbColour;
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nattribute float kerb;\nvarying float vKerb;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvKerb = kerb;");
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", "#include <common>\nvarying float vKerb;\nuniform vec3 kerbColour;")
+      .replace(
+        "#include <map_fragment>",
+        `#include <map_fragment>
+        diffuseColor.rgb = mix(diffuseColor.rgb, kerbColour * (vKerb > 1.5 ? ${KERB_FACE_TONE} : 1.0), step(0.5, vKerb));`,
+      );
+  };
+  material.customProgramCacheKey = () => "paved";
+  return material;
 }

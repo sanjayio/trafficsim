@@ -38,7 +38,7 @@ In the app: ☰ menu (top right) → **Controls**. That list is generated from `
 | Wheel / pinch | Zoom at cursor |
 | `R` / `F` | Zoom in / out at the screen centre (hold `Shift` for faster) |
 | `W` `A` `S` `D` / arrow keys | Pan (hold `Shift` for faster) |
-| `Q` / `E` | Rotate anticlockwise / clockwise around the screen centre (hold `Shift` for faster) |
+| `Q` / `E` | Turn on the spot, anticlockwise / clockwise (hold `Shift` for faster) |
 | `T` / `G` | Tilt the camera towards 30° (3D view) / back to 90° top-down |
 | Right- or middle-drag (left-drag in Select) | Pan |
 | `Space` | Pause / resume |

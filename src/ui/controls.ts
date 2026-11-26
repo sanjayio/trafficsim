@@ -75,7 +75,7 @@ export const CONTROL_GROUPS: ControlGroup[] = [
     rows: [
       { keys: ["W", "A", "S", "D", "or", "Arrows"], action: "Pan" },
       { keys: ["Right-drag", "or", "Middle-drag"], action: "Pan (left-drag also pans with Select)" },
-      { keys: ["Q", "/", "E"], action: "Rotate anticlockwise / clockwise" },
+      { keys: ["Q", "/", "E"], action: "Turn on the spot, anticlockwise / clockwise" },
       { keys: ["R", "/", "F", "or", "Wheel"], action: "Zoom in / out" },
       { keys: ["T", "/", "G"], action: "Tilt towards 3D / back to top-down" },
       { keys: ["Shift"], action: "Hold for faster camera keys" },

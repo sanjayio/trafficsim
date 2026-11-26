@@ -4,10 +4,11 @@ import { straightCurve } from "../core/curve";
 import type { Vec2 } from "../core/geometry";
 import { connectionsAt, turnAt } from "../core/lanes";
 import { RoadGraph, type NodeId } from "../core/roadGraph";
-import { carriagewayWidth, DEFAULT_ROAD_SPEC } from "../core/roadSpec";
+import { carriagewayWidth, DEFAULT_ROAD_SPEC, roadWidth } from "../core/roadSpec";
 import { CAR_WIDTH } from "../core/simulation";
 import { legAt, legLength, TrackBuilder } from "../core/track";
 import { RoadLayer } from "./RoadLayer";
+import { CROSSING_ROOM } from "./roadParts";
 
 const spec = { ...DEFAULT_ROAD_SPEC, lanes: 2 };
 
@@ -84,4 +85,20 @@ describe("paths through junctions", () => {
       });
     }
   }
+});
+
+describe("zebra crossings", () => {
+  it("keep where cars wait back from the junction, so the crossing lies clear of the road across", () => {
+    const graph = new RoadGraph();
+    const walked = { ...spec, footpath: true };
+    for (const [a, b] of SHAPES.crossroads) graph.buildRoad(straightCurve(a, b), walked);
+    const node = graph.nodeNear({ x: 0, y: 0 }, 2)!.id;
+    // Sharp corners: nothing else holds the line back.
+    graph.setJunction(node, { cornerRadius: 0 });
+    const roads = new RoadLayer(graph);
+    for (const segment of graph.segmentsAt(node)) {
+      // Between the stop line and the junction: the crossing, then the other road (footpaths and all).
+      expect(roads.stopLineAt(segment, node) - CROSSING_ROOM).toBeGreaterThanOrEqual(roadWidth(walked) / 2);
+    }
+  });
 });

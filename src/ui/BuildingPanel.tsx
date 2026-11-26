@@ -13,7 +13,7 @@ import {
   type Source,
   type Terminal,
 } from "../core/terminal";
-import { BUILDING_COLORS } from "../render/buildings";
+import { usualColors } from "../render/buildings";
 import type { Engine } from "../render/Engine";
 import { gameStore } from "../state/store";
 import { OptionsPanel, Switch } from "./OptionsPanel";
@@ -80,7 +80,7 @@ function Details({ engine, id, terminal }: { engine: Engine; id: number; termina
     const trimmed = name.trim().slice(0, MAX_NAME);
     update({ name: trimmed && trimmed !== defaultName(terminal.building, id) ? trimmed : undefined });
   };
-  const colors = terminal.colors ?? BUILDING_COLORS[terminal.building];
+  const colors = terminal.colors ?? usualColors(terminal.building, engine.graph.terminalLot(id)?.centre ?? { x: 0, y: 0 });
   const hex = (c: number) => `#${c.toString(16).padStart(6, "0")}`;
   const setColour = (role: "primary" | "secondary", value: string) => update({ colors: { ...colors, [role]: parseInt(value.slice(1), 16) } });
   const level = levelOf(terminal);

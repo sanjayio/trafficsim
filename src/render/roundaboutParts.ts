@@ -76,6 +76,9 @@ export function buildRoundaboutParts(
   const footpath: Vec2[][] = [];
   // Kerb stones along the footpaths' road edges: built like the footpath, a kerb's width wide.
   const kerbStones: Vec2[][] = [];
+  // The kerb's face round the ring and along the split approaches (where flares meet the ring, the
+  // asphalt drawn over the ring's face hides it).
+  const faces: Vec2[][] = [];
   const lines: Vec2[][] = [];
   const teeth: Vec2[][] = [];
   const kerbs: Vec2[][] = [];
@@ -85,6 +88,8 @@ export function buildRoundaboutParts(
   if (walkWidth > 0) {
     footpath.push(circle(centre, shape.outer + walkWidth));
     kerbStones.push(circle(centre, shape.outer + KERB_WIDTH));
+    const ring = circle(centre, shape.outer);
+    faces.push([...ring, ring[0]]);
   }
 
   const signs: RoundaboutLayout["signs"] = [];
@@ -127,6 +132,10 @@ export function buildRoundaboutParts(
           kerbStones.push(
             ...band(arm, (a) => side * (arm.halfWidth + shift(a)), (a) => side * (arm.halfWidth + shift(a) + KERB_WIDTH), 0, end),
           );
+          const line: Vec2[] = [];
+          for (let a = 0; a < end; a += STEP) line.push(arm.edge(side * (arm.halfWidth + shift(a)), a));
+          line.push(arm.edge(side * (arm.halfWidth + shift(end)), end));
+          faces.push(line);
         }
       }
       kerbs.push(...island(arm, (a) => shift(a), start, end, 0));
@@ -177,7 +186,7 @@ export function buildRoundaboutParts(
     { part: "footpath", order: FlatLayer.markings + 0.1, geometry: pavedGeometry([circle(centre, shape.island)]) },
     { part: "median", order: FlatLayer.markings + 0.2, geometry: convexGeometry([circle(centre, shape.island - ISLAND_KERB)]) },
   ];
-  if (footpath.length) parts.push({ part: "footpath", order: FlatLayer.footpath, geometry: pavedGeometry(footpath, kerbStones) });
+  if (footpath.length) parts.push({ part: "footpath", order: FlatLayer.footpath, geometry: pavedGeometry(footpath, kerbStones, faces) });
   if (lines.length) parts.push({ part: "laneLine", order: FlatLayer.markings + 0.1, geometry: convexGeometry(lines) });
   if (teeth.length) parts.push({ part: "stopLine", order: FlatLayer.markings + 0.1, geometry: convexGeometry(teeth) });
   if (islands.length) {

@@ -7,18 +7,21 @@ import { carPark, defaultName, DRIVEWAY_WIDTH, isSourceBuilding, SIDE_PATH } fro
 import { bridge } from "../core/track";
 import { BuildingKit } from "./buildings";
 import { concreteMaterial, gradeStructure, liftGeometry, trenchMask } from "./grade";
-import { FlatLayer, flatMaterial, pavedGeometry } from "./flat";
-import { disposeSurfaces, textureSurface } from "./surfaces";
+import { FlatLayer, flatMaterial, KERB_HEIGHT, kerbColouring, pavedGeometry } from "./flat";
 import { FurnitureKit, type FurnitureSpot } from "./furniture";
 import { buildJunctionParts, type JunctionArm } from "./junctionParts";
 import { buildRoundaboutParts } from "./roundaboutParts";
-import { buildBendMarkings, buildBendSurface, buildRoadParts, ROAD_PART_STYLE, type BendLine, type RoadEnd, type RoadPart } from "./roadParts";
-import type { Curve } from "../core/curve";
+import { buildBendMarkings, buildBendSurface, buildRoadParts, CROSSING_ROOM, ROAD_PART_STYLE, type BendLine, type RoadEnd, type RoadPart } from "./roadParts";
+import type { Curve, SampledCurve } from "../core/curve";
 
 /** Roads meeting this close to straight on (radians short of 180°) just carry their markings through. */
 const STRAIGHT_ENOUGH = (10 * Math.PI) / 180;
 /** Clearance between a junction's crossing road and where markings stop. */
 const JUNCTION_MARGIN = 2;
+/** A junction's arm follows its road this far at most (through splits, see `armOf`): further than any corner reaches. */
+const ARM_REACH = 320;
+/** Two road pieces meeting at less than this angle (cos of about 10°) carry on as one road. */
+const SMOOTH_JOIN = Math.cos((10 * Math.PI) / 180);
 /** Roads meeting at less than ~20° to each other (sin < this) carry on rather than cross. */
 const MIN_CLEARANCE_SINE = 0.35;
 /** Width of a source's or sink's driveway. */
@@ -155,12 +158,14 @@ export class RoadLayer extends Group {
     // With a car park behind the building, the driveway is the side path to it instead.
     const { path } = isSourceBuilding(lot.building) ? { path: null } : carPark(lot);
     const doorAt = (door.x - lot.centre.x) * along.x + (door.y - lot.centre.y) * along.y;
+    const drive = path === null ? strip(0, DRIVEWAY_WIDTH) : strip(path - doorAt, SIDE_PATH);
     const driveway = new Mesh(
-      pavedGeometry([path === null ? strip(0, DRIVEWAY_WIDTH) : strip(path - doorAt, SIDE_PATH)]),
+      pavedGeometry([drive]),
       this.materials.footpath,
     );
-    // Paved like the footpath, and over the kerb (dropped where the drive crosses it).
+    // Paved like the footpath, at its height, and over the kerb.
     driveway.renderOrder = ROAD_PART_STYLE.asphalt.layer;
+    driveway.position.y = KERB_HEIGHT;
     const terminal = this.graph.terminal(nodeId)!;
     const name = terminal.kind === "sink" ? terminal.name || defaultName(terminal.building, nodeId) : undefined;
     const building = this.buildings.model(lot, { ...terminal, name });
@@ -212,18 +217,37 @@ export class RoadLayer extends Group {
 
   /** The road `segment` as seen leaving node `nodeId`. */
   private armOf(segment: RoadSegment, nodeId: NodeId): JunctionArm {
-    // As drawn (a slip road's end runs from the main road's outside lane).
-    const path = this.graph.drawnPath(segment);
-    const leavesFromStart = segment.a === nodeId;
+    // The road as it leaves, on through where it's only split (as for a building's driveway) and
+    // carries on smoothly, the same width: a corner can round as far as the road really runs.
+    const pieces: { path: SampledCurve; forward: boolean; start: number }[] = [];
+    let length = 0;
+    for (let piece: RoadSegment | undefined = segment, from: NodeId = nodeId; piece && length < ARM_REACH; ) {
+      // As drawn (a slip road's end runs from the main road's outside lane).
+      const path = this.graph.drawnPath(piece);
+      const forward: boolean = piece.a === from;
+      pieces.push({ path, forward, start: length });
+      length += path.length;
+      const node: NodeId = forward ? piece.b : piece.a;
+      const on = this.graph.segmentsAt(node);
+      const next = on.length === 2 ? on.find((s) => s !== piece) : undefined;
+      const same = next && roadWidth(next.spec) === roadWidth(piece.spec) && carriagewayWidth(next.spec) === carriagewayWidth(piece.spec);
+      const back = this.graph.directionAway(piece, node);
+      const on2 = next && this.graph.directionAway(next, node);
+      const smooth = on2 && -(back.x * on2.x + back.y * on2.y) > SMOOTH_JOIN;
+      if (!same || !smooth || next === segment) break;
+      [piece, from] = [next, node];
+    }
     return {
       dir: this.graph.directionAway(segment, nodeId),
       halfWidth: carriagewayWidth(segment.spec) / 2,
       footpath: segment.spec.footpath ? FOOTPATH_WIDTH : 0,
-      length: path.length,
-      // Walking away from the junction; "right" flips when the road runs towards it.
+      length,
+      // Walking away from the junction; "right" flips where the road runs towards it.
       edge: (offset: number, along: number) => {
-        const f = path.at(leavesFromStart ? along : path.length - along);
-        const side = leavesFromStart ? offset : -offset;
+        const piece = pieces.find((p) => along < p.start + p.path.length) ?? pieces[pieces.length - 1];
+        const s = Math.min(along - piece.start, piece.path.length);
+        const f = piece.path.at(piece.forward ? s : piece.path.length - s);
+        const side = piece.forward ? offset : -offset;
         return { x: f.p.x + f.normal.x * side, y: f.p.y + f.normal.y * side };
       },
     };
@@ -317,6 +341,8 @@ export class RoadLayer extends Group {
       meshes = layout.parts.map(({ part, order, geometry }) => {
         const mesh = new Mesh(geometry, this.materials[part]);
         mesh.renderOrder = order;
+        // Footpaths (and the islands' kerbs) stand above the road.
+        if (part === "footpath") mesh.position.y = KERB_HEIGHT;
         return mesh;
       });
     } else {
@@ -337,6 +363,7 @@ export class RoadLayer extends Group {
         if (over) this.liftOntoGraded(geometry, meeting);
         const mesh = new Mesh(geometry, over ? this.overMaterial(part) : this.materials[part]);
         mesh.renderOrder = over ? GRADED_ORDER + ROAD_PART_STYLE[part].layer + 0.5 : ROAD_PART_STYLE[part].layer;
+        if (part === "footpath" && !over) mesh.position.y = KERB_HEIGHT;
         return mesh;
       });
     }
@@ -394,7 +421,10 @@ export class RoadLayer extends Group {
     // The main road under a stop or give-way control has no line: its traffic doesn't stop.
     const main = (control === "stop" || control === "yield") && !minorRoads(this.graph, nodeId).has(segment.id);
     const entry = control === "none" || main ? "none" : control === "yield" ? "yield" : "stop";
-    return { inset, entry, turns: this.laneTurns(segment, nodeId) };
+    // Where people walk, a zebra crossing between the stop line and the junction.
+    const crossing = !!segment.spec.footpath;
+    if (crossing) inset += CROSSING_ROOM;
+    return { inset, entry, turns: this.laneTurns(segment, nodeId), crossing };
   }
 
   /**
@@ -518,6 +548,7 @@ export class RoadLayer extends Group {
       if (graded) liftGeometry(geometry, path, height, layer);
       const mesh = new Mesh(geometry, graded ? this.gradedMaterial(part) : this.materials[part]);
       mesh.renderOrder = graded ? GRADED_ORDER + layer : layer;
+      if (part === "footpath") mesh.position.y = KERB_HEIGHT;
       // A bridge's deck shades what's under it.
       if (graded && (segment.spec.level ?? 0) > 0) mesh.castShadow = true;
       return mesh;
@@ -591,11 +622,10 @@ export class RoadLayer extends Group {
     for (const { driveway } of this.markers.values()) driveway.geometry.dispose();
     this.buildings.dispose();
     for (const material of Object.values(this.materials)) material.dispose();
-    disposeSurfaces();
   }
 }
 
-/** Asphalt and footpaths get their surface texture (also on copies: a clone doesn't keep it). */
+/** Footpaths draw their kerb stones (also on copies: a clone doesn't keep it). */
 function textured(part: RoadPart, material: MeshBasicMaterial): MeshBasicMaterial {
-  return part === "asphalt" || part === "footpath" ? textureSurface(material, part) : material;
+  return part === "footpath" ? kerbColouring(material) : material;
 }

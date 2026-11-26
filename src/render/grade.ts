@@ -35,7 +35,8 @@ export function liftGeometry(geometry: BufferGeometry, path: SampledCurve, heigh
   for (let i = 0; i < position.count; i++) {
     const h = height(path.nearest({ x: position.getX(i), y: position.getZ(i) }).s);
     y.push(h);
-    position.setY(i, h + layer * LAYER_LIFT);
+    // On top of any height it has of its own (a kerb's face drops below the footpath).
+    position.setY(i, position.getY(i) + h + layer * LAYER_LIFT);
   }
   position.needsUpdate = true;
   const index = geometry.getIndex();

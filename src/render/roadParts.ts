@@ -32,6 +32,11 @@ export interface RoadEnd {
    */
   turnaround?: boolean;
   /**
+   * A zebra crossing across the road, in the `CROSSING_ROOM` between where its markings stop
+   * (the stop line, where cars wait) and the junction, with tactile paving on the footpaths at each end.
+   */
+  crossing?: boolean;
+  /**
    * At a junction, the turns each lane arriving here may make (by lane index for the direction of
    * travel towards this end), painted as arrows just before the line.
    */
@@ -48,7 +53,7 @@ export const ROAD_PART_STYLE: Record<RoadPart, { color: number; layer: number }>
   stopLine: { color: palette.laneLine, layer: FlatLayer.markings },
 };
 
-const CENTER_LINE_WIDTH = 1.5;
+const CENTER_LINE_WIDTH = 1;
 const LANE_LINE_WIDTH = 1;
 const DASH_LENGTH = 8;
 const DASH_GAP = 8;
@@ -59,6 +64,13 @@ const ARROW_SHAFT_LENGTH = 7;
 const ARROW_SHAFT_WIDTH = 1.6;
 const CAP_SEGMENTS = 12;
 const STOP_LINE_WIDTH = 2;
+/** A zebra crossing: how deep its stripes are (along the road), and the clear gap either side of it. */
+const ZEBRA_DEPTH = 6;
+const ZEBRA_GAP = 1.5;
+/** How much further back a road's markings (and the cars waiting) stop for a crossing at its end (see `RoadEnd.crossing`). */
+export const CROSSING_ROOM = ZEBRA_DEPTH + ZEBRA_GAP * 2;
+/** The yellow tactile paving at each end of a crossing: how far across the footpath it reaches, from just past the kerb. */
+const TACTILE_DEPTH = 4;
 
 /**
  * Geometry for every visible piece of a road along `path`. Offsets are measured to the right
@@ -82,9 +94,16 @@ export function buildRoadParts(
   const { start, end } = ends ?? { start: deadEnd, end: deadEnd };
 
   if (spec.footpath) {
+    // Footpath and kerb stones beside the road only (none under it: on a bridge, drawn with depth, a
+    // raised footpath under the road would hide it), and the kerb's face along both edges and round
+    // each rounded end.
+    const half = carriageway / 2;
+    const faces = [edgeLine(path, half, paved), edgeLine(path, -half, paved)];
+    if (caps[0]) faces.push(halfDisc(path.at(paved[0]), half, -1));
+    if (caps[1]) faces.push(halfDisc(path.at(paved[1]), half, 1));
     parts.push({
       part: "footpath",
-      geometry: pavedGeometry(surface(path, roadWidth(spec), caps, paved), surface(path, carriageway + KERB_WIDTH * 2, caps, paved)),
+      geometry: pavedGeometry(beside(path, half, roadWidth(spec) / 2, caps, paved), beside(path, half, half + KERB_WIDTH, caps, paved), faces),
     });
   }
   parts.push({ part: "asphalt", geometry: convexGeometry(surface(path, carriageway, caps, paved)) });
@@ -125,15 +144,17 @@ export function buildRoadParts(
   }
   if (entryMarks.length) parts.push({ part: "stopLine", geometry: convexGeometry(entryMarks) });
 
-  const dashes = (offset: number): Vec2[][] => {
+  const dashes = (offset: number, width = LANE_LINE_WIDTH): Vec2[][] => {
     const out: Vec2[][] = [];
     for (let s = s0; s < s1; s += DASH_LENGTH + DASH_GAP) {
-      out.push(...ribbon(path, offset, LANE_LINE_WIDTH, s, Math.min(s + DASH_LENGTH, s1)));
+      out.push(...ribbon(path, offset, width, s, Math.min(s + DASH_LENGTH, s1)));
     }
     return out;
   };
 
   const laneLines: Vec2[][] = [];
+  // Yellow paint, in one mesh: the centre line and crossings' tactile paving.
+  const yellow: Vec2[][] = [];
   if (spec.oneWay) {
     // Lanes span the carriageway; dividers between them, arrows down each lane's centre.
     const left = -carriageway / 2;
@@ -162,7 +183,7 @@ export function buildRoadParts(
       if (turnEnd) median.push(halfDisc(path.at(length), MEDIAN_WIDTH / 2, 1));
       parts.push({ part: "median", geometry: convexGeometry(median) });
     } else {
-      parts.push({ part: "centerLine", geometry: convexGeometry(ribbon(path, 0, CENTER_LINE_WIDTH, s0, s1)) });
+      yellow.push(...dashes(0, CENTER_LINE_WIDTH));
     }
     for (let k = 1; k < spec.lanes; k++) {
       const offset = middle + k * LANE_WIDTH;
@@ -172,6 +193,17 @@ export function buildRoadParts(
       if (turnEnd) laneLines.push(...dashedArc(path.at(length), offset, 1));
     }
   }
+  // Zebra crossings at junction ends: white stripes across the carriageway, tactile paving (yellow,
+  // with the centre line) on the footpath either side.
+  for (const [ends, from] of [[end, s1 + ZEBRA_GAP], [start, s0 - ZEBRA_GAP - ZEBRA_DEPTH]] as const) {
+    if (!ends.crossing) continue;
+    const to = from + ZEBRA_DEPTH;
+    const stripes = Math.max(3, Math.round(carriageway / 4));
+    const pitch = carriageway / stripes;
+    for (let i = 0; i < stripes; i++) laneLines.push(...ribbon(path, -carriageway / 2 + pitch * (i + 0.5), pitch * 0.55, from, to));
+    if (spec.footpath) for (const side of [1, -1]) yellow.push(...ribbon(path, side * (carriageway / 2 + 1 + TACTILE_DEPTH / 2), TACTILE_DEPTH, from + 1.5, to - 1.5));
+  }
+  if (yellow.length) parts.push({ part: "centerLine", geometry: convexGeometry(yellow) });
   if (laneLines.length) parts.push({ part: "laneLine", geometry: convexGeometry(laneLines) });
 
   // Turn arrows on the lanes arriving at each junction end. Lane offsets are right of the direction
@@ -203,18 +235,18 @@ export interface BendLine {
   pieces: Curve[];
 }
 
-/** Markings round a bend, along the curves given (solid centre line or median, dashed lane lines). */
+/** Markings round a bend, along the curves given (solid median, dashed centre and lane lines). */
 export function buildBendMarkings(lines: BendLine[]): { part: RoadPart; geometry: BufferGeometry }[] {
   const shapes: Record<BendLine["kind"], Vec2[][]> = { centerLine: [], median: [], laneLine: [] };
   for (const { kind, pieces } of lines) {
     for (const piece of pieces) {
       const path = new SampledCurve(piece);
-      if (kind === "laneLine") {
+      if (kind === "median") shapes.median.push(...ribbon(path, 0, MEDIAN_WIDTH, 0, path.length));
+      else {
+        const width = kind === "laneLine" ? LANE_LINE_WIDTH : CENTER_LINE_WIDTH;
         for (let s = 0; s < path.length; s += DASH_LENGTH + DASH_GAP) {
-          shapes.laneLine.push(...ribbon(path, 0, LANE_LINE_WIDTH, s, Math.min(s + DASH_LENGTH, path.length)));
+          shapes[kind].push(...ribbon(path, 0, width, s, Math.min(s + DASH_LENGTH, path.length)));
         }
-      } else {
-        shapes[kind].push(...ribbon(path, 0, kind === "median" ? MEDIAN_WIDTH : CENTER_LINE_WIDTH, 0, path.length));
       }
     }
   }
@@ -247,6 +279,28 @@ function turnArrow(tip: Vec2, travel: Vec2, right: Vec2, kinds: Set<number>): Ve
     shapes.push([at(-8.2, side * 2.6), at(-2.8, side * 2.6), at(-5.5, side * 5.4)]);
   }
   return shapes;
+}
+
+/** The line `offset` right of the road from s0 to s1, at the same stations as its surface. */
+function edgeLine(path: SampledCurve, offset: number, [s0, s1]: [number, number]): Vec2[] {
+  return [s0, ...path.stationsBetween(s0, s1), s1].map((s) => {
+    const f = path.at(s);
+    return { x: f.p.x + f.normal.x * offset, y: f.p.y + f.normal.y * offset };
+  });
+}
+
+/**
+ * The strips from `inner` to `outer` either side of the road (and round each rounded end), as
+ * convex polygons: what's beside the road's surface, not under it.
+ */
+function beside(path: SampledCurve, inner: number, outer: number, caps: [boolean, boolean], [s0, s1]: [number, number]): Vec2[][] {
+  const polygons = [...ribbon(path, (inner + outer) / 2, outer - inner, s0, s1), ...ribbon(path, -(inner + outer) / 2, outer - inner, s0, s1)];
+  for (const [cap, s, forward] of [[caps[0], s0, -1], [caps[1], s1, 1]] as const) {
+    if (!cap) continue;
+    const [a, b] = [halfDisc(path.at(s), inner, forward), halfDisc(path.at(s), outer, forward)];
+    for (let i = 1; i < a.length; i++) polygons.push([a[i - 1], a[i], b[i], b[i - 1]]);
+  }
+  return polygons;
 }
 
 /** A full-width road surface with rounded ends, as convex polygons. */
@@ -293,9 +347,18 @@ export function buildBendSurface(spec: RoadSpec, edge: (offset: number) => Curve
   if (spec.footpath) {
     const out = half + FOOTPATH_WIDTH;
     const kerb = half + KERB_WIDTH;
+    const lines = (offsets: number[]) =>
+      offsets.map((offset) => {
+        const at = along(edge(offset));
+        return Array.from({ length: BEND_STEPS + 1 }, (_, i) => at(i / BEND_STEPS));
+      });
     parts.push({
       part: "footpath",
-      geometry: pavedGeometry([...band(edge(-out), edge(-half)), ...band(edge(half), edge(out))], [...band(edge(-kerb), edge(-half)), ...band(edge(half), edge(kerb))]),
+      geometry: pavedGeometry(
+        [...band(edge(-out), edge(-half)), ...band(edge(half), edge(out))],
+        [...band(edge(-kerb), edge(-half)), ...band(edge(half), edge(kerb))],
+        lines([-half, half]),
+      ),
     });
   }
   return parts;

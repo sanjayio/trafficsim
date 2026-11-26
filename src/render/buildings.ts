@@ -1,6 +1,7 @@
-import { BoxGeometry, BufferGeometry, CanvasTexture, Color, Float32BufferAttribute, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, PlaneGeometry, Quaternion, SRGBColorSpace, Vector3 } from "three";
+import { BoxGeometry, BufferGeometry, CanvasTexture, Color, ConeGeometry, CylinderGeometry, Float32BufferAttribute, Group, IcosahedronGeometry, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, PlaneGeometry, Quaternion, SRGBColorSpace, Vector3 } from "three";
 import { carPark, DRIVEWAY_WIDTH, isSourceBuilding, LOT_SETBACK, PARKING_DEPTH, PLAZA_DEPTH, tallSteps, type Building, type BuildingDetails, type Lot } from "../core/terminal";
-import { FlatLayer, flatMaterial } from "./flat";
+import { FlatLayer, flatMaterial, KERB_HEIGHT } from "./flat";
+import { faceTone, villaLook, villaModel } from "./villas";
 
 /** Buildings draw after the flat road layers, with normal depth testing. */
 const BUILDING_ORDER = 20;
@@ -16,48 +17,114 @@ export const BUILDING_COLORS: Record<Building, { primary: number; secondary: num
   largeOffice: { primary: 0x4f7ea8, secondary: 0xd6dde3 },
 };
 
+/** A building's colours when it hasn't been given its own: villas vary by where they stand (see `villaLook`). */
+export function usualColors(building: Building, centre: { x: number; y: number }): { primary: number; secondary: number } {
+  return building === "villa" ? villaLook(centre).colors : BUILDING_COLORS[building];
+}
+
 /** Homes take this share of their plot's length; trees fill the rest. */
 const HOME_SHARE = 0.7;
 const TREE_SPACING = 9;
-/** Leaf colours: mostly greens, some turning yellow and orange, the odd red. Conifers stay green. */
-export const LEAVES = [0x3f7a3a, 0x4f9446, 0x5c8f3a, 0x3b6e35, 0x6b9a3e, 0x4a8a44, 0x7fa53f, 0xb5a03a, 0xc98a2e, 0xa8432f];
-export const CONIFER = [0x2f5f34, 0x355e2e, 0x2a5236, 0x3d6b3a];
+/**
+ * Leaf colours, after Kit Cidade Low Poly's palette (https://github.com/kayquer/kit-cidade-lowpoly,
+ * CC0): mostly its greens, the odd tree in flower (ipê yellow, pink). Conifers stay green.
+ * Ten, as scenery saves an index into them.
+ */
+export const LEAVES = [0x5cb84a, 0x3e8a3a, 0x8ad155, 0x4fa040, 0x6cc155, 0x47923e, 0x7fbf4a, 0x58a845, 0xe9b22c, 0xf07aa8];
+export const CONIFER = [0x3e8a3a, 0x2f6e33, 0x4a8f3e, 0x356b35];
+/** Trunks: the kit's wood. */
+export const TRUNK = 0xa8743f;
 export type PlantKind = "broadleaf" | "conifer" | "poplar" | "bush";
 
 /**
- * The boxes making a plant standing at (x, z), turned `turn` about upright: each trunk (`leaf`
- * null) and block of leaves (in its colour, from `colour`), as a unit box's matrix.
- * Broadleaf: a trunk (`trunk` tall), a wide crown and a smaller top. Conifer: tiers narrowing
- * upwards. Poplar: tall and narrow. Bush: two low blocks, no trunk.
+ * A tree's parts, as the kit makes its trees: a five-sided trunk, and a faceted ball of leaves
+ * (round trees, poplars stretched tall, bushes squashed) or a six-sided cone (pines).
  */
-export function plantBoxes(
+export type TreePart = "trunk" | "crown" | "cone";
+
+/** Each part's shape, 1 across and 1 high and centred (so the leaves' sway, see `swayMaterial`, works the same), shaded by face. */
+export function treeGeometries(): Record<TreePart, BufferGeometry> {
+  return {
+    trunk: shadedByFace(new CylinderGeometry(0.5, 0.5, 1, 5)),
+    crown: shadedByFace(new IcosahedronGeometry(0.5, 1)),
+    cone: shadedByFace(new ConeGeometry(0.5, 1, 6)),
+  };
+}
+
+/** `geometry` with a face's own normal on each corner, and its vertex colours shaded by it like `shadedBox`'s faces. */
+function shadedByFace(geometry: BufferGeometry): BufferGeometry {
+  const flat = geometry.index ? geometry.toNonIndexed() : geometry;
+  if (flat !== geometry) geometry.dispose();
+  flat.deleteAttribute("normal");
+  flat.computeVertexNormals();
+  const normal = flat.getAttribute("normal");
+  const tones: number[] = [];
+  for (let i = 0; i < normal.count; i++) {
+    const t = faceTone(normal.getX(i), normal.getY(i), normal.getZ(i));
+    tones.push(t, t, t);
+  }
+  flat.setAttribute("color", new Float32BufferAttribute(tones, 3));
+  return flat;
+}
+
+/**
+ * The parts of a plant standing at (x, z), turned `turn` about upright, each as its unit shape's
+ * matrix (see `treeGeometries`) with its leaves' colour (null for a trunk). Sizes in proportion
+ * to the kit's: a round tree's ball sits over the top of its trunk (`trunk` tall), a pine's cone
+ * from low on its trunk; a poplar is a tall narrow ball, a bush a low squashed one.
+ */
+export function plantParts(
   p: { x: number; z: number; kind: PlantKind; size: number; turn: number; colour: number; trunk?: number },
-  push: (m: Matrix4, leaf: number | null) => void,
+  push: (part: TreePart, m: Matrix4, leaf: number | null) => void,
 ): void {
   const { x, z, size, colour } = p;
   const turn = new Quaternion().setFromAxisAngle(UP, p.turn);
-  const box = (w: number, h: number, y: number, leaf: number | null) =>
-    push(new Matrix4().compose(new Vector3(x, y + h / 2, z), turn, new Vector3(w, h, w)), leaf);
+  const part = (kind: TreePart, w: number, h: number, y: number, leaf: number | null) =>
+    push(kind, new Matrix4().compose(new Vector3(x, y + h / 2, z), turn, new Vector3(w, h, w)), leaf);
   if (p.kind === "bush") {
-    box(2.6 * size, 1.4 * size, 0, colour);
-    box(1.8 * size, 0.8 * size, 1.3 * size, shade(colour, 1.1));
+    part("crown", 2.8 * size, 2.1 * size, 0, colour);
   } else if (p.kind === "broadleaf") {
     const trunk = p.trunk ?? 3 * size;
-    box(1, trunk, 0, null);
-    box(5.2 * size, 4.6 * size, trunk, colour);
-    box(3.4 * size, 2.6 * size, trunk + 4.4 * size, shade(colour, 1.12));
+    part("trunk", 1, trunk + 1, 0, null);
+    part("crown", 5.4 * size, 5.9 * size, trunk - 0.6 * size, colour);
   } else if (p.kind === "conifer") {
-    box(0.9, 2 * size, 0, null);
-    [5, 3.8, 2.6, 1.4].forEach((w, i) => box(w * size, 2.4 * size, (1.6 + i * 2.1) * size, shade(colour, 1 + i * 0.05)));
+    part("trunk", 0.9, 2.5 * size, 0, null);
+    part("cone", 6 * size, 8.5 * size, 2 * size, colour);
   } else {
-    box(0.8, 2 * size, 0, null);
-    box(2.6 * size, 9 * size, 1.6 * size, colour);
+    part("trunk", 0.8, 2.4 * size, 0, null);
+    part("crown", 3 * size, 9 * size, 1.6 * size, colour);
   }
+}
+
+/**
+ * Plants as instanced meshes, one per part (whatever the number of plants): `plant` adds each
+ * plant's parts. Trunks in `trunkMaterial`; leaves in `leafMaterial` (white, swaying), coloured per plant.
+ */
+export function treeMeshes(
+  geometries: Record<TreePart, BufferGeometry>,
+  trunkMaterial: MeshBasicMaterial,
+  leafMaterial: MeshBasicMaterial,
+  plant: (push: (part: TreePart, m: Matrix4, leaf: number | null) => void) => void,
+): InstancedMesh[] {
+  const parts: Record<TreePart, { m: Matrix4; leaf: number | null }[]> = { trunk: [], crown: [], cone: [] };
+  plant((part, m, leaf) => parts[part].push({ m, leaf }));
+  const tint = new Color();
+  return (Object.keys(parts) as TreePart[])
+    .filter((part) => parts[part].length)
+    .map((part) => {
+      const list = parts[part];
+      const mesh = new InstancedMesh(geometries[part], part === "trunk" ? trunkMaterial : leafMaterial, list.length);
+      list.forEach(({ m, leaf }, i) => {
+        mesh.setMatrixAt(i, m);
+        if (leaf !== null) mesh.setColorAt(i, tint.setHex(leaf));
+      });
+      mesh.castShadow = true;
+      mesh.computeBoundingSphere();
+      return mesh;
+    });
 }
 const UP = new Vector3(0, 1, 0);
 
-/** `colour` lightened (k > 1) or darkened (k < 1). */
-const shade = (colour: number, k: number) => new Color(colour).multiplyScalar(k).getHex();
 
 /** Trees along an office plaza, with a bench between each pair. */
 const PLAZA_SPACING = 12;
@@ -85,6 +152,7 @@ const GARAGE_WIDTH = 8;
 export class BuildingKit {
   private box = shadedBox();
   private roof = gableGeometry();
+  private treeShapes = treeGeometries();
   /** A unit square lying on the ground. */
   private plane = new PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
   private grass = flatMaterial(0x7fa86a);
@@ -151,6 +219,9 @@ export class BuildingKit {
    */
   setLights(exposure: number, night: number): void {
     for (const w of this.windows) w.material.color.copy(w.day).multiplyScalar(exposure).lerp(w.night, night);
+    // Villas' glass: the same glow, through the scene's exposure (linear tone mapping), which it undoes.
+    villaUniforms.villaNight.value = night;
+    villaUniforms.villaGlow.value.copy(VILLA_GLOW).multiplyScalar(1 / Math.max(exposure, 0.05));
   }
 
   /**
@@ -166,7 +237,8 @@ export class BuildingKit {
     // Local +z is the right of local +x: point x along the road the way that puts z towards the building.
     const right = { x: -lot.along.y, y: lot.along.x };
     const flip = lot.out.x * right.x + lot.out.y * right.y > 0 ? 1 : -1;
-    group.position.set(lot.centre.x, 0, lot.centre.y);
+    // The whole lot (its plot and all on it) at the footpath's height, so plot and footpath meet level.
+    group.position.set(lot.centre.x, KERB_HEIGHT, lot.centre.y);
     group.rotation.y = -Math.atan2(lot.along.y * flip, lot.along.x * flip);
     const { building, length: l, depth: d } = lot;
     let seed = (Math.round(lot.centre.x * 7 + lot.centre.y * 13) >>> 0) || 1;
@@ -182,14 +254,16 @@ export class BuildingKit {
     // stands where its car park leaves room (see carPark).
     const park = home ? null : carPark(lot);
     const at = park?.building;
-    const bl = at ? at.a1 - at.a0 : l * HOME_SHARE;
+    const villa = building === "villa" ? this.villa(lot, l * HOME_SHARE, d, doorX) : null;
+    const bl = villa ? villa.width : at ? at.a1 - at.a0 : l * HOME_SHARE;
     const bd = at ? at.z1 - at.z0 : d;
-    const bx = at ? ((at.a0 + at.a1) / 2) * flip : Math.max(-(l - bl) / 2, Math.min((l - bl) / 2, doorX));
+    const bx = villa ? villa.x : at ? ((at.a0 + at.a1) / 2) * flip : Math.max(-(l - bl) / 2, Math.min((l - bl) / 2, doorX));
     const bz = at ? (at.z0 + at.z1) / 2 : 0;
     const body = new Group();
     body.position.set(bx, 0, bz);
     // Homes: a garage door where the driveway ends (in the house's own frame).
-    for (const mesh of this.parts(building, bl, bd, doorX - bx)) body.add(mesh);
+    if (villa) body.add(villa.mesh);
+    else for (const mesh of this.parts(building as Exclude<Building, "villa">, bl, bd, doorX - bx)) body.add(mesh);
     // Levels gained upward: the same building, taller.
     body.scale.y = 1 + 0.3 * tallSteps(details);
     group.add(body);
@@ -304,37 +378,27 @@ export class BuildingKit {
    */
   private plantTrees(): Mesh[] {
     if (!this.trees.length) return [];
-    const trunks: Matrix4[] = [];
-    const leaves: { m: Matrix4; colour: number }[] = [];
-    for (const { x, z, bush } of this.trees) {
-      // (The same draws, in the same order, as ever: the same trees on the same lots.)
-      const pick = this.random();
-      const size = 0.8 + this.random() * 0.5;
-      const turn = this.random() * Math.PI;
-      let colour = LEAVES[Math.floor(this.random() * LEAVES.length)];
-      const kind: PlantKind = bush ? "bush" : pick < 0.5 ? "broadleaf" : pick < 0.8 ? "conifer" : "poplar";
-      const trunk = kind === "broadleaf" ? (2.5 + this.random() * 1.5) * size : undefined;
-      if (kind === "conifer") colour = CONIFER[Math.floor(this.random() * CONIFER.length)];
-      plantBoxes({ x, z, kind, size, turn, colour, trunk }, (m, leaf) => (leaf === null ? trunks.push(m) : leaves.push({ m, colour: leaf })));
-    }
-    const trunkMesh = new InstancedMesh(this.box, this.shaded(0x6b4a33), Math.max(1, trunks.length));
-    trunkMesh.count = trunks.length;
-    trunks.forEach((m, i) => trunkMesh.setMatrixAt(i, m));
-    const leafMesh = new InstancedMesh(this.box, this.leafMaterial, leaves.length);
-    leaves.forEach(({ m, colour }, i) => {
-      leafMesh.setMatrixAt(i, m);
-      leafMesh.setColorAt(i, new Color(colour));
+    const meshes = treeMeshes(this.treeShapes, this.shaded(TRUNK), this.leafMaterial, (push) => {
+      for (const { x, z, bush } of this.trees) {
+        // (The same draws, in the same order, as ever: the same trees on the same lots.)
+        const pick = this.random();
+        const size = 0.8 + this.random() * 0.5;
+        const turn = this.random() * Math.PI;
+        let colour = LEAVES[Math.floor(this.random() * LEAVES.length)];
+        const kind: PlantKind = bush ? "bush" : pick < 0.5 ? "broadleaf" : pick < 0.8 ? "conifer" : "poplar";
+        const trunk = kind === "broadleaf" ? (2.5 + this.random() * 1.5) * size : undefined;
+        if (kind === "conifer") colour = CONIFER[Math.floor(this.random() * CONIFER.length)];
+        plantParts({ x, z, kind, size, turn, colour, trunk }, push);
+      }
     });
-    for (const mesh of [trunkMesh, leafMesh]) {
-      mesh.renderOrder = BUILDING_ORDER;
-      mesh.castShadow = true;
-      mesh.computeBoundingSphere();
-    }
-    return [trunkMesh, leafMesh];
+    for (const mesh of meshes) mesh.renderOrder = BUILDING_ORDER;
+    return meshes;
   }
+
 
   dispose(): void {
     this.box.dispose();
+    for (const shape of Object.values(this.treeShapes)) shape.dispose();
     this.roof.dispose();
     this.plane.dispose();
     this.signPlane.dispose();
@@ -343,31 +407,71 @@ export class BuildingKit {
     for (const m of this.materials.values()) m.dispose();
   }
 
-  private parts(building: Building, l: number, d: number, garage: number): Mesh[] {
+  /**
+   * A villa (see `villas`) on a plot `l` long and `d` deep (its body's share of the lot): its
+   * variant by where it stands, scaled to fit, turned (mirrored) so its garage is on the
+   * driveway's side and slid so the garage door meets the driveway at `doorX`, within the plot.
+   * Its middle across the plot and its width, for the trees round it.
+   */
+  private villa(lot: Lot, l: number, d: number, doorX: number): { mesh: Mesh; x: number; width: number } {
+    const { variant, colors } = villaLook(lot.centre);
+    const model = villaModel(variant);
+    const scale = Math.min(l / (model.maxX - model.minX), d / (model.maxZ - model.minZ));
+    const width = (model.maxX - model.minX) * scale;
+    const middle = (model.minX + model.maxX) / 2;
+    const garage = model.garageX - middle;
+    const mirror = doorX >= 0 === garage >= 0 ? 1 : -1;
+    const room = (lot.length - width) / 2;
+    const x = Math.max(-room, Math.min(room, doorX - mirror * garage * scale));
+    const mesh = new Mesh(model.geometry, this.villaMaterial(this.details.colors ?? colors));
+    mesh.scale.set(mirror * scale, scale, scale);
+    // Its front on the body's front (the plot's road side).
+    mesh.position.set(-mirror * middle * scale, 0, -d / 2 - model.minZ * scale);
+    mesh.renderOrder = BUILDING_ORDER;
+    mesh.castShadow = true;
+    return { mesh, x, width };
+  }
+
+  /**
+   * A villa's material: the model's own colours, its walls and roof in `colors`, and its glass
+   * lit at night (see `setLights`). One per pair of colours; every villa shares its variant's geometry.
+   */
+  private villaMaterial(colors: { primary: number; secondary: number }): MeshBasicMaterial {
+    const key = `villa:${colors.primary}:${colors.secondary}`;
+    let material = this.materials.get(key);
+    if (!material) {
+      material = new MeshBasicMaterial({ vertexColors: true });
+      const walls = { value: new Color(colors.primary) };
+      const roof = { value: new Color(colors.secondary) };
+      material.onBeforeCompile = function (shader, renderer) {
+        // The scene's own changes first (tint, cloud shadows).
+        MeshBasicMaterial.prototype.onBeforeCompile.call(this, shader, renderer);
+        Object.assign(shader.uniforms, villaUniforms, { villaWalls: walls, villaRoof: roof });
+        shader.vertexShader = shader.vertexShader
+          .replace("#include <common>", "#include <common>\nattribute float role;\nvarying float vRole;")
+          .replace("#include <begin_vertex>", "#include <begin_vertex>\nvRole = role;");
+        shader.fragmentShader = shader.fragmentShader
+          .replace("#include <common>", "#include <common>\nvarying float vRole;\nuniform vec3 villaWalls;\nuniform vec3 villaRoof;\nuniform vec3 villaGlow;\nuniform float villaNight;")
+          .replace(
+            "#include <color_fragment>",
+            `#include <color_fragment>
+            if (vRole > 0.5 && vRole < 1.5) diffuseColor.rgb *= villaWalls;
+            else if (vRole > 1.5 && vRole < 2.5) diffuseColor.rgb *= villaRoof;`,
+          )
+          // After the scene's tint: lit windows aren't dimmed with the scene.
+          .replace("#include <tonemapping_fragment>", "if (vRole > 2.5) gl_FragColor.rgb = mix(gl_FragColor.rgb, villaGlow, villaNight);\n#include <tonemapping_fragment>");
+      };
+      material.customProgramCacheKey = () => "villa";
+      this.materials.set(key, material);
+    }
+    return material;
+  }
+
+  private parts(building: Exclude<Building, "villa">, l: number, d: number, garage: number): Mesh[] {
     const front = -d / 2;
     // Within the front wall, whatever the driveway's position.
     const garageX = Math.max(-l / 2 + GARAGE_WIDTH / 2 + 1, Math.min(l / 2 - GARAGE_WIDTH / 2 - 1, garage));
     switch (building) {
-      case "villa": {
-        // The window, and the front door round the side wall, on the other side from the garage.
-        const away = garageX > 0 ? -1 : 1;
-        const window = away * l * 0.3;
-        return [
-          this.block(0x8a8f96, l + 2, 0.6, d + 2, 0, 0, 0),
-          this.block(this.colour(0xf2ede4, "primary"), l, 10, d, 0, 0.6, 0),
-          this.gable(this.colour(0xb5543c, "secondary"), l + 2, 7, d + 3, 0, 10.6, 0),
-          this.block(0x9b4a36, 3, 6, 3, l * 0.25, 12, d * 0.15),
-          ...this.garageDoor(garageX, 0.6, front),
-          this.block(0x2b3440, 6, 3.5, 0.6, window, 4, front - 0.3),
-          this.block(0x6b4a33, 0.6, 6, 4, away * (l / 2 + 0.3), 0.6, front + d * 0.3),
-          // Back windows.
-          this.block(0x2b3440, 6, 3.5, 0.6, -l * 0.25, 4, -front + 0.3),
-          this.block(0x2b3440, 6, 3.5, 0.6, l * 0.25, 4, -front + 0.3),
-          // Side windows, behind the side door.
-          this.block(0x2b3440, 0.6, 3.5, 5, -(l / 2 + 0.3), 4, d * 0.2),
-          this.block(0x2b3440, 0.6, 3.5, 5, l / 2 + 0.3, 4, d * 0.2),
-        ];
-      }
       case "townhouse": {
         const unit = l / 3;
         const colours = [0xb86b4b, this.colour(0xe8dcc6, "primary"), 0x8f9aa3];
@@ -567,6 +671,10 @@ export function shadedBox(): BoxGeometry {
 
 /** How much brighter than their colour lit windows glow at night (the faces' shading dims them again). */
 const WINDOW_GLOW = 1.2;
+
+/** Shared by every villa's material: how far night has fallen, and the glow of its lit windows (see `setLights`). */
+const VILLA_GLOW = new Color(0xffd27a).multiplyScalar(WINDOW_GLOW);
+const villaUniforms = { villaNight: { value: 0 }, villaGlow: { value: VILLA_GLOW.clone() } };
 
 /**
  * Shared by every tree's leaves (see `swayMaterial`): the time, and how hard the wind blows them.

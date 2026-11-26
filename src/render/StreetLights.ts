@@ -1,6 +1,7 @@
 import {
   AdditiveBlending,
   BoxGeometry,
+  type BufferGeometry,
   CanvasTexture,
   Color,
   Group,
@@ -14,7 +15,7 @@ import {
 import type { RoadGraph } from "../core/roadGraph";
 import { rampLength } from "../core/grade";
 import { carriagewayWidth, FOOTPATH_WIDTH, hasTrees, roadWidth } from "../core/roadSpec";
-import { LEAVES, swayMaterial } from "./buildings";
+import { LEAVES, swayMaterial, treeGeometries, TRUNK } from "./buildings";
 import { carPark, DRIVEWAY_WIDTH, isSourceBuilding, lotPoint, SIDE_PATH } from "../core/terminal";
 
 /** Distance between lights along a road (they alternate sides), and clearance from a road's ends. */
@@ -54,8 +55,10 @@ export class StreetLights extends Group {
   private parts: InstancedMesh[] = [];
   private planterMaterial = new MeshBasicMaterial({ color: 0x9a968e });
   private soilMaterial = new MeshBasicMaterial({ color: 0x4a3a2a });
-  private trunkMaterial = new MeshBasicMaterial({ color: 0x6b4a33 });
-  private leafMaterial = swayMaterial(new Color(0.9, 0.9, 0.9));
+  /** Planters' trees: the kit's trunk and ball of leaves (see `treeGeometries`), shaded by face. */
+  private treeShapes = treeGeometries();
+  private trunkMaterial = new MeshBasicMaterial({ color: TRUNK, vertexColors: true });
+  private leafMaterial = Object.assign(swayMaterial(new Color(1, 1, 1)), { vertexColors: true });
   private dayHead = new Color(HEAD_COLOR.day);
   private nightHead = new Color(HEAD_COLOR.night);
 
@@ -150,9 +153,9 @@ export class StreetLights extends Group {
             const size = 0.8 + random() * 0.4;
             const trunk = (3 + random()) * size;
             trunks.push(box(at.x, trunk / 2, at.y, 0.8, trunk, 0.8, angle));
+            // A round tree, as the kit makes them (see `plantParts`): a ball of leaves over its trunk.
             const colour = LEAVES[Math.floor(random() * 7)];
-            leaves.push({ m: box(at.x, trunk + 2.2 * size, at.y, 4.6 * size, 4.4 * size, 4.6 * size, angle + random()), colour });
-            leaves.push({ m: box(at.x, trunk + 5.2 * size, at.y, 3 * size, 2.4 * size, 3 * size, angle), colour });
+            leaves.push({ m: box(at.x, trunk + 2.1 * size, at.y, 5 * size, 5.4 * size, 5 * size, angle + random()), colour });
           }
         }
       }
@@ -176,7 +179,7 @@ export class StreetLights extends Group {
         pools.push(box(head.x, y + (bridge ? 0.3 : 0.06), head.y, POOL, 1, POOL, angle));
       }
     }
-    const make = (geometry: BoxGeometry | PlaneGeometry, material: MeshBasicMaterial, matrices: Matrix4[], order: number, shadow: boolean) => {
+    const make = (geometry: BufferGeometry, material: MeshBasicMaterial, matrices: Matrix4[], order: number, shadow: boolean) => {
       const mesh = new InstancedMesh(geometry, material, Math.max(1, matrices.length));
       matrices.forEach((m, i) => mesh.setMatrixAt(i, m));
       mesh.count = matrices.length;
@@ -193,10 +196,10 @@ export class StreetLights extends Group {
       make(this.plane, this.poolMaterial, pools, POOL_ORDER, false),
       make(this.box, this.planterMaterial, planters, LIGHT_ORDER, true),
       make(this.box, this.soilMaterial, soil, LIGHT_ORDER, false),
-      make(this.box, this.trunkMaterial, trunks, LIGHT_ORDER, true),
+      make(this.treeShapes.trunk, this.trunkMaterial, trunks, LIGHT_ORDER, true),
     ];
     // Leaves: coloured per tree, swaying with the others (see `swayUniforms`).
-    const leafMesh = make(this.box, this.leafMaterial, leaves.map((l) => l.m), LIGHT_ORDER, true);
+    const leafMesh = make(this.treeShapes.crown, this.leafMaterial, leaves.map((l) => l.m), LIGHT_ORDER, true);
     leaves.forEach((l, i) => leafMesh.setColorAt(i, new Color(l.colour)));
     this.parts.push(leafMesh);
   }
@@ -210,6 +213,7 @@ export class StreetLights extends Group {
   dispose(): void {
     for (const mesh of this.parts) mesh.dispose();
     this.box.dispose();
+    for (const shape of Object.values(this.treeShapes)) shape.dispose();
     this.plane.dispose();
     this.poleMaterial.dispose();
     for (const m of [this.planterMaterial, this.soilMaterial, this.trunkMaterial, this.leafMaterial]) m.dispose();

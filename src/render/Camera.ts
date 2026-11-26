@@ -53,7 +53,8 @@ function isTextInput(target: EventTarget | null): boolean {
  * three.js (x, 0, y), viewed from above with +y pointing down the screen at yaw 0.
  *
  * - Zoom sets the orbit distance so that, looking straight down, 1 world unit = `zoom` screen pixels.
- * - Rotation (yaw) and tilt (pitch) orbit around the focus point, which stays at the screen centre.
+ * - Tilt (pitch) orbits around the focus point, which stays at the screen centre; rotation (yaw)
+ *   by key turns on the spot, the camera staying where it stands.
  * - Screen → world goes through a ray cast onto the ground plane, so it's exact at any angle.
  *
  * Pan: middle/right drag anywhere, left drag when `leftDragPans()` is true, or WASD / arrow keys.
@@ -190,7 +191,13 @@ export class Camera {
     }
 
     if (spin !== 0) {
+      // Turning on the spot: the camera stays where it stands and the view swings round it.
+      const back = this.distance * Math.cos(this.pitch);
+      const before = this.groundAxes().forward;
+      const stand = { x: this.focus.x - before.x * back, y: this.focus.y - before.y * back };
       this.yaw = (this.yaw - spin * KEY_ROTATE_SPEED * speedScale) % (Math.PI * 2);
+      const after = this.groundAxes().forward;
+      this.focus = { x: stand.x + after.x * back, y: stand.y + after.y * back };
       moved = true;
     }
 
