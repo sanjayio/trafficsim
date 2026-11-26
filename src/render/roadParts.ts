@@ -4,6 +4,7 @@ import type { DrivingSide } from "../core/roadGraph";
 import type { Vec2 } from "../core/geometry";
 import {
   carriagewayWidth,
+  FOOTPATH_WIDTH,
   hasMedian,
   LANE_WIDTH,
   MEDIAN_WIDTH,
@@ -71,6 +72,8 @@ export function buildRoadParts(
   side: DrivingSide = "right",
   /** Round off each end (start, end): left square where a bridge or tunnel meets a road it's drawn over. */
   caps: [boolean, boolean] = [true, true],
+  /** The stretch of road paved (the rest is drawn by a bend at that end, see `buildBendSurface`). */
+  paved: [number, number] = [0, path.length],
 ): { part: RoadPart; geometry: BufferGeometry }[] {
   const parts: { part: RoadPart; geometry: BufferGeometry }[] = [];
   const carriageway = carriagewayWidth(spec);
@@ -78,8 +81,8 @@ export function buildRoadParts(
   const deadEnd: RoadEnd = { inset: carriageway / 2, entry: "none", turnaround: true };
   const { start, end } = ends ?? { start: deadEnd, end: deadEnd };
 
-  if (spec.footpath) parts.push({ part: "footpath", geometry: convexGeometry(surface(path, roadWidth(spec), caps)) });
-  parts.push({ part: "asphalt", geometry: convexGeometry(surface(path, carriageway, caps)) });
+  if (spec.footpath) parts.push({ part: "footpath", geometry: convexGeometry(surface(path, roadWidth(spec), caps, paved)) });
+  parts.push({ part: "asphalt", geometry: convexGeometry(surface(path, carriageway, caps, paved)) });
 
   // Markings stop short of junctions so they don't run through them. At a two-way dead end they
   // run to the end, where lane lines loop round (one-way roads have no turnaround).
@@ -242,13 +245,55 @@ function turnArrow(tip: Vec2, travel: Vec2, right: Vec2, kinds: Set<number>): Ve
 }
 
 /** A full-width road surface with rounded ends, as convex polygons. */
-export function surface(path: SampledCurve, width: number, caps: [boolean, boolean] = [true, true]): Vec2[][] {
+export function surface(path: SampledCurve, width: number, caps: [boolean, boolean] = [true, true], [s0, s1] = [0, path.length]): Vec2[][] {
   return [
-    ...(caps[0] ? [halfDisc(path.at(0), width / 2, -1)] : []),
-    ...ribbon(path, 0, width, 0, path.length),
-    ...(caps[1] ? [halfDisc(path.at(path.length), width / 2, 1)] : []),
+    ...(caps[0] ? [halfDisc(path.at(s0), width / 2, -1)] : []),
+    ...ribbon(path, 0, width, s0, s1),
+    ...(caps[1] ? [halfDisc(path.at(s1), width / 2, 1)] : []),
   ];
 }
+
+/**
+ * The surface round a bend where two roads of the same layout join, from `edge(offset)`: the curve
+ * `offset` right of travel from where one road stops to where the other starts. Asphalt between the
+ * kerbs and footpaths outside them, each a constant width all the way round.
+ */
+export function buildBendSurface(spec: RoadSpec, edge: (offset: number) => Curve[]): { part: RoadPart; geometry: BufferGeometry }[] {
+  const half = carriagewayWidth(spec) / 2;
+  // The point a fraction of the way along a curve made of pieces.
+  const along = (curve: Curve[]) => {
+    const pieces = curve.map((c) => new SampledCurve(c));
+    const total = pieces.reduce((sum, p) => sum + p.length, 0);
+    return (f: number): Vec2 => {
+      let s = f * total;
+      for (const piece of pieces) {
+        if (s <= piece.length) return piece.at(s).p;
+        s -= piece.length;
+      }
+      const last = pieces[pieces.length - 1];
+      return last.at(last.length).p;
+    };
+  };
+  // Quads between two curves, sampled at the same fractions of the way along.
+  const band = (p: Curve[], q: Curve[]): Vec2[][] => {
+    const [a, b] = [along(p), along(q)];
+    const quads: Vec2[][] = [];
+    for (let i = 0; i < BEND_STEPS; i++) {
+      const [u, v] = [i / BEND_STEPS, (i + 1) / BEND_STEPS];
+      quads.push([a(u), a(v), b(v), b(u)]);
+    }
+    return quads;
+  };
+  const parts: { part: RoadPart; geometry: BufferGeometry }[] = [{ part: "asphalt", geometry: convexGeometry(band(edge(-half), edge(half))) }];
+  if (spec.footpath) {
+    const out = half + FOOTPATH_WIDTH;
+    parts.push({ part: "footpath", geometry: convexGeometry([...band(edge(-out), edge(-half)), ...band(edge(half), edge(out))]) });
+  }
+  return parts;
+}
+
+/** Quads each piece of a bend's surface is drawn in. */
+const BEND_STEPS = 24;
 
 /**
  * Point `radius` from frame `f`'s centre, at angle `theta` measured from its right side round

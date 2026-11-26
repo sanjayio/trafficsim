@@ -37,7 +37,7 @@ type Polyline = Vec2[];
  */
 export function buildJunctionParts(
   arms: JunctionArm[],
-  /** Kerb radius at the corners (the footpath's outer corner is this minus the footpath width); 0 for sharp corners. */
+  /** Kerb radius at the corners (the footpath's back edge is concentric, this minus the footpath width); 0 for sharp corners. */
   cornerRadius: number,
 ): {
   parts: { part: "asphalt" | "footpath"; geometry: BufferGeometry }[];
@@ -74,11 +74,13 @@ export function buildJunctionParts(
     }
 
     const walk = Math.min(a.footpath, b.footpath);
-    if (walk > 0) {
+    if (walk > 0 && kerb) {
+      // The footpath's back edge follows the kerb round (concentric with it), by the kerb's actual
+      // radius: a corner squeezed between short roads is tighter than asked for.
       const outer = fillet(
         trace(a, a.halfWidth + walk, reach),
         trace(b, -(b.halfWidth + walk), reach),
-        cornerRadius - walk,
+        kerb.radius - walk,
         maxShare,
       );
       if (outer) footpath.push(...outer.triangles);
@@ -110,7 +112,7 @@ function fillet(
   edgeB: Polyline,
   radius: number,
   maxShare: number,
-): { triangles: Vec2[][]; alongA: number; alongB: number } | null {
+): { triangles: Vec2[][]; alongA: number; alongB: number; radius: number } | null {
   if (radius <= 0.5) return null;
   const crossing = crossPolylines(edgeA, edgeB);
   if (!crossing) return null;
@@ -153,6 +155,8 @@ function fillet(
     triangles,
     alongA: alongAt(edgeA, i, corner) + tangentLength,
     alongB: alongAt(edgeB, j, corner) + tangentLength,
+    // The radius it was drawn with (smaller than asked for where the roads are short).
+    radius: tangentLength * Math.tan(halfGap),
   };
 }
 

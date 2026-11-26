@@ -11,7 +11,8 @@ import { convexGeometry, FlatLayer, flatMaterial } from "./flat";
 import { FurnitureKit, type FurnitureSpot } from "./furniture";
 import { buildJunctionParts, type JunctionArm } from "./junctionParts";
 import { buildRoundaboutParts } from "./roundaboutParts";
-import { buildBendMarkings, buildRoadParts, ROAD_PART_STYLE, type BendLine, type RoadEnd, type RoadPart } from "./roadParts";
+import { buildBendMarkings, buildBendSurface, buildRoadParts, ROAD_PART_STYLE, type BendLine, type RoadEnd, type RoadPart } from "./roadParts";
+import type { Curve } from "../core/curve";
 
 /** Roads meeting this close to straight on (radians short of 180°) just carry their markings through. */
 const STRAIGHT_ENOUGH = (10 * Math.PI) / 180;
@@ -321,12 +322,14 @@ export class RoadLayer extends Group {
       );
       this.cornerReach.set(nodeId, new Map(meeting.map((segment, i) => [segment.id, reach[i]])));
       const bend = this.bendLines(nodeId);
-      const all: { part: RoadPart; geometry: BufferGeometry }[] = [...parts, ...(bend ? buildBendMarkings(bend) : [])];
+      // A paved bend: a curved stretch of road, the same width all the way round, instead of corners.
+      const surface = this.pavedBend(nodeId) ? buildBendSurface(meeting[0].spec, this.bendEdge(nodeId)!) : parts;
+      const all: { part: RoadPart; geometry: BufferGeometry }[] = [...surface, ...(bend ? buildBendMarkings(bend) : [])];
       // Where a bridge or tunnel meets a road round a bend, the markings carried round it go over the
       // bridge's (or tunnel's) surface, which is drawn after the ground's.
       const graded = meeting.some((s) => s.spec.level);
       meshes = all.map(({ part, geometry }, i) => {
-        const over = graded && i >= parts.length;
+        const over = graded && i >= surface.length;
         if (over) this.liftOntoGraded(geometry, meeting);
         const mesh = new Mesh(geometry, over ? this.overMaterial(part) : this.materials[part]);
         mesh.renderOrder = over ? GRADED_ORDER + ROAD_PART_STYLE[part].layer + 0.5 : ROAD_PART_STYLE[part].layer;
@@ -404,9 +407,19 @@ export class RoadLayer extends Group {
     return SLIP_CLEAR;
   }
 
-  /** Where a road's markings stop short of a bend: where the corner's kerb meets it, and at least half the road's width. */
+  /**
+   * Where a road stops short of a bend (its markings, and its surface where the bend is paved as a
+   * curve): where the corner's kerb meets it, and far enough out for the inside footpath to curve round.
+   */
   private bendInset(segment: RoadSegment, nodeId: NodeId): number {
-    return Math.max(this.cornerReach.get(nodeId)?.get(segment.id) ?? 0, carriagewayWidth(segment.spec) / 2);
+    const margin = roadWidth(segment.spec) / 2 + 2;
+    // No more than half the road: the other end may stop short of a bend too.
+    return Math.min(Math.max(this.cornerReach.get(nodeId)?.get(segment.id) ?? 0, margin), this.graph.path(segment).length / 2);
+  }
+
+  /** Whether the bend at `nodeId` is paved as a curve joining its two roads (not on a bridge or in a tunnel). */
+  private pavedBend(nodeId: NodeId): boolean {
+    return this.bendEdge(nodeId) !== null && !this.graph.segmentsAt(nodeId).some((s) => s.spec.level);
   }
 
   /**
@@ -415,6 +428,29 @@ export class RoadLayer extends Group {
    * the roads carry straight on, or differ (their markings simply meet).
    */
   private bendLines(nodeId: NodeId): BendLine[] | null {
+    const curve = this.bendEdge(nodeId);
+    if (!curve) return null;
+    const { spec } = this.graph.segmentsAt(nodeId)[0];
+    const lines: BendLine[] = [];
+    if (spec.oneWay) {
+      const left = -carriagewayWidth(spec) / 2;
+      for (let k = 1; k < spec.lanes; k++) lines.push({ kind: "laneLine", pieces: curve(left + k * LANE_WIDTH) });
+    } else {
+      lines.push({ kind: hasMedian(spec) ? "median" : "centerLine", pieces: curve(0) });
+      const middle = hasMedian(spec) ? MEDIAN_WIDTH / 2 : 0;
+      for (let k = 1; k < spec.lanes; k++) {
+        for (const side of [1, -1]) lines.push({ kind: "laneLine", pieces: curve(side * (middle + k * LANE_WIDTH)) });
+      }
+    }
+    return lines;
+  }
+
+  /**
+   * Round a bend where two roads of the same layout join: the curve `offset` right of travel (from
+   * the first road, round the bend, onto the other) from where one stops to where the other starts.
+   * Null where the roads carry straight on, or differ.
+   */
+  private bendEdge(nodeId: NodeId): ((offset: number) => Curve[]) | null {
     const meeting = this.graph.segmentsAt(nodeId);
     if (meeting.length !== 2) return null;
     const [into, out] = meeting;
@@ -438,24 +474,11 @@ export class RoadLayer extends Group {
         t: { x: f.tangent.x * sign, y: f.tangent.y * sign },
       };
     };
-    const curve = (offset: number) => {
+    return (offset: number) => {
       const from = frame(into, true, offset);
       const to = frame(out, false, offset);
       return bridge(from.p, from.t, to.p, to.t);
     };
-    const { spec } = into;
-    const lines: BendLine[] = [];
-    if (spec.oneWay) {
-      const left = -carriagewayWidth(spec) / 2;
-      for (let k = 1; k < spec.lanes; k++) lines.push({ kind: "laneLine", pieces: curve(left + k * LANE_WIDTH) });
-    } else {
-      lines.push({ kind: hasMedian(spec) ? "median" : "centerLine", pieces: curve(0) });
-      const middle = hasMedian(spec) ? MEDIAN_WIDTH / 2 : 0;
-      for (let k = 1; k < spec.lanes; k++) {
-        for (const side of [1, -1]) lines.push({ kind: "laneLine", pieces: curve(side * (middle + k * LANE_WIDTH)) });
-      }
-    }
-    return lines;
   }
 
   /** The turns each lane of `segment` arriving at junction `nodeId` may make, from its lane connections. */
@@ -479,8 +502,12 @@ export class RoadLayer extends Group {
     const height = (s: number) => this.graph.heightAt(segment, s * scale);
     // A bridge or tunnel is drawn over the roads it meets: no rounded end lying on top of them there.
     const joined = (node: NodeId) => !graded || this.graph.segmentsAt(node).length < 2;
-    const caps: [boolean, boolean] = [joined(segment.a), joined(segment.b)];
-    const meshes: Mesh[] = buildRoadParts(path, segment.spec, ends, this.graph.drivingSide, caps).map(({ part, geometry }) => {
+    // Round a paved bend, the bend's curve carries on from where this road stops.
+    const trim = (node: NodeId) => (this.pavedBend(node) ? this.bendInset(segment, node) : 0);
+    const [trimA, trimB] = [trim(segment.a), trim(segment.b)];
+    const caps: [boolean, boolean] = [joined(segment.a) && !trimA, joined(segment.b) && !trimB];
+    const paved: [number, number] = [trimA, path.length - trimB];
+    const meshes: Mesh[] = buildRoadParts(path, segment.spec, ends, this.graph.drivingSide, caps, paved).map(({ part, geometry }) => {
       const layer = ROAD_PART_STYLE[part].layer;
       // A bridge or tunnel: lifted (or sunk) to its height, drawn with depth so it hides (and is
       // hidden by) what it passes over or under.
