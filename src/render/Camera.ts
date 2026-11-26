@@ -160,9 +160,9 @@ export class Camera {
     return this.raycaster.intersectObjects(objects)[0]?.object ?? null;
   }
 
-  /** Screen position (canvas pixels) of ground point `w`. */
-  worldToScreen(w: Vec2): Vec2 {
-    const v = this.projected.set(w.x, 0, w.y).project(this.camera);
+  /** Screen position (canvas pixels) of ground point `w`, or of the point `height` above it. */
+  worldToScreen(w: Vec2, height = 0): Vec2 {
+    const v = this.projected.set(w.x, height, w.y).project(this.camera);
     return { x: ((v.x + 1) / 2) * this.width, y: ((1 - v.y) / 2) * this.height };
   }
 

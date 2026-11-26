@@ -280,6 +280,23 @@ export class Simulation {
     return this.graph.heightAt(segment, this.graph.path(segment).nearest({ x, y }).s);
   }
 
+  /** Points `step` apart along the rest of a car's trip, from where it is to where it ends, with the road's height at each (for drawing its route). */
+  routeAhead(car: Car, step: number): { x: number; y: number; h: number }[] {
+    const points: { x: number; y: number; h: number }[] = [];
+    for (let i = car.leg; i < car.legs.length; i++) {
+      const leg = car.legs[i];
+      const length = legLength(leg);
+      const segment = leg.segment === undefined ? undefined : this.graph.segments.get(leg.segment);
+      const path = segment?.spec.level ? this.graph.path(segment) : null;
+      for (let s = i === car.leg ? Math.min(car.s, length) : 0; ; s = Math.min(s + step, length)) {
+        const { p } = legAt(leg, s);
+        points.push({ x: p.x, y: p.y, h: path ? this.graph.heightAt(segment!, path.nearest(p).s) : 0 });
+        if (s >= length) break;
+      }
+    }
+    return points;
+  }
+
   /** Position and heading of a car, for drawing it. */
   pose(car: Car): { x: number; y: number; heading: number } {
     const leg = car.legs[car.leg];

@@ -94,6 +94,21 @@ describe("Simulation", () => {
     expect(sim.delivered).toBeGreaterThan(5);
   });
 
+  it("gives the route ahead of a car, from where it is to the end of its trip", () => {
+    const graph = new RoadGraph();
+    road(graph, 0, 0, 400, 0);
+    graph.setTerminal(at(graph, 0, 0), { ...DEFAULT_SOURCE, rate: 30 });
+    graph.setTerminal(at(graph, 400, 0), SINK);
+    const sim = new Simulation(graph);
+    sim.parking = false;
+    run(sim, 8);
+    const car = sim.cars.find((c) => c.legs[c.leg].key.startsWith("r:"))!;
+    const route = sim.routeAhead(car, 3);
+    expect(route[0].x).toBeCloseTo(sim.pose(car).x);
+    expect(route[route.length - 1].x).toBeGreaterThan(380);
+    expect(route.every((p, i) => i === 0 || Math.hypot(p.x - route[i - 1].x, p.y - route[i - 1].y) <= 3.01)).toBe(true);
+  });
+
   it("parks cars in a shop's bays, holds the rest back while it's full, and sends them home after", () => {
     const graph = new RoadGraph();
     road(graph, 0, 0, 400, 0);

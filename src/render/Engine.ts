@@ -5,13 +5,15 @@ import { WORLD_SIZE } from "../core/constants";
 import type { Vec2 } from "../core/geometry";
 import { hasLaneConnector } from "../core/lanes";
 import { RoadGraph, type DrivingSide, type NodeId, type RoadSegment, type SavedMap } from "../core/roadGraph";
-import { SIM_DT, Simulation } from "../core/simulation";
+import { CAR_LENGTH, SIM_DT, Simulation, type Car } from "../core/simulation";
 import { LaneTool } from "../tools/LaneTool";
 import { TrafficTool } from "../tools/TrafficTool";
 import { ZoneMap } from "../core/zoning";
 import { levelUp } from "../core/growth";
+import { COVERED } from "../core/grade";
 import { slipRoad } from "../core/junction";
 import { CarLayer } from "./CarLayer";
+import { RouteLine } from "./RouteLine";
 import { ZoneLayer } from "./ZoneLayer";
 import { keepUnreadableAutosave, loadAutosave, loadView, openMapFile, saveAutosave, saveMapFile, saveView } from "../platform";
 import { gameStore, isSnapping, WEATHERS, type NodeAnchor, type ToolId, type Weather } from "../state/store";
@@ -45,7 +47,8 @@ export const HINT_OFFSET = 18;
 const CLICK_SLOP_PX = 5;
 /** Cap on real time fed to the simulation per frame, so a stall doesn't trigger a catch-up spiral. */
 const MAX_FRAME_MS = 250;
-/** How close (world units) the cursor must be to a source's road end to offer its options. */
+/** A click this close to a car (in pixels, at least) selects it. */
+const CAR_PICK_PX = 12;
 /** The map is kept in the browser this long after the last change. */
 const AUTOSAVE_DELAY_MS = 500;
 /** Fog range as multiples of the camera's focus distance: only the far edge of a tilted view fades. */
@@ -82,6 +85,9 @@ export class Engine {
   private visitsCheck = 0;
   private roads = new RoadLayer(this.graph);
   private cars = new CarLayer();
+  /** The car clicked with the Select tool, whose route is drawn (null: none). */
+  private selectedCar: Car | null = null;
+  private routeLine = new RouteLine();
   private zones = new ZoneMap(this.graph);
   private zoneLayer = new ZoneLayer(this.graph, this.zones);
   private overlay = new OverlayLayer();
@@ -121,7 +127,7 @@ export class Engine {
 
     this.scene.fog = this.fog;
     this.cleanups.push(this.graph.subscribe(() => (this.streetLightsDirty = true)));
-    this.scene.add(this.streetLights, ...this.shadows.objects, this.sky, this.rain, this.ground, this.grid, this.roads, this.zoneLayer, this.cars, this.overlay);
+    this.scene.add(this.streetLights, ...this.shadows.objects, this.sky, this.rain, this.ground, this.grid, this.roads, this.zoneLayer, this.cars, this.routeLine, this.overlay);
 
     // Left-drag pans with the Select tool, except in the lane connector, which needs left clicks.
     this.camera = new Camera(canvas, () => gameStore.getState().tool === "select" && gameStore.getState().laneEditNode === null);
@@ -196,6 +202,7 @@ export class Engine {
         ) {
           // A road in progress can't carry over to a mode with a different number of clicks.
           this.tool.cancel();
+          this.selectedCar = null;
           this.tool = state.laneEditNode !== null ? new LaneTool(this.ctx, state.laneEditNode) : this.tools[state.tool];
           this.refreshPreview();
           this.updateJunctionHover(this.pointer);
@@ -309,6 +316,7 @@ export class Engine {
     this.camera.destroy();
     this.roads.dispose();
     this.cars.dispose();
+    this.routeLine.dispose();
     this.zoneLayer.dispose();
     this.zones.dispose();
     this.sim.dispose();
@@ -425,6 +433,9 @@ export class Engine {
 
     this.roads.updateSignals(this.sim.time);
     this.cars.update(this.sim, look.night);
+    // The car's trip ended (or the road under it went): nothing to show.
+    if (this.selectedCar && !this.sim.cars.includes(this.selectedCar)) this.selectedCar = null;
+    this.routeLine.update(this.sim, this.selectedCar);
     this.roads.setLights(look.exposure, look.night);
     if (this.streetLightsDirty) {
       this.streetLights.rebuild();
@@ -482,6 +493,25 @@ export class Engine {
     const id = hit ? buildings.get(hit)! : undefined;
     if (id === undefined || !this.graph.terminal(id)) return null;
     return { id, kind: "building", ...this.camera.worldToScreen(this.anchorPoint(id, "building")!) };
+  }
+
+  /** The visible car nearest screen point `s`, if one is close enough to have been clicked. */
+  private carAt(s: Vec2): Car | null {
+    const reach = Math.max(CAR_PICK_PX, (CAR_LENGTH / 2) * this.camera.zoom);
+    let best: Car | null = null;
+    let bestDistance = reach;
+    for (const car of this.sim.cars) {
+      if (car.leaveAt !== null && car.legs[car.leg].underground) continue;
+      const lift = this.sim.heightOf(car);
+      if (lift < COVERED) continue;
+      const at = this.camera.worldToScreen(this.sim.pose(car), lift);
+      const distance = Math.hypot(at.x - s.x, at.y - s.y);
+      if (distance < bestDistance) {
+        best = car;
+        bestDistance = distance;
+      }
+    }
+    return best;
   }
 
   /** Where a junction's or source's options button sits: on the junction, or on the source's building. */
@@ -562,9 +592,12 @@ export class Engine {
       const up = this.toCanvas(e);
       const isClick = Math.hypot(up.x - this.leftDownAt.x, up.y - this.leftDownAt.y) < CLICK_SLOP_PX;
       this.leftDownAt = null;
-      // A click on the map closes the options panel; with the Select tool, a click on a junction or source opens it.
+      // A click on the map closes the options panel; with the Select tool, a click on a car shows its
+      // route, and on a junction or source opens its options.
       if (isClick && gameStore.getState().laneEditNode === null) {
-        gameStore.getState().setJunctionOpen(gameStore.getState().tool === "select" ? this.anchorAt(up) : null);
+        const select = gameStore.getState().tool === "select";
+        this.selectedCar = select ? this.carAt(up) : null;
+        gameStore.getState().setJunctionOpen(select && !this.selectedCar ? this.anchorAt(up) : null);
       }
     }
     if (e.button === 2 && this.rightDownAt) {
