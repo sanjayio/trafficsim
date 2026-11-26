@@ -7,7 +7,7 @@ import { carPark, defaultName, DRIVEWAY_WIDTH, isSourceBuilding, SIDE_PATH } fro
 import { bridge } from "../core/track";
 import { BuildingKit } from "./buildings";
 import { concreteMaterial, gradeStructure, liftGeometry, trenchMask } from "./grade";
-import { convexGeometry, FlatLayer, flatMaterial } from "./flat";
+import { FlatLayer, flatMaterial, pavedGeometry } from "./flat";
 import { disposeSurfaces, textureSurface } from "./surfaces";
 import { FurnitureKit, type FurnitureSpot } from "./furniture";
 import { buildJunctionParts, type JunctionArm } from "./junctionParts";
@@ -156,7 +156,7 @@ export class RoadLayer extends Group {
     const { path } = isSourceBuilding(lot.building) ? { path: null } : carPark(lot);
     const doorAt = (door.x - lot.centre.x) * along.x + (door.y - lot.centre.y) * along.y;
     const driveway = new Mesh(
-      convexGeometry([path === null ? strip(0, DRIVEWAY_WIDTH) : strip(path - doorAt, SIDE_PATH)]),
+      pavedGeometry([path === null ? strip(0, DRIVEWAY_WIDTH) : strip(path - doorAt, SIDE_PATH)]),
       this.materials.footpath,
     );
     // Paved like the footpath, and over the kerb (dropped where the drive crosses it).

@@ -1,4 +1,5 @@
-import { CanvasTexture, NoColorSpace, RepeatWrapping, type MeshBasicMaterial, type Texture } from "three";
+import { CanvasTexture, Color, NoColorSpace, RepeatWrapping, type MeshBasicMaterial, type Texture } from "three";
+import { palette } from "./palette";
 
 /**
  * Surface texture for asphalt and footpaths. Their shapes carry no texture coordinates, so the
@@ -20,17 +21,24 @@ const textures = new Map<Surface, Texture>();
 export function textureSurface(material: MeshBasicMaterial, surface: Surface): MeshBasicMaterial {
   const tile = TILE[surface];
   // Made on first draw (not before: tests build road layers without a page to draw a canvas on).
+  // Footpaths carry their kerb stones (vertices marked `kerb`, see `pavedGeometry`): drawn in the kerb's colour.
+  const kerb = surface === "footpath";
   material.onBeforeCompile = (shader) => {
     shader.uniforms.surfaceMap = { value: surfaceTexture(surface) };
     shader.uniforms.surfaceTile = { value: tile };
+    shader.uniforms.kerbColour = { value: new Color(palette.kerb) };
     shader.vertexShader = shader.vertexShader
-      .replace("#include <common>", "#include <common>\nvarying vec2 vSurface;")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvSurface = (modelMatrix * vec4(transformed, 1.0)).xz;");
+      .replace("#include <common>", `#include <common>\nvarying vec2 vSurface;${kerb ? "\nattribute float kerb;\nvarying float vKerb;" : ""}`)
+      .replace("#include <begin_vertex>", `#include <begin_vertex>\nvSurface = (modelMatrix * vec4(transformed, 1.0)).xz;${kerb ? "\nvKerb = kerb;" : ""}`);
     shader.fragmentShader = shader.fragmentShader
-      .replace("#include <common>", "#include <common>\nvarying vec2 vSurface;\nuniform sampler2D surfaceMap;\nuniform float surfaceTile;")
+      .replace(
+        "#include <common>",
+        `#include <common>\nvarying vec2 vSurface;\nuniform sampler2D surfaceMap;\nuniform float surfaceTile;${kerb ? "\nvarying float vKerb;\nuniform vec3 kerbColour;" : ""}`,
+      )
       .replace(
         "#include <map_fragment>",
         `#include <map_fragment>
+        ${kerb ? "diffuseColor.rgb = mix(diffuseColor.rgb, kerbColour, step(0.5, vKerb));" : ""}
         float grain = texture2D(surfaceMap, vSurface / surfaceTile).r;
         float patches = texture2D(surfaceMap, vSurface / (surfaceTile * ${PATCH_SCALE.toFixed(1)}) + 0.37).g;
         diffuseColor.rgb *= grain * 2.0 * (patches * 2.0);`,

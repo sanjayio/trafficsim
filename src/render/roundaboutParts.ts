@@ -2,7 +2,7 @@ import type { BufferGeometry } from "three";
 import { distance, segmentCrossing, type Vec2 } from "../core/geometry";
 import type { RoundaboutShape } from "../core/junction";
 import { LANE_WIDTH, MEDIAN_WIDTH } from "../core/roadSpec";
-import { convexGeometry, fill, FlatLayer, KERB_WIDTH } from "./flat";
+import { convexGeometry, fill, FlatLayer, KERB_WIDTH, pavedGeometry } from "./flat";
 import type { JunctionArm } from "./junctionParts";
 
 const RING_SEGMENTS = 48;
@@ -35,7 +35,7 @@ const TOOTH_WIDTH = 3.2;
 const TOOTH_LENGTH = 4.5;
 const TOOTH_GAP = 1.6;
 
-type Part = "asphalt" | "footpath" | "kerb" | "median" | "laneLine" | "stopLine";
+type Part = "asphalt" | "footpath" | "median" | "laneLine" | "stopLine";
 
 /** An approach to the roundabout, as seen leaving it. */
 export interface RoundaboutArm extends JunctionArm {
@@ -174,15 +174,14 @@ export function buildRoundaboutParts(
   const parts: RoundaboutLayout["parts"] = [
     { part: "asphalt", order: FlatLayer.asphalt + 0.5, geometry: convexGeometry(asphalt) },
     // The ring island's kerb sits above the asphalt; the island draws over it.
-    { part: "footpath", order: FlatLayer.markings + 0.1, geometry: convexGeometry([circle(centre, shape.island)]) },
+    { part: "footpath", order: FlatLayer.markings + 0.1, geometry: pavedGeometry([circle(centre, shape.island)]) },
     { part: "median", order: FlatLayer.markings + 0.2, geometry: convexGeometry([circle(centre, shape.island - ISLAND_KERB)]) },
   ];
-  if (footpath.length) parts.push({ part: "footpath", order: FlatLayer.footpath, geometry: convexGeometry(footpath) });
-  if (kerbStones.length) parts.push({ part: "kerb", order: FlatLayer.kerb, geometry: convexGeometry(kerbStones) });
+  if (footpath.length) parts.push({ part: "footpath", order: FlatLayer.footpath, geometry: pavedGeometry(footpath, kerbStones) });
   if (lines.length) parts.push({ part: "laneLine", order: FlatLayer.markings + 0.1, geometry: convexGeometry(lines) });
   if (teeth.length) parts.push({ part: "stopLine", order: FlatLayer.markings + 0.1, geometry: convexGeometry(teeth) });
   if (islands.length) {
-    parts.push({ part: "footpath", order: FlatLayer.markings + 0.3, geometry: convexGeometry(kerbs) });
+    parts.push({ part: "footpath", order: FlatLayer.markings + 0.3, geometry: pavedGeometry(kerbs) });
     parts.push({ part: "median", order: FlatLayer.markings + 0.4, geometry: convexGeometry(islands) });
   }
   return { parts, signs, approaches };

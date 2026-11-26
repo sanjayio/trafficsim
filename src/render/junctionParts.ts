@@ -1,6 +1,6 @@
 import type { BufferGeometry } from "three";
 import { segmentCrossing, type Vec2 } from "../core/geometry";
-import { convexGeometry, fill, KERB_WIDTH } from "./flat";
+import { convexGeometry, fill, KERB_WIDTH, pavedGeometry } from "./flat";
 
 /** One road as it leaves a junction. */
 export interface JunctionArm {
@@ -40,7 +40,7 @@ export function buildJunctionParts(
   /** Kerb radius at the corners (the footpath's back edge is concentric, this minus the footpath width); 0 for sharp corners. */
   cornerRadius: number,
 ): {
-  parts: { part: "asphalt" | "footpath" | "kerb"; geometry: BufferGeometry }[];
+  parts: { part: "asphalt" | "footpath"; geometry: BufferGeometry }[];
   /**
    * Per arm (same order as `arms`), how far along it the junction's paved corners reach, so its
    * markings can start clear of the junction.
@@ -96,9 +96,8 @@ export function buildJunctionParts(
     }
   }
 
-  const parts: { part: "asphalt" | "footpath" | "kerb"; geometry: BufferGeometry }[] = [];
-  if (footpath.length) parts.push({ part: "footpath", geometry: convexGeometry(footpath) });
-  if (kerbs.length) parts.push({ part: "kerb", geometry: convexGeometry(kerbs) });
+  const parts: { part: "asphalt" | "footpath"; geometry: BufferGeometry }[] = [];
+  if (footpath.length) parts.push({ part: "footpath", geometry: pavedGeometry(footpath, kerbs) });
   if (asphalt.length) parts.push({ part: "asphalt", geometry: convexGeometry(asphalt) });
   return { parts, reach: reachOut };
 }

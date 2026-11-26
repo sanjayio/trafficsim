@@ -11,8 +11,6 @@ export const FlatLayer = {
   ground: -1,
   grid: 0,
   footpath: 1,
-  /** Between footpath and asphalt: the asphalt covers all of a kerb band but its outer edge. */
-  kerb: 1.5,
   asphalt: 2,
   markings: 3,
   /** Previews draw above everything; their own parts keep the same relative order. */
@@ -21,7 +19,10 @@ export const FlatLayer = {
 
 const CAP_SEGMENTS = 12;
 
-/** Width of the kerb stones along a footpath's road edge (a lighter band, so the footpath reads as raised). */
+/**
+ * Width of the kerb stones along a footpath's road edge (a lighter band, so the footpath reads as
+ * raised). Laid under the asphalt's edge, which covers all of the band but its outer strip.
+ */
 export const KERB_WIDTH = 1;
 
 export function flatMaterial(color: number, opacity = 1): MeshBasicMaterial {
@@ -102,5 +103,20 @@ export function convexGeometry(outlines: Vec2[][]): BufferGeometry {
   const geometry = new BufferGeometry();
   geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
   geometry.setIndex(indices);
+  return geometry;
+}
+
+/**
+ * Footpath and its kerb stones in one geometry (one draw call): the kerb's triangles come after
+ * the footpath's, so they draw over it, and their vertices are marked (attribute `kerb`: 1) for the
+ * footpath material to colour them (see `textureSurface`). Every footpath-material geometry needs
+ * the mark, so pass no kerb for a plain one.
+ */
+export function pavedGeometry(footpath: Vec2[][], kerb: Vec2[][] = []): BufferGeometry {
+  const geometry = convexGeometry([...footpath, ...kerb]);
+  // convexGeometry adds a centre vertex per outline.
+  const plain = footpath.reduce((sum, outline) => sum + outline.length + 1, 0);
+  const count = geometry.getAttribute("position").count;
+  geometry.setAttribute("kerb", new Float32BufferAttribute(Array.from({ length: count }, (_, i) => (i < plain ? 0 : 1)), 1));
   return geometry;
 }
