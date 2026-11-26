@@ -99,7 +99,7 @@ export class Engine {
   private zoneLayer = new ZoneLayer(this.graph, this.zones);
   private overlay = new OverlayLayer();
   private camera!: Camera;
-  private tools!: Record<ToolId, Tool>;
+  private tools!: Record<ToolId | "bulldozeRoads" | "bulldozeBuildings", Tool>;
   private ctx!: ToolContext;
   private tool!: Tool;
   /** Last pointer position in canvas pixels, so tools can track the cursor while the camera moves under it. */
@@ -192,10 +192,11 @@ export class Engine {
     this.tools = {
       select: new SelectTool(ctx),
       road: new RoadTool(ctx),
-      bulldoze: new BulldozeTool(ctx),
       traffic: new TrafficTool(ctx),
+      bulldozeRoads: new BulldozeTool(ctx, "roads"),
+      bulldozeBuildings: new BulldozeTool(ctx, "buildings"),
     };
-    this.tool = this.tools[gameStore.getState().tool];
+    this.tool = this.toolFor(gameStore.getState());
     this.ctx = ctx;
     this.cleanups.push(
       gameStore.subscribe((state, prev) => {
@@ -203,6 +204,7 @@ export class Engine {
         if (state.highlightNode !== prev.highlightNode) this.showHighlight(state.highlightNode);
         if (
           state.tool !== prev.tool ||
+          state.bulldozing !== prev.bulldozing ||
           state.roadMode !== prev.roadMode ||
           state.bulldozeMode !== prev.bulldozeMode ||
           state.trafficMode !== prev.trafficMode ||
@@ -211,7 +213,7 @@ export class Engine {
           // A road in progress can't carry over to a mode with a different number of clicks.
           this.tool.cancel();
           this.selectedCar = null;
-          this.tool = state.laneEditNode !== null ? new LaneTool(this.ctx, state.laneEditNode) : this.tools[state.tool];
+          this.tool = this.toolFor(state);
           this.refreshPreview();
           this.updateJunctionHover(this.pointer);
         } else if (
@@ -457,7 +459,8 @@ export class Engine {
       this.streetLightsDirty = false;
     }
     this.streetLights.setLights(look.exposure, look.night);
-    this.zoneLayer.show(gameStore.getState().tool === "traffic" && gameStore.getState().laneEditNode === null);
+    const { tool, bulldozing, laneEditNode } = gameStore.getState();
+    this.zoneLayer.show(tool === "traffic" && !bulldozing && laneEditNode === null);
     this.trackJunctionPositions();
     this.keepView(deltaMS);
     this.grow(deltaMS);
@@ -488,10 +491,18 @@ export class Engine {
     if (this.pointer && !this.camera.isPanning) this.toolMove(this.pointer);
   }
 
+  /** The tool that takes the pointer: the lane connector, a bulldozer (for roads with the Road tool, buildings with Traffic), or the chosen tool. */
+  private toolFor(state: { tool: ToolId; bulldozing: boolean; laneEditNode: NodeId | null }): Tool {
+    if (state.laneEditNode !== null) return new LaneTool(this.ctx, state.laneEditNode);
+    if (state.bulldozing && state.tool === "road") return this.tools.bulldozeRoads;
+    if (state.bulldozing && state.tool === "traffic") return this.tools.bulldozeBuildings;
+    return this.tools[state.tool];
+  }
+
   /** Junction and source options are offered with the Select and Traffic tools, and with the Road tool between roads. */
   private junctionHoverAllowed(): boolean {
-    const { tool, laneEditNode } = gameStore.getState();
-    if (laneEditNode !== null) return false;
+    const { tool, laneEditNode, bulldozing } = gameStore.getState();
+    if (laneEditNode !== null || bulldozing) return false;
     return tool === "select" || tool === "traffic" || (tool === "road" && !this.tool.busy?.());
   }
 

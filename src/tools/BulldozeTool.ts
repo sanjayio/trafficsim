@@ -12,15 +12,19 @@ const AREA_ALPHA = 0.12;
 const BUILDING_APRON = 1.5;
 
 /**
- * Removes roads, and source and sink buildings.
- * - single: hover to highlight a road or building, click to remove it
- * - area: press, drag a rectangle, release to remove every road it touches and every building in
- *   it (a click still removes what's under the cursor). Esc or right-click abandons the drag.
+ * Removes roads (bulldozing with the Road tool) or source and sink buildings (with the Traffic
+ * tool), and only those.
+ * - single: hover to highlight one, click to remove it
+ * - area: press, drag a rectangle, release to remove every road it touches (or every building in
+ *   it; a click still removes what's under the cursor). Esc or right-click abandons the drag.
  */
 export class BulldozeTool implements Tool {
   private dragStart: Vec2 | null = null;
 
-  constructor(private ctx: ToolContext) {}
+  constructor(
+    private ctx: ToolContext,
+    private target: "roads" | "buildings",
+  ) {}
 
   onDown(p: Vec2): void {
     if (this.ctx.bulldozeMode() === "area") {
@@ -64,8 +68,11 @@ export class BulldozeTool implements Tool {
 
   private removeAt(p: Vec2): void {
     const { graph } = this.ctx;
-    const building = graph.terminalAt(p);
-    if (building !== undefined) return graph.setTerminal(building, null);
+    if (this.target === "buildings") {
+      const building = graph.terminalAt(p);
+      if (building !== undefined) graph.setTerminal(building, null);
+      return;
+    }
     const segment = graph.segmentAt(p);
     if (segment) graph.removeSegment(segment.id);
   }
@@ -74,17 +81,21 @@ export class BulldozeTool implements Tool {
   private selected(a: Vec2, b: Vec2): { roads: RoadSegment[]; buildings: NodeId[] } {
     const { graph } = this.ctx;
     const area = this.ctx.screenRect(a, b);
+    if (this.target === "roads") return { roads: graph.segmentsInPolygon(area), buildings: [] };
     const buildings = [...graph.allTerminals().keys()].filter((id) => {
       const lot = graph.terminalLot(id);
       return lot && pointInConvexPolygon(lot.centre, area);
     });
-    return { roads: graph.segmentsInPolygon(area), buildings };
+    return { roads: [], buildings };
   }
 
   private hover(p: Vec2): void {
     this.ctx.overlay.clear();
-    const building = this.ctx.graph.terminalAt(p);
-    if (building !== undefined) return this.highlightBuilding(building);
+    if (this.target === "buildings") {
+      const building = this.ctx.graph.terminalAt(p);
+      if (building !== undefined) this.highlightBuilding(building);
+      return;
+    }
     const segment = this.ctx.graph.segmentAt(p);
     if (segment) this.highlight(segment);
   }
@@ -107,7 +118,7 @@ export class BulldozeTool implements Tool {
     for (const segment of roads) this.highlight(segment);
     for (const id of buildings) this.highlightBuilding(id);
     const count = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
-    this.ctx.setHint(buildings.length ? `${count(roads.length, "road")}, ${count(buildings.length, "building")}` : count(roads.length, "road"));
+    this.ctx.setHint(this.target === "roads" ? count(roads.length, "road") : count(buildings.length, "building"));
   }
 
   private highlight(segment: RoadSegment): void {

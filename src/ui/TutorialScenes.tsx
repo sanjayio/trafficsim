@@ -104,18 +104,24 @@ const SCENES: Record<string, () => ReactNode> = {
   ),
 
   Tools: () => {
-    const tools = [MousePointer2, Road, Car, Tractor];
+    // The three tools, then the bulldozer beside them (for Road and Traffic), each lit in turn.
+    const tools: [typeof Car, string][] = [
+      [MousePointer2, "1"],
+      [Road, "2"],
+      [Car, "3"],
+      [Tractor, "B"],
+    ];
     return (
       <div className="flex aspect-[8/3] items-center justify-center gap-3">
-        {tools.map((Icon, i) => (
-          <div key={i} className="flex flex-col items-center gap-1.5">
+        {tools.map(([Icon, key], i) => (
+          <div key={key} className={`flex flex-col items-center gap-1.5 ${i === 3 ? "ml-3" : ""}`}>
             <span
               className={`tut-tool grid size-11 place-items-center rounded-lg border border-white/10 bg-neutral-900/85 ${i === 3 ? "text-red-400" : "text-neutral-300"}`}
               style={{ animationDelay: `${i * 1.2}s` }}
             >
               <Icon size={20} aria-hidden />
             </span>
-            <span className="rounded bg-neutral-900/70 px-1.5 text-[10px] font-semibold tabular-nums text-neutral-300">{i + 1}</span>
+            <span className="rounded bg-neutral-900/70 px-1.5 text-[10px] font-semibold tabular-nums text-neutral-300">{key}</span>
           </div>
         ))}
       </div>

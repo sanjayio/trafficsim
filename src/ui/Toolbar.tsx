@@ -38,8 +38,7 @@ import { IconButton, keepFocusOnGame, Panel, PanelButton } from "./Panel";
 const TOOLS: { id: ToolId; label: string; key: string; icon: LucideIcon }[] = [
   { id: "select", label: "Select", key: "1", icon: MousePointer2 },
   { id: "road", label: "Road", key: "2", icon: Road },
-  { id: "bulldoze", label: "Bulldoze", key: "3", icon: Tractor },
-  { id: "traffic", label: "Traffic", key: "4", icon: Car },
+  { id: "traffic", label: "Traffic", key: "3", icon: Car },
 ];
 
 /** A bridge, drawn in the lucide style: a deck on two arches. */
@@ -101,6 +100,9 @@ const ROAD_MODES: { id: RoadMode; label: string; icon: LucideIcon | typeof Curve
 
 export function Toolbar() {
   const tool = useGame((s) => s.tool);
+  const bulldozing = useGame((s) => s.bulldozing);
+  // Bulldozing belongs to the Road tool (roads) and the Traffic tool (buildings).
+  const canBulldoze = tool === "road" || tool === "traffic";
   const speed = useGame((s) => s.speed);
 
   useEffect(() => {
@@ -108,6 +110,7 @@ export function Toolbar() {
       if (e.repeat || e.metaKey || e.ctrlKey) return;
       const match = TOOLS.find((t) => t.key === e.key);
       if (match) gameStore.getState().setTool(match.id);
+      if (e.key === "b" || e.key === "B") gameStore.getState().setBulldozing(!gameStore.getState().bulldozing);
       const { tool, parallel, nudgeParallelOffset } = gameStore.getState();
       if (tool === "road" && parallel && (e.key === "[" || e.key === "]")) nudgeParallelOffset(e.key === "]" ? 1 : -1);
       if (e.code === "Space") {
@@ -126,26 +129,33 @@ export function Toolbar() {
       <div className="flex items-end gap-2">
         <div className="relative">
           <div className="absolute bottom-full left-0 mb-2 w-max">
-            {tool === "road" && <RoadOptions />}
-            {tool === "traffic" && <TrafficOptions />}
+            {tool === "road" && !bulldozing && <RoadOptions />}
+            {tool === "traffic" && !bulldozing && <TrafficOptions />}
           </div>
           <Panel>
-            {TOOLS.filter((t) => t.id !== "bulldoze").map(({ id, label, icon: Icon }) => (
+            {TOOLS.map(({ id, label, icon: Icon }) => (
               <IconButton key={id} label={label} pressed={tool === id} onClick={() => gameStore.getState().setTool(id)}>
                 <Icon size={ICON_SIZE} strokeWidth={2} aria-hidden />
               </IconButton>
             ))}
           </Panel>
         </div>
-        {/* Bulldoze stands apart, tinted red: it destroys. */}
-        <div className="relative">
-          <div className="absolute bottom-full left-0 mb-2 w-max">{tool === "bulldoze" && <BulldozeOptions />}</div>
-          <Panel>
-            <IconButton label="Bulldoze" danger pressed={tool === "bulldoze"} onClick={() => gameStore.getState().setTool("bulldoze")}>
-              <Tractor size={ICON_SIZE} strokeWidth={2} aria-hidden />
-            </IconButton>
-          </Panel>
-        </div>
+        {/* Bulldoze stands apart, tinted red: it destroys. Roads with the Road tool, buildings with Traffic. */}
+        {canBulldoze && (
+          <div className="relative">
+            <div className="absolute bottom-full left-0 mb-2 w-max">{bulldozing && <BulldozeOptions />}</div>
+            <Panel>
+              <IconButton
+                label={tool === "road" ? "Bulldoze roads" : "Bulldoze buildings"}
+                danger
+                pressed={bulldozing}
+                onClick={() => gameStore.getState().setBulldozing(!bulldozing)}
+              >
+                <Tractor size={ICON_SIZE} strokeWidth={2} aria-hidden />
+              </IconButton>
+            </Panel>
+          </div>
+        )}
       </div>
       <Panel>
         {SPEEDS.map((s) => (

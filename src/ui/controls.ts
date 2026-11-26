@@ -26,8 +26,8 @@ export const CONTROL_GROUPS: ControlGroup[] = [
     rows: [
       { keys: ["1"], action: "Select" },
       { keys: ["2"], action: "Road" },
-      { keys: ["3"], action: "Bulldoze" },
-      { keys: ["4"], action: "Traffic: place sources and sinks" },
+      { keys: ["3"], action: "Traffic: place sources and sinks" },
+      { keys: ["B"], action: "Bulldoze: roads with the Road tool, buildings with Traffic" },
     ],
   },
   {
@@ -65,8 +65,8 @@ export const CONTROL_GROUPS: ControlGroup[] = [
   {
     title: "Bulldozing",
     rows: [
-      { keys: ["Click"], action: "One by one: remove the highlighted road" },
-      { keys: ["Drag"], action: "Area: remove every road the rectangle touches" },
+      { keys: ["Click"], action: "One by one: remove the highlighted road (Road tool) or building (Traffic tool)" },
+      { keys: ["Drag"], action: "Area: remove every road the rectangle touches, or every building in it" },
       { keys: ["Esc", "or", "Right-click"], action: "Abandon an area selection" },
     ],
   },

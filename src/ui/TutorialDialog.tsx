@@ -20,7 +20,10 @@ import { TutorialScene } from "./TutorialScenes";
 
 /** What each group of controls is for, in a sentence, with an icon (by the group's title in `controls.ts`). */
 const INTRO: Record<string, { icon: LucideIcon; text: string }> = {
-  Tools: { icon: MousePointer2, text: "Four tools sit at the bottom left. Pick one with its button or its number key." },
+  Tools: {
+    icon: MousePointer2,
+    text: "Three tools sit at the bottom left: pick one with its button or its number key. With Road or Traffic, the bulldozer beside them (B) removes roads or buildings.",
+  },
   "Building roads": {
     icon: Road,
     text: "With the Road tool, choose a shape, the lanes and any extras above the tools, then click on the map. Guides and the magnet snap ends onto roads and neat angles.",
@@ -33,7 +36,10 @@ const INTRO: Record<string, { icon: LucideIcon; text: string }> = {
     icon: Car,
     text: "Homes send cars out to shops and offices along the fastest route. Place them on the tiles that line every road.",
   },
-  Bulldozing: { icon: Tractor, text: "Clear roads and buildings, one by one or by dragging a box." },
+  Bulldozing: {
+    icon: Tractor,
+    text: "Turn on the bulldozer beside the tools: with the Road tool it clears roads, with Traffic buildings. One by one, or by dragging a box.",
+  },
   Camera: { icon: Camera, text: "Move round the city, turn it, zoom and tilt for a 3D view." },
   Simulation: { icon: Gauge, text: "Pause, or speed time up, with the buttons at the bottom right." },
 };

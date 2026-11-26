@@ -9,7 +9,7 @@ import type { BulldozeMode, RoadMode, TrafficMode } from "../tools/Tool";
 export const PARALLEL_OFFSET_STEP = 8;
 export const PARALLEL_OFFSET_MAX = 512;
 
-export type ToolId = "select" | "road" | "bulldoze" | "traffic";
+export type ToolId = "select" | "road" | "traffic";
 
 /** A junction or source offering its ⚙ button or options panel, at its screen position in canvas pixels. */
 export interface NodeAnchor {
@@ -29,6 +29,8 @@ export interface Stats {
 
 interface GameState {
   tool: ToolId;
+  /** Bulldozing with the Road tool (roads) or the Traffic tool (buildings), instead of building. */
+  bulldozing: boolean;
   /** Time of day shown, in hours (0–24): the sun, sky and light. */
   timeOfDay: number;
   weather: Weather;
@@ -73,6 +75,7 @@ interface GameState {
   /** Mirrors the map's driving side (the road network owns it and saves it with the map). */
   drivingSide: DrivingSide;
   setTool: (tool: ToolId) => void;
+  setBulldozing: (bulldozing: boolean) => void;
   setSpeed: (speed: SimSpeed) => void;
   setSnapToGrid: (snapToGrid: boolean) => void;
   setSnapInverted: (snapInverted: boolean) => void;
@@ -103,6 +106,7 @@ interface GameState {
  */
 export const gameStore = createStore<GameState>()((set, get) => ({
   tool: "select",
+  bulldozing: false,
   timeOfDay: 13,
   weather: "sunny",
   setTimeOfDay: (timeOfDay) => set({ timeOfDay }),
@@ -130,8 +134,9 @@ export const gameStore = createStore<GameState>()((set, get) => ({
   mapName: "",
   junctionHover: null,
   junctionOpen: null,
-  // Picking a tool ends any lane connecting.
-  setTool: (tool) => set({ tool, laneEditNode: null }),
+  // Picking a tool ends any lane connecting; bulldozing carries on between Road and Traffic, not to Select.
+  setTool: (tool) => set((s) => ({ tool, laneEditNode: null, bulldozing: s.bulldozing && tool !== "select" })),
+  setBulldozing: (bulldozing) => set((s) => ({ bulldozing: bulldozing && s.tool !== "select", laneEditNode: null })),
   setSpeed: (speed) => set(speed === 0 ? { speed } : { speed, lastSpeed: speed }),
   setSnapToGrid: (snapToGrid) => set({ snapToGrid }),
   setSnapInverted: (snapInverted) => set({ snapInverted }),
