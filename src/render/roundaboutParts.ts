@@ -83,6 +83,8 @@ export function buildRoundaboutParts(
   const teeth: Vec2[][] = [];
   const kerbs: Vec2[][] = [];
   const islands: Vec2[][] = [];
+  // Round each splitter island's edge, its kerb's face (islands stand raised, like the footpaths).
+  const islandEdges: Vec2[][] = [];
   for (let k = 1; k < shape.lanes; k++) lines.push(...dashedCircle(centre, shape.island + k * LANE_WIDTH + 2));
   const walkWidth = Math.max(0, ...arms.map((a) => a.footpath));
   if (walkWidth > 0) {
@@ -139,6 +141,7 @@ export function buildRoundaboutParts(
         }
       }
       kerbs.push(...island(arm, (a) => shift(a), start, end, 0));
+      islandEdges.push(islandOutline(arm, (a) => shift(a), start, end));
       islands.push(...island(arm, (a) => shift(a), start, end, SPLITTER_KERB));
 
       // Each half's lane lines move out with it; the centre line gives way to the island. They
@@ -183,14 +186,14 @@ export function buildRoundaboutParts(
   const parts: RoundaboutLayout["parts"] = [
     { part: "asphalt", order: FlatLayer.asphalt + 0.5, geometry: convexGeometry(asphalt) },
     // The ring island's kerb sits above the asphalt; the island draws over it.
-    { part: "footpath", order: FlatLayer.markings + 0.1, geometry: pavedGeometry([circle(centre, shape.island)]) },
+    { part: "footpath", order: FlatLayer.markings + 0.1, geometry: pavedGeometry([circle(centre, shape.island)], [], [[...circle(centre, shape.island), circle(centre, shape.island)[0]]]) },
     { part: "median", order: FlatLayer.markings + 0.2, geometry: convexGeometry([circle(centre, shape.island - ISLAND_KERB)]) },
   ];
   if (footpath.length) parts.push({ part: "footpath", order: FlatLayer.footpath, geometry: pavedGeometry(footpath, kerbStones, faces) });
   if (lines.length) parts.push({ part: "laneLine", order: FlatLayer.markings + 0.1, geometry: convexGeometry(lines) });
   if (teeth.length) parts.push({ part: "stopLine", order: FlatLayer.markings + 0.1, geometry: convexGeometry(teeth) });
   if (islands.length) {
-    parts.push({ part: "footpath", order: FlatLayer.markings + 0.3, geometry: pavedGeometry(kerbs) });
+    parts.push({ part: "footpath", order: FlatLayer.markings + 0.3, geometry: pavedGeometry(kerbs, [], islandEdges) });
     parts.push({ part: "median", order: FlatLayer.markings + 0.4, geometry: convexGeometry(islands) });
   }
   return { parts, signs, approaches };
@@ -222,6 +225,23 @@ function island(arm: JunctionArm, half: (a: number) => number, a0: number, a1: n
   }
   if (r > 0) shapes.push(nose);
   return shapes;
+}
+
+/** The edge round a splitter island (as `island` with no inset), closed: down one side, back up the other, round the nose. */
+function islandOutline(arm: JunctionArm, half: (a: number) => number, a0: number, a1: number): Vec2[] {
+  const side = (sign: number) => {
+    const out: Vec2[] = [];
+    for (let a = a0; a < a1; a += STEP) out.push(arm.edge(sign * half(a), a));
+    out.push(arm.edge(sign * half(a1), a1));
+    return out;
+  };
+  const r = half(a0);
+  const nose: Vec2[] = [];
+  for (let i = 0; i <= CURVE_SEGMENTS; i++) {
+    const angle = (Math.PI * i) / CURVE_SEGMENTS;
+    nose.push(arm.edge(r * Math.cos(angle), a0 - r * Math.sin(angle)));
+  }
+  return [...side(-1), ...side(1).reverse(), ...nose];
 }
 
 /** Dashed line along an arm at a (possibly varying) offset, from `a0` to `a1`. */

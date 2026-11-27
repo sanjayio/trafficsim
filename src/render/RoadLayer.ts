@@ -349,8 +349,8 @@ export class RoadLayer extends Group {
       meshes = layout.parts.map(({ part, order, geometry }) => {
         const mesh = new Mesh(geometry, this.materials[part]);
         mesh.renderOrder = order;
-        // Footpaths (and the islands' kerbs) stand above the road.
-        if (part === "footpath") mesh.position.y = KERB_HEIGHT;
+        // Footpaths and the islands (their kerbs and planting) stand above the road.
+        if (part === "footpath" || part === "median") mesh.position.y = KERB_HEIGHT;
         return mesh;
       });
     } else {

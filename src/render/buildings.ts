@@ -231,7 +231,8 @@ export class BuildingKit {
     const home = isSourceBuilding(building);
     // The plot is the building's tiles: from the road's edge to just behind the building, and a little to each side.
     const plot = { left: -l / 2 - 2, right: l / 2 + 2, front: -d / 2 - LOT_SETBACK, back: d / 2 + 2 };
-    group.add(this.flat(home ? this.grass : this.concrete, FlatLayer.footpath, (plot.left + plot.right) / 2, (plot.front + plot.back) / 2, plot.right - plot.left, plot.back - plot.front));
+    // Drawn before the footpath, which covers it wherever they overlap (as by a roundabout's flared kerb).
+    group.add(this.flat(home ? this.grass : this.concrete, FlatLayer.footpath - 0.5, (plot.left + plot.right) / 2, (plot.front + plot.back) / 2, plot.right - plot.left, plot.back - plot.front));
 
     // A home is narrower than its plot, over its driveway, with trees round it; a shop or office
     // stands where its car park leaves room (see carPark).
