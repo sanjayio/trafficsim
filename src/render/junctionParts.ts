@@ -46,9 +46,15 @@ export function buildJunctionParts(
    * markings can start clear of the junction.
    */
   reach: number[];
+  /** Each corner's outer edge (the footpath's back, or the kerb without one: `footpath`): where a bridge's or tunnel's walls go round it. */
+  corners: { edge: Vec2[]; footpath: boolean }[];
+  /** Per arm, how far along it the corners on its right and left (leaving the junction) start: its walls stop there. */
+  sides: { right: number; left: number }[];
 } {
   const reachOut = arms.map(() => 0);
-  if (arms.length < 2) return { parts: [], reach: reachOut };
+  const corners: { edge: Vec2[]; footpath: boolean }[] = [];
+  const sides = arms.map(() => ({ right: 0, left: 0 }));
+  if (arms.length < 2) return { parts: [], reach: reachOut, corners, sides };
   const angleOf = (a: JunctionArm) => Math.atan2(a.dir.y, a.dir.x);
   const order = arms.map((_, i) => i).sort((p, q) => angleOf(arms[p]) - angleOf(arms[q]));
   const asphalt: Vec2[][] = [];
@@ -86,7 +92,12 @@ export function buildJunctionParts(
         kerb.radius - walk,
         maxShare,
       );
-      if (outer) footpath.push(...outer.triangles);
+      if (outer) {
+        footpath.push(...outer.triangles);
+        corners.push({ edge: outer.curve, footpath: true });
+        sides[ia].right = outer.alongA;
+        sides[ib].left = outer.alongB;
+      }
       // The kerb stones round the corner, the same way (the asphalt covers all but their outer edge).
       const stones = fillet(
         trace(a, a.halfWidth + KERB_WIDTH, reach),
@@ -96,13 +107,17 @@ export function buildJunctionParts(
       );
       if (stones) kerbs.push(...stones.triangles);
       faces.push(kerb.curve);
+    } else if (kerb) {
+      corners.push({ edge: kerb.curve, footpath: false });
+      sides[ia].right = kerb.alongA;
+      sides[ib].left = kerb.alongB;
     }
   }
 
   const parts: { part: "asphalt" | "footpath"; geometry: BufferGeometry }[] = [];
   if (footpath.length) parts.push({ part: "footpath", geometry: pavedGeometry(footpath, kerbs, faces) });
   if (asphalt.length) parts.push({ part: "asphalt", geometry: convexGeometry(asphalt) });
-  return { parts, reach: reachOut };
+  return { parts, reach: reachOut, corners, sides };
 }
 
 /** An arm's edge `offset` right of its direction, from the junction outwards. */
@@ -133,8 +148,11 @@ function fillet(
   const restA = [corner, ...edgeA.slice(i + 1)];
   const restB = [corner, ...edgeB.slice(j + 1)];
 
-  const dirA = direction(restA);
-  const dirB = direction(restB);
+  // Over a whole step: the corner can fall just short of a traced point, leaving a first leg too
+  // short to give a direction (and a wrong angle, and so a far wider corner than asked for).
+  const ahead = (rest: Polyline) => walk(rest, EDGE_STEP).slice(-1);
+  const dirA = direction([corner, ...ahead(restA)]);
+  const dirB = direction([corner, ...ahead(restB)]);
   const cos = Math.max(-1, Math.min(1, dirA.x * dirB.x + dirA.y * dirB.y));
   const halfGap = Math.acos(cos) / 2;
   if (halfGap < 1e-3 || halfGap > Math.PI / 2 - STRAIGHT_THROUGH / 2) return null;

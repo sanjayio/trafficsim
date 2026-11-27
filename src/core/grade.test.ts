@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { straightCurve } from "./curve";
 import { LEVEL_HEIGHT, levelHeight, TUNNEL_DEPTH } from "./grade";
 import { RoadGraph } from "./roadGraph";
-import { DEFAULT_ROAD_SPEC, parseRoadSpec } from "./roadSpec";
+import { DEFAULT_ROAD_SPEC, normalizeRoadSpec, parseRoadSpec } from "./roadSpec";
 import { DEFAULT_SOURCE } from "./terminal";
 
 const line = (ax: number, ay: number, bx: number, by: number) => straightCurve({ x: ax, y: ay }, { x: bx, y: by });
@@ -55,6 +55,15 @@ describe("bridges and tunnels", () => {
     const end = graph.nodeNear({ x: -300, y: 0 }, 1, 1)!;
     graph.setTerminal(end.id, DEFAULT_SOURCE);
     expect(graph.terminal(end.id)).toBeUndefined();
+  });
+
+  it("have no footpaths, trees or median in tunnels (on bridges they do)", () => {
+    const full = { ...DEFAULT_ROAD_SPEC, footpath: true, trees: true, median: true };
+    const graph = new RoadGraph();
+    const [tunnel] = graph.buildRoad(line(0, 0, 400, 0), { ...full, level: -1 });
+    expect(tunnel.spec).toMatchObject({ footpath: false, median: false });
+    expect(tunnel.spec.trees).toBeUndefined();
+    expect(normalizeRoadSpec({ ...full, level: 1 })).toMatchObject({ footpath: true, median: true, trees: true });
   });
 
   it("go up three steps and down three", () => {

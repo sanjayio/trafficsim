@@ -15,6 +15,7 @@ import {
 import type { RoadGraph } from "../core/roadGraph";
 import { carriagewayWidth, FOOTPATH_WIDTH, hasTrees, roadWidth } from "../core/roadSpec";
 import { LEAVES, swayMaterial, treeGeometries, TRUNK } from "./buildings";
+import { KERB_HEIGHT } from "./flat";
 import { carPark, DRIVEWAY_WIDTH, isSourceBuilding, lotPoint, SIDE_PATH } from "../core/terminal";
 
 /** Distance between lights along a road (they alternate sides), and clearance from a road's ends. */
@@ -144,21 +145,24 @@ export class StreetLights extends Group {
             const at = { x: f.p.x + f.normal.x * side * kerb, y: f.p.y + f.normal.y * side * kerb };
             if (onRoad(at) || onDriveway(at, PLANTER)) continue;
             const angle = Math.atan2(f.tangent.y, f.tangent.x);
-            planters.push(box(at.x, 0.4, at.y, PLANTER, 0.8, PLANTER, angle));
-            soil.push(box(at.x, 0.82, at.y, PLANTER - 0.8, 0.05, PLANTER - 0.8, angle));
+            // On the footpath, a kerb's height up.
+            const k = KERB_HEIGHT;
+            planters.push(box(at.x, k + 0.4, at.y, PLANTER, 0.8, PLANTER, angle));
+            soil.push(box(at.x, k + 0.82, at.y, PLANTER - 0.8, 0.05, PLANTER - 0.8, angle));
             const size = 0.8 + random() * 0.4;
             const trunk = (3 + random()) * size;
-            trunks.push(box(at.x, trunk / 2, at.y, 0.8, trunk, 0.8, angle));
+            trunks.push(box(at.x, k + trunk / 2, at.y, 0.8, trunk, 0.8, angle));
             // A round tree, as the kit makes them (see `plantParts`): a ball of leaves over its trunk.
             const colour = LEAVES[Math.floor(random() * 7)];
-            leaves.push({ m: box(at.x, trunk + 2.1 * size, at.y, 5 * size, 5.4 * size, 5 * size, angle + random()), colour });
+            leaves.push({ m: box(at.x, k + trunk + 2.1 * size, at.y, 5 * size, 5.4 * size, 5 * size, angle + random()), colour });
           }
         }
       }
       for (let i = 0; i < count; i++) {
         const d = count > 1 ? from + step * i : (from + to) / 2;
         const f = path.at(d);
-        const y = lift(d);
+        // Standing on the footpath (a kerb's height up), or on the verge beside the road.
+        const y = lift(d) + (segment.spec.footpath ? KERB_HEIGHT : 0);
         const side = i % 2 === 0 ? 1 : -1;
         const out = { x: f.normal.x * side, y: f.normal.y * side };
         const at = { x: f.p.x + out.x * kerb, y: f.p.y + out.y * kerb };
@@ -178,7 +182,7 @@ export class StreetLights extends Group {
           // On a bridge, just over its deck's markings, and narrowed and moved in to stay between its parapets.
           const across = Math.min(POOL, deck);
           const offset = Math.max(-(deck - across) / 2, Math.min((deck - across) / 2, side * (kerb - ARM)));
-          pools.push(box(f.p.x + f.normal.x * offset, y + 0.3, f.p.y + f.normal.y * offset, across, 1, POOL, angle));
+          pools.push(box(f.p.x + f.normal.x * offset, lift(d) + 0.3, f.p.y + f.normal.y * offset, across, 1, POOL, angle));
         }
       }
     }

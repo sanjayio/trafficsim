@@ -1,6 +1,7 @@
 import { BoxGeometry, Color, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, Quaternion, Vector3, type BufferGeometry } from "three";
 import { LEVEL_HEIGHT } from "../core/grade";
 import type { SampledCurve } from "../core/curve";
+import type { Vec2 } from "../core/geometry";
 
 /** How far apart bridge pillars stand, and the step their parapets and tunnel walls are built in. */
 const PILLAR_SPACING = 40;
@@ -29,50 +30,89 @@ export function liftGeometry(geometry: BufferGeometry, path: SampledCurve, heigh
 /** A road layer's lift above the one under it at height (see `liftGeometry`), for parts lifted whole. */
 export const layerLift = (layer: number) => layer * LAYER_LIFT;
 
-/**
- * The concrete of a bridge or tunnel road `width` across: on a bridge, parapet walls along both
- * edges (down to the deck's underside, and above the footpaths when it has them, `rise` up) and
- * pillars under it; in a tunnel, walls along both sides
- * (seen in the underground view). One instanced mesh.
- */
-export function gradeStructure(path: SampledCurve, width: number, height: (s: number) => number, material: MeshBasicMaterial, rise = 0): InstancedMesh[] {
-  const boxes: Matrix4[] = [];
-  const shades: number[] = [];
-  const box = (x: number, y: number, z: number, sx: number, sy: number, sz: number, yaw: number, shade = 1) => {
-    boxes.push(new Matrix4().compose(new Vector3(x, y, z), new Quaternion().setFromAxisAngle(UP, -yaw), new Vector3(sx, sy, sz)));
-    shades.push(shade);
-  };
-  const half = width / 2;
-  for (let s = 0; s < path.length; s += STEP) {
-    const e = Math.min(path.length, s + STEP);
-    const [f, g] = [path.at(s), path.at(e)];
-    const h = (height(s) + height(e)) / 2;
-    const yaw = Math.atan2(f.tangent.y, f.tangent.x);
-    for (const side of [1, -1]) {
-      const x = (f.p.x + g.p.x) / 2 + f.normal.x * side * (half + 0.4);
-      const z = (f.p.y + g.p.y) / 2 + f.normal.y * side * (half + 0.4);
-      // A bridge's parapet: waist high above where people walk, and the deck's edge 1.5 below it. A tunnel's wall, up to its roof.
-      if (h > 0) box(x, h + (rise + PARAPET - 1.5) / 2, z, e - s + 0.6, rise + PARAPET + 1.5, 0.8, yaw, PARAPET_SHADE);
-      else box(x, h + TUNNEL_WALL / 2, z, e - s + 0.6, TUNNEL_WALL, 0.8, yaw);
+/** Boxes of concrete, gathered and then drawn as one instanced mesh (see `mesh`). */
+class Boxes {
+  private matrices: Matrix4[] = [];
+  private shades: number[] = [];
+
+  add(x: number, y: number, z: number, sx: number, sy: number, sz: number, yaw: number, shade = 1): void {
+    this.matrices.push(new Matrix4().compose(new Vector3(x, y, z), new Quaternion().setFromAxisAngle(UP, -yaw), new Vector3(sx, sy, sz)));
+    this.shades.push(shade);
+  }
+
+  /**
+   * A bridge's parapet (waist high above where people walk, `rise` up on footpaths, and the deck's
+   * edge 1.5 below it) or a tunnel's wall (up to its roof) along `line`, at height `h`.
+   */
+  wall(line: Vec2[], h: number, rise: number): void {
+    for (let i = 0; i + 1 < line.length; i++) {
+      const [p, q] = [line[i], line[i + 1]];
+      const length = Math.hypot(q.x - p.x, q.y - p.y);
+      if (length < 1e-3) continue;
+      const [x, z, yaw] = [(p.x + q.x) / 2, (p.y + q.y) / 2, Math.atan2(q.y - p.y, q.x - p.x)];
+      if (h > 0) this.add(x, h + (rise + PARAPET - 1.5) / 2, z, length + 0.6, rise + PARAPET + 1.5, 0.8, yaw, PARAPET_SHADE);
+      else this.add(x, h + TUNNEL_WALL / 2, z, length + 0.6, TUNNEL_WALL, 0.8, yaw);
     }
+  }
+
+  mesh(material: MeshBasicMaterial): InstancedMesh {
+    const mesh = new InstancedMesh(UNIT_BOX, material, Math.max(1, this.matrices.length));
+    this.matrices.forEach((m, i) => {
+      mesh.setMatrixAt(i, m);
+      mesh.setColorAt(i, new Color().setScalar(this.shades[i]));
+    });
+    mesh.count = this.matrices.length;
+    mesh.castShadow = true;
+    mesh.renderOrder = 20;
+    mesh.computeBoundingSphere();
+    return mesh;
+  }
+}
+
+/**
+ * The concrete of a bridge or tunnel road `width` across: on a bridge, parapets along both edges
+ * (`rise` higher with footpaths) and pillars under it; in a tunnel, walls along both sides (seen in
+ * the underground view). Each side's wall runs only along `span(side)` (from, to along the road;
+ * side 1 is the right of the road's direction): not across the junctions at its ends, whose
+ * corners have their own (see `junctionWalls`). One instanced mesh.
+ */
+export function gradeStructure(
+  path: SampledCurve,
+  width: number,
+  height: (s: number) => number,
+  material: MeshBasicMaterial,
+  rise: number,
+  span: (side: 1 | -1) => [number, number],
+): InstancedMesh {
+  const boxes = new Boxes();
+  for (const side of [1, -1] as const) {
+    const [from, to] = span(side);
+    const line: Vec2[] = [];
+    for (let s = from; s < to; s += STEP) line.push(edge(path, s, side * (width / 2)));
+    if (to > from) line.push(edge(path, to, side * (width / 2)));
+    boxes.wall(line, height((from + to) / 2), rise);
   }
   // Pillars under a bridge.
   for (let s = PILLAR_SPACING / 2; s < path.length; s += PILLAR_SPACING) {
     const h = height(s);
     if (h < LEVEL_HEIGHT * 0.6) continue;
     const f = path.at(s);
-    box(f.p.x, (h - 1.5) / 2, f.p.y, 2.4, h - 1.5, Math.min(width * 0.6, 10), Math.atan2(f.tangent.y, f.tangent.x));
+    boxes.add(f.p.x, (h - 1.5) / 2, f.p.y, 2.4, h - 1.5, Math.min(width * 0.6, 10), Math.atan2(f.tangent.y, f.tangent.x));
   }
-  const mesh = new InstancedMesh(UNIT_BOX, material, Math.max(1, boxes.length));
-  boxes.forEach((m, i) => {
-    mesh.setMatrixAt(i, m);
-    mesh.setColorAt(i, new Color().setScalar(shades[i]));
-  });
-  mesh.count = boxes.length;
-  mesh.castShadow = true;
-  mesh.renderOrder = 20;
-  mesh.computeBoundingSphere();
-  return [mesh];
+  return boxes.mesh(material);
+}
+
+/** The walls (or parapets) round a bridge's or tunnel's junction at height `h`: along each corner's outer edge, `rise` higher round footpaths. */
+export function junctionWalls(corners: { edge: Vec2[]; footpath: boolean }[], h: number, rise: number, material: MeshBasicMaterial): InstancedMesh {
+  const boxes = new Boxes();
+  for (const { edge, footpath } of corners) boxes.wall(edge, h, footpath ? rise : 0);
+  return boxes.mesh(material);
+}
+
+/** The point `offset` right of the road `s` along it. */
+function edge(path: SampledCurve, s: number, offset: number): Vec2 {
+  const f = path.at(s);
+  return { x: f.p.x + f.normal.x * offset, y: f.p.y + f.normal.y * offset };
 }
 
 /** A pillar holding a bridge's junction up, `h` high at `at`. */

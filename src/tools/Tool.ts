@@ -61,10 +61,11 @@ export interface ToolContext {
   /** The zoning tiles beside roads, where the Traffic tool places buildings. */
   zones: ZoneMap;
   /**
-   * The ground area under the screen rectangle spanned by two ground points (as a convex quad).
-   * Screen-aligned, so it matches what the player sees even when the camera is rotated or tilted.
+   * The ground area under the screen rectangle spanned by two ground points (as a convex quad), or
+   * the area on a level `height` up (or down) spanned by two points on it. Screen-aligned, so it
+   * matches what the player sees even when the camera is rotated or tilted.
    */
-  screenRect: (a: Vec2, b: Vec2) => Vec2[];
+  screenRect: (a: Vec2, b: Vec2, height?: number) => Vec2[];
   /** Where cars stop on `segment` before junction `node` (the painted line), as a distance from the node. */
   stopLineAt: (segment: RoadSegment, node: NodeId) => number;
   /** Short readout shown next to the cursor (null hides it). */

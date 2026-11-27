@@ -7,15 +7,16 @@ import { carPark, defaultName, DRIVEWAY_WIDTH, isSourceBuilding, levelOf, SIDE_P
 import { Scaffolding } from "./scaffold";
 import { bridge } from "../core/track";
 import { BuildingKit } from "./buildings";
-import { concreteMaterial, gradeStructure, layerLift, liftGeometry, pillarAt } from "./grade";
+import { concreteMaterial, gradeStructure, junctionWalls, layerLift, liftGeometry, pillarAt } from "./grade";
 import { MAX_LEVEL } from "../core/grade";
 import { catchShadows } from "./shadows";
-import { FlatLayer, flatMaterial, KERB_HEIGHT, kerbColouring, pavedGeometry } from "./flat";
+import { FlatLayer, flatMaterial, KERB_HEIGHT, kerbColouring, marksRaised, pavedGeometry } from "./flat";
 import { FurnitureKit, type FurnitureSpot } from "./furniture";
 import { buildJunctionParts, type JunctionArm } from "./junctionParts";
 import { buildRoundaboutParts } from "./roundaboutParts";
-import { buildBendMarkings, buildBendSurface, buildRoadParts, CROSSING_ROOM, ROAD_PART_STYLE, type BendLine, type RoadEnd, type RoadPart } from "./roadParts";
+import { buildBendMarkings, buildBendSurface, buildRoadParts, CROSSING_ROOM, EDGE_LINE_INSET, ROAD_PART_STYLE, type BendLine, type RoadEnd, type RoadPart } from "./roadParts";
 import type { Curve, SampledCurve } from "../core/curve";
+import type { Vec2 } from "../core/geometry";
 
 /** Roads meeting this close to straight on (radians short of 180°) just carry their markings through. */
 const STRAIGHT_ENOUGH = (10 * Math.PI) / 180;
@@ -53,7 +54,7 @@ const SIGN_SETBACK = 3;
  */
 export class RoadLayer extends Group {
   private materials = Object.fromEntries(
-    Object.entries(ROAD_PART_STYLE).map(([part, style]) => [part, textured(part as RoadPart, flatMaterial(style.color))]),
+    Object.entries(ROAD_PART_STYLE).map(([part, style]) => [part, raisedMark(part as RoadPart, textured(part as RoadPart, flatMaterial(style.color)))]),
   ) as Record<RoadPart, MeshBasicMaterial>;
   private views = new Map<SegmentId, Mesh[]>();
   private graded = new Map<RoadPart, MeshBasicMaterial>();
@@ -64,6 +65,8 @@ export class RoadLayer extends Group {
   private junctions = new Map<NodeId, Mesh[]>();
   /** Per node, how far its paved corners reach along each road meeting there. */
   private cornerReach = new Map<NodeId, Map<SegmentId, number>>();
+  /** Per node, how far along each road meeting there the corners on its right and left start: a bridge's or tunnel's walls stop there. */
+  private wallReach = new Map<NodeId, Map<SegmentId, { right: number; left: number }>>();
   private kit = new FurnitureKit();
   /** Signs and signals at each junction. */
   private furniture = new Map<NodeId, Group>();
@@ -328,14 +331,18 @@ export class RoadLayer extends Group {
         facing: arm.dir,
       };
       if ((control === "stop" || control === "yield") && !minor.has(segment.id)) continue;
-      if (control === "stop") group.add(this.kit.stopSign(spot));
-      else if (control === "yield") group.add(this.kit.yieldSign(spot));
+      let post: Object3D;
+      if (control === "stop") post = this.kit.stopSign(spot);
+      else if (control === "yield") post = this.kit.yieldSign(spot);
       else {
         // Kerb-side is the driver's right in right-hand traffic.
         const signal = this.kit.signal(spot, this.graph.drivingSide === "right" ? 1 : -1);
-        group.add(signal.group);
+        post = signal.group;
         lamps[approaches.indexOf(segment.id)] = signal.lamps;
       }
+      // On the footpath, a kerb's height up.
+      if (arm.footpath > 0) post.position.y = KERB_HEIGHT;
+      group.add(post);
     }
     // Up on a bridge (or down in a tunnel) with its junction.
     group.position.y = this.graph.nodeHeight(nodeId);
@@ -348,11 +355,13 @@ export class RoadLayer extends Group {
   private rebuildJunction(nodeId: NodeId): void {
     for (const mesh of this.junctions.get(nodeId) ?? []) {
       this.remove(mesh);
-      // A deck's underside and pillar share geometry with others.
-      if (!mesh.userData.shared) mesh.geometry.dispose();
+      // A deck's underside, pillar and walls share geometry with others.
+      if ((mesh as InstancedMesh).isInstancedMesh) (mesh as InstancedMesh).dispose();
+      else if (!mesh.userData.shared) mesh.geometry.dispose();
     }
     this.junctions.delete(nodeId);
     this.cornerReach.delete(nodeId);
+    this.wallReach.delete(nodeId);
     this.roundaboutSigns.delete(nodeId);
     this.roundaboutApproaches.delete(nodeId);
     if (!this.graph.nodes.has(nodeId)) return;
@@ -362,10 +371,12 @@ export class RoadLayer extends Group {
     // A slip road peels off or tapers in: the roads overlap, with no junction surface or corners.
     if (slipRoad(this.graph, nodeId)) return;
     let meshes: Mesh[];
+    let corners: { edge: Vec2[]; footpath: boolean }[] = [];
     if (settings.roundabout && meeting.length >= 3) {
       const shape = roundaboutShape(meeting.map((s) => s.spec));
       // Markings on the approaches start clear of the ring.
       this.cornerReach.set(nodeId, new Map(meeting.map((segment) => [segment.id, shape.outer])));
+      this.wallReach.set(nodeId, new Map(meeting.map((segment) => [segment.id, { right: shape.outer, left: shape.outer }])));
       const keep = this.graph.drivingSide === "right" ? -1 : 1;
       const layout = buildRoundaboutParts(
         this.graph.node(nodeId),
@@ -384,14 +395,20 @@ export class RoadLayer extends Group {
       this.roundaboutApproaches.set(nodeId, new Map(meeting.map((segment, i) => [segment.id, layout.approaches[i]])));
       meshes = layout.parts.map(({ part, order, geometry }) => this.junctionMesh(nodeId, part, order, geometry));
     } else {
-      const { parts, reach } = buildJunctionParts(
+      const { parts, reach, corners: edges, sides } = buildJunctionParts(
         meeting.map((segment) => this.armOf(segment, nodeId)),
         kerbRadius(settings.cornerRadius),
       );
       this.cornerReach.set(nodeId, new Map(meeting.map((segment, i) => [segment.id, reach[i]])));
       const bend = this.bendLines(nodeId);
       // A paved bend: a curved stretch of road, the same width all the way round, instead of corners.
-      const surface = this.pavedBend(nodeId) ? buildBendSurface(meeting[0].spec, this.bendEdge(nodeId)!) : parts;
+      const paved = this.pavedBend(nodeId);
+      const surface = paved ? buildBendSurface(meeting[0].spec, this.bendEdge(nodeId)!) : parts;
+      // A bridge's or tunnel's walls round the corners (round a paved bend, its roads' own carry on to meet).
+      if (!paved) {
+        corners = edges;
+        this.wallReach.set(nodeId, new Map(meeting.map((segment, i) => [segment.id, sides[i]])));
+      }
       const all: { part: RoadPart; geometry: BufferGeometry }[] = [...surface, ...(bend ? buildBendMarkings(bend) : [])];
       meshes = all.map(({ part, geometry }) => this.junctionMesh(nodeId, part, ROAD_PART_STYLE[part].layer, geometry));
     }
@@ -408,6 +425,7 @@ export class RoadLayer extends Group {
       }
       meshes.push(Object.assign(pillarAt(this.graph.node(nodeId), height, this.concrete), { userData: { shared: true } }));
     }
+    if (height && corners.length) meshes.push(junctionWalls(corners, height, KERB_HEIGHT, this.concrete));
     if (meshes.length) {
       this.add(...meshes);
       this.junctions.set(nodeId, meshes);
@@ -526,6 +544,8 @@ export class RoadLayer extends Group {
         for (const side of [1, -1]) lines.push({ kind: "laneLine", pieces: curve(side * (middle + k * LANE_WIDTH)) });
       }
     }
+    // Without footpaths, the edge lines carry on round too.
+    if (this.graph.segmentsAt(nodeId).every((s) => !s.spec.footpath)) for (const side of [1, -1]) lines.push({ kind: "edgeLine", pieces: curve(side * (carriagewayWidth(spec) / 2 - EDGE_LINE_INSET)) });
     return lines;
   }
 
@@ -609,7 +629,13 @@ export class RoadLayer extends Group {
       return mesh;
     });
     const width = carriagewayWidth(segment.spec) + (segment.spec.footpath ? 2 * FOOTPATH_WIDTH : 0);
-    if (graded) meshes.push(...gradeStructure(path, width, height, this.concrete, segment.spec.footpath ? KERB_HEIGHT : 0));
+    if (graded) {
+      // Each side's wall stops where a junction's corner on that side starts (its corner has its own).
+      // Side 1 is the road's right going from a to b: its right leaving a, its left leaving b.
+      const reach = (node: NodeId, which: "right" | "left") => Math.min(this.wallReach.get(node)?.get(segment.id)?.[which] ?? 0, path.length / 2);
+      const span = (side: 1 | -1): [number, number] => [reach(segment.a, side === 1 ? "right" : "left"), path.length - reach(segment.b, side === 1 ? "left" : "right")];
+      meshes.push(gradeStructure(path, width, height, this.concrete, segment.spec.footpath ? KERB_HEIGHT : 0, span));
+    }
     this.add(...meshes);
     this.views.set(segment.id, meshes);
   }
@@ -687,6 +713,12 @@ export class RoadLayer extends Group {
 }
 
 /** Footpaths and medians draw their kerb stones (also on copies: a clone doesn't keep it). */
+/** Footpaths and islands mark where they're raised, a road's surface where it covers them (see `marksRaised`). */
+function raisedMark(part: RoadPart, material: MeshBasicMaterial): MeshBasicMaterial {
+  if (part === "footpath" || part === "median") return marksRaised(material, true);
+  return part === "asphalt" ? marksRaised(material, false) : material;
+}
+
 function textured(part: RoadPart, material: MeshBasicMaterial): MeshBasicMaterial {
   return part === "footpath" || part === "median" ? kerbColouring(material) : material;
 }

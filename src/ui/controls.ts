@@ -41,6 +41,7 @@ export const CONTROL_GROUPS: ControlGroup[] = [
       { keys: ["Right-click"], action: "Step back one point (ends a continuous road)" },
       { keys: ["Esc"], action: "Cancel the road in progress" },
       { keys: ["[", "/", "]"], action: "Move the parallel road left / right" },
+      { keys: ["=", "/", "-"], action: "Step up / down (+ too): bridges up to 3 above the ground, tunnels 3 below; bulldozing works at the step" },
       { keys: [ALT], action: "Hold to place freely (flips grid snapping, turns off guides)" },
 
     ],

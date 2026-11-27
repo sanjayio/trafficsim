@@ -2,6 +2,10 @@ import {
   Color,
   DirectionalLight,
   DoubleSide,
+  EqualStencilFunc,
+  KeepStencilOp,
+  NotEqualStencilFunc,
+  type StencilFunc,
   Mesh,
   MeshBasicMaterial,
   PCFSoftShadowMap,
@@ -12,6 +16,7 @@ import {
   type WebGLRenderer,
 } from "three";
 import { WORLD_SIZE } from "../core/constants";
+import { KERB_HEIGHT } from "./flat";
 
 /**
  * Shared by every basic material's shader (see `installCloudShadows`), so setting them once
@@ -77,10 +82,24 @@ export function installCloudShadows(): void {
   };
 }
 
-/** Shows the sun's shadows, as dark as `SunShadows` sets them: on the ground, and over raised parts (see `catchShadows`). */
-const CATCHER_LIFT = 0.3;
-// Both sides, as the road parts it lies over are drawn (their triangles face either way).
-const CATCHER = new ShadowMaterial({ opacity: 0.4, depthWrite: false, side: DoubleSide });
+/** Over a deck's kerbs: their footpaths (hidden under a junction's surface where its roads end) cast too. */
+const CATCHER_LIFT = KERB_HEIGHT + 0.3;
+/**
+ * Show the sun's shadows, as dark as `SunShadows` sets them: on the ground (and roads), on what's a
+ * kerb's height up (footpaths, islands, plots: where they've marked, see `marksRaised`), and over
+ * bridge decks (see `catchShadows`). Both sides, as the road parts they lie over are drawn (their
+ * triangles face either way).
+ */
+const catcher = (stencil?: { func: StencilFunc }) =>
+  new ShadowMaterial({
+    opacity: 0.4,
+    depthWrite: false,
+    side: DoubleSide,
+    ...(stencil ? { stencilWrite: true, stencilRef: 1, stencilFunc: stencil.func, stencilZPass: KeepStencilOp } : {}),
+  });
+const GROUND = catcher({ func: NotEqualStencilFunc });
+const RAISED = catcher({ func: EqualStencilFunc });
+const CATCHER = catcher();
 
 /**
  * Shows the sun's shadows on `mesh` (a bridge's deck, which, drawn without lighting,
@@ -88,7 +107,7 @@ const CATCHER = new ShadowMaterial({ opacity: 0.4, depthWrite: false, side: Doub
  */
 export function catchShadows(mesh: Mesh): void {
   const catcher = new Mesh(mesh.geometry, CATCHER);
-  // A little over it, so the deck (which casts too) doesn't shade itself where the sun is low.
+  // Over it and all its layers, so the deck (which casts too) doesn't shade itself.
   catcher.position.y = CATCHER_LIFT;
   catcher.receiveShadow = true;
   mesh.add(catcher);
@@ -101,7 +120,8 @@ export function catchShadows(mesh: Mesh): void {
  */
 export class SunShadows {
   readonly light = new DirectionalLight(0xffffff, 0);
-  readonly catcher: Mesh<PlaneGeometry, ShadowMaterial>;
+  /** Over the ground, and a kerb's height up over footpaths and plots. */
+  private catchers: Mesh<PlaneGeometry, ShadowMaterial>[];
 
   constructor(renderer: WebGLRenderer, renderOrder: number) {
     renderer.shadowMap.enabled = true;
@@ -109,16 +129,18 @@ export class SunShadows {
     this.light.castShadow = true;
     this.light.shadow.mapSize.set(2048, 2048);
     this.light.shadow.bias = -0.0004;
-    this.catcher = new Mesh(
-      new PlaneGeometry(WORLD_SIZE, WORLD_SIZE).rotateX(-Math.PI / 2).translate(WORLD_SIZE / 2, 0, WORLD_SIZE / 2),
-      CATCHER,
-    );
-    this.catcher.receiveShadow = true;
-    this.catcher.renderOrder = renderOrder;
+    const plane = new PlaneGeometry(WORLD_SIZE, WORLD_SIZE).rotateX(-Math.PI / 2).translate(WORLD_SIZE / 2, 0, WORLD_SIZE / 2);
+    this.catchers = [GROUND, RAISED].map((material) => {
+      const mesh = new Mesh(plane, material);
+      mesh.receiveShadow = true;
+      mesh.renderOrder = renderOrder;
+      return mesh;
+    });
+    this.catchers[1].position.y = KERB_HEIGHT;
   }
 
   get objects(): Object3D[] {
-    return [this.light, this.light.target, this.catcher];
+    return [this.light, this.light.target, ...this.catchers];
   }
 
   /**
@@ -128,9 +150,9 @@ export class SunShadows {
   update(sun: { x: number; y: number; z: number }, x: number, z: number, scale: number, strength: number): void {
     const on = strength > 0.01 && sun.y > 0.02;
     this.light.castShadow = on;
-    this.catcher.visible = on;
+    for (const mesh of this.catchers) mesh.visible = on;
     if (!on) return;
-    this.catcher.material.opacity = strength;
+    for (const material of [GROUND, RAISED, CATCHER]) material.opacity = strength;
     const reach = scale * 3;
     this.light.target.position.set(x, 0, z);
     this.light.position.set(x + sun.x * reach, sun.y * reach, z + sun.z * reach);
@@ -156,6 +178,6 @@ export class SunShadows {
 
   dispose(): void {
     this.light.dispose();
-    this.catcher.geometry.dispose();
+    this.catchers[0].geometry.dispose();
   }
 }

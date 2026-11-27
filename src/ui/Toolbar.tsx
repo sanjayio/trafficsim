@@ -113,6 +113,12 @@ export function Toolbar() {
       if (e.key === "b" || e.key === "B") gameStore.getState().setBulldozing(!gameStore.getState().bulldozing);
       const { tool, parallel, nudgeParallelOffset } = gameStore.getState();
       if (tool === "road" && parallel && (e.key === "[" || e.key === "]")) nudgeParallelOffset(e.key === "]" ? 1 : -1);
+      // A step up (a bridge higher, a tunnel shallower) or down, through the ground: for laying roads and bulldozing them.
+      if (tool === "road" && ["+", "=", "-", "_"].includes(e.key)) {
+        const { roadSpec, updateRoadSpec } = gameStore.getState();
+        const level = Math.max(-MAX_LEVEL, Math.min(MAX_LEVEL, (roadSpec.level ?? 0) + (e.key === "+" || e.key === "=" ? 1 : -1)));
+        updateRoadSpec({ level: level || undefined });
+      }
       if (e.code === "Space") {
         e.preventDefault();
         gameStore.getState().togglePause();
@@ -182,6 +188,8 @@ const BULLDOZE_MODES: { id: BulldozeMode; label: string; icon: LucideIcon }[] = 
 /** Second-level options shown while the Bulldoze tool is active. */
 function BulldozeOptions() {
   const mode = useGame((s) => s.bulldozeMode);
+  const tool = useGame((s) => s.tool);
+  const level = useGame((s) => s.roadSpec.level ?? 0);
   return (
     <Panel>
       {BULLDOZE_MODES.map(({ id, label, icon: Icon }) => (
@@ -189,9 +197,14 @@ function BulldozeOptions() {
           <Icon size={ICON_SIZE} strokeWidth={2} aria-hidden />
         </IconButton>
       ))}
+      {/* Roads are bulldozed at the Road tool's step (+ and - change it). */}
+      {tool === "road" && <span className="whitespace-nowrap px-2 text-xs text-neutral-300">{stepName(level)}</span>}
     </Panel>
   );
 }
+
+/** A step as said in the toolbar: the ground, or a bridge's or tunnel's step. */
+const stepName = (level: number) => (level > 0 ? `Bridge: step ${level}` : level < 0 ? `Tunnel: step ${-level}` : "Ground");
 
 const BUILDING_ICON: Record<Building, LucideIcon> = {
   villa: House,
@@ -316,21 +329,27 @@ function RoadOptions() {
         <IconButton label="One-way" pressed={spec.oneWay} onClick={() => update({ oneWay: !spec.oneWay })}>
           <ArrowBigUp size={ICON_SIZE} strokeWidth={2} aria-hidden />
         </IconButton>
+        {/* Nobody walks in a tunnel, and there's no median down one: those are off while laying one. */}
         <IconButton
-          label={spec.oneWay ? "Median (two-way roads only)" : "Median"}
-          pressed={spec.median && !spec.oneWay}
-          disabled={spec.oneWay}
+          label={tunnel ? "Median (not in tunnels)" : spec.oneWay ? "Median (two-way roads only)" : "Median"}
+          pressed={spec.median && !spec.oneWay && !tunnel}
+          disabled={spec.oneWay || tunnel > 0}
           onClick={() => update({ median: !spec.median })}
         >
           <SeparatorVertical size={ICON_SIZE} strokeWidth={2} aria-hidden />
         </IconButton>
-        <IconButton label="Footpath" pressed={spec.footpath} onClick={() => update({ footpath: !spec.footpath })}>
+        <IconButton
+          label={tunnel ? "Footpath (not in tunnels)" : "Footpath"}
+          pressed={spec.footpath && !tunnel}
+          disabled={tunnel > 0}
+          onClick={() => update({ footpath: !spec.footpath })}
+        >
           <Footprints size={ICON_SIZE} strokeWidth={2} aria-hidden />
         </IconButton>
         <IconButton
-          label={spec.footpath ? "Street trees" : "Street trees (roads with footpaths only)"}
-          pressed={!!spec.trees && spec.footpath}
-          disabled={!spec.footpath}
+          label={tunnel ? "Street trees (not in tunnels)" : spec.footpath ? "Street trees" : "Street trees (roads with footpaths only)"}
+          pressed={!!spec.trees && spec.footpath && !tunnel}
+          disabled={!spec.footpath || tunnel > 0}
           onClick={() => update({ trees: !spec.trees })}
         >
           <TreeDeciduous size={ICON_SIZE} strokeWidth={2} aria-hidden />

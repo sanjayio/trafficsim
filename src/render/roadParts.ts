@@ -55,6 +55,8 @@ export const ROAD_PART_STYLE: Record<RoadPart, { color: number; layer: number }>
 
 const CENTER_LINE_WIDTH = 1;
 const LANE_LINE_WIDTH = 1;
+/** On roads without footpaths, a solid white line along each edge, this far in from it (to its middle). */
+export const EDGE_LINE_INSET = 1.5;
 const DASH_LENGTH = 8;
 const DASH_GAP = 8;
 const ARROW_SPACING = 72;
@@ -200,6 +202,13 @@ export function buildRoadParts(
     for (let i = 0; i < stripes; i++) laneLines.push(...ribbon(path, -carriageway / 2 + pitch * (i + 0.5), pitch * 0.55, from, to));
     if (spec.footpath) for (const side of [1, -1]) yellow.push(...ribbon(path, side * (carriageway / 2 + 1 + TACTILE_DEPTH / 2), TACTILE_DEPTH, from + 1.5, to - 1.5));
   }
+  // Without footpaths, a solid line along each edge (looping round a two-way dead end, as the lane lines do).
+  if (!spec.footpath) {
+    const offset = carriageway / 2 - EDGE_LINE_INSET;
+    laneLines.push(...ribbon(path, offset, LANE_LINE_WIDTH, s0, s1), ...ribbon(path, -offset, LANE_LINE_WIDTH, s0, s1));
+    if (turnStart) laneLines.push(...dashedArc(path.at(0), offset, -1, Infinity));
+    if (turnEnd) laneLines.push(...dashedArc(path.at(length), offset, 1, Infinity));
+  }
   if (yellow.length) parts.push({ part: "centerLine", geometry: convexGeometry(yellow) });
   if (laneLines.length) parts.push({ part: "laneLine", geometry: convexGeometry(laneLines) });
 
@@ -228,18 +237,20 @@ export function buildRoadParts(
 
 /** A marking carried round a bend where two roads join: the centre line, the median, or a lane line. */
 export interface BendLine {
-  kind: "centerLine" | "median" | "laneLine";
+  kind: "centerLine" | "median" | "laneLine" | "edgeLine";
   pieces: Curve[];
 }
 
 /** Markings round a bend, along the curves given (solid median, dashed centre and lane lines). */
 export function buildBendMarkings(lines: BendLine[]): { part: RoadPart; geometry: BufferGeometry }[] {
-  const shapes: Record<Exclude<BendLine["kind"], "median">, Vec2[][]> = { centerLine: [], laneLine: [] };
+  const shapes: Record<"centerLine" | "laneLine", Vec2[][]> = { centerLine: [], laneLine: [] };
   const medians: SampledCurve[] = [];
   for (const { kind, pieces } of lines) {
     for (const piece of pieces) {
       const path = new SampledCurve(piece);
       if (kind === "median") medians.push(path);
+      // White paint, solid.
+      else if (kind === "edgeLine") shapes.laneLine.push(...ribbon(path, 0, LANE_LINE_WIDTH, 0, path.length));
       else {
         const width = kind === "laneLine" ? LANE_LINE_WIDTH : CENTER_LINE_WIDTH;
         for (let s = 0; s < path.length; s += DASH_LENGTH + DASH_GAP) {
@@ -412,15 +423,15 @@ function halfDisc(f: PathFrame, radius: number, forward: 1 | -1): Vec2[] {
   return out;
 }
 
-/** A dashed lane line looping round a road end at `radius`, joining the lines on either side. */
-function dashedArc(f: PathFrame, radius: number, forward: 1 | -1): Vec2[][] {
+/** A dashed lane line (dashes `dash` long: Infinity for a solid one) looping round a road end at `radius`, joining the lines on either side. */
+function dashedArc(f: PathFrame, radius: number, forward: 1 | -1, dash = DASH_LENGTH): Vec2[][] {
   const arcLength = Math.PI * radius;
   const inner = radius - LANE_LINE_WIDTH / 2;
   const outer = radius + LANE_LINE_WIDTH / 2;
   const quads: Vec2[][] = [];
-  for (let a = 0; a < arcLength; a += DASH_LENGTH + DASH_GAP) {
+  for (let a = 0; a < arcLength; a += dash + DASH_GAP) {
     const from = a / radius;
-    const to = Math.min(a + DASH_LENGTH, arcLength) / radius;
+    const to = Math.min(a + dash, arcLength) / radius;
     const steps = Math.max(1, Math.ceil((to - from) / (Math.PI / CAP_SEGMENTS)));
     for (let i = 0; i < steps; i++) {
       const t0 = from + ((to - from) * i) / steps;

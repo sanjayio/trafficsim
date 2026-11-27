@@ -65,10 +65,13 @@ export function hasTrees(spec: RoadSpec): boolean {
 /** Drops settings that don't apply (a median on a one-way road, trees without footpaths), so each road stores what it really is. */
 export function normalizeRoadSpec(spec: RoadSpec): RoadSpec {
   const { trees: _, level, speed, ...rest } = spec;
+  // Nobody walks in a tunnel: no footpaths (so no trees or zebra crossings), and no median.
+  const tunnel = (level ?? 0) < 0;
   return {
     ...rest,
-    median: hasMedian(spec),
-    ...(hasTrees(spec) ? { trees: true } : {}),
+    ...(tunnel ? { footpath: false } : {}),
+    median: hasMedian(spec) && !tunnel,
+    ...(hasTrees(spec) && !tunnel ? { trees: true } : {}),
     ...(level ? { level } : {}),
     ...(speed !== undefined && speed !== DEFAULT_SPEED ? { speed } : {}),
   };

@@ -1,6 +1,6 @@
 import { BoxGeometry, BufferGeometry, CanvasTexture, Color, ConeGeometry, CylinderGeometry, Float32BufferAttribute, Group, IcosahedronGeometry, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, PlaneGeometry, Quaternion, SRGBColorSpace, Vector3 } from "three";
 import { BAY_WIDTH, carPark, DRIVEWAY_WIDTH, isSourceBuilding, LOT_SETBACK, PARKING_DEPTH, PLAZA_DEPTH, tallSteps, type Building, type BuildingDetails, type Lot, type SinkBuilding } from "../core/terminal";
-import { FlatLayer, flatMaterial, KERB_HEIGHT } from "./flat";
+import { FlatLayer, flatMaterial, KERB_HEIGHT, marksRaised } from "./flat";
 import { palette } from "./palette";
 import { apartmentLook, apartmentModel } from "./apartments";
 import { commercialLook, commercialModel } from "./commercial";
@@ -144,8 +144,9 @@ export class BuildingKit {
   private treeShapes = treeGeometries();
   /** A unit square lying on the ground. */
   private plane = new PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
-  private grass = flatMaterial(0x7fa86a);
-  private concrete = flatMaterial(0xa3a59f);
+  // Plots, a kerb's height up: the sun's shadows fall on them there (see `marksRaised`).
+  private grass = marksRaised(flatMaterial(0x7fa86a), true);
+  private concrete = marksRaised(flatMaterial(0xa3a59f), true);
   private paint = flatMaterial(0xf2f2ee);
   /** An office's drive across its plaza: paved like the footpath, as every driveway is. */
   private drive = flatMaterial(palette.footpath);

@@ -1,4 +1,4 @@
-import { BufferGeometry, Color, DoubleSide, Float32BufferAttribute, MeshBasicMaterial, ShapeUtils, Vector2 } from "three";
+import { AlwaysStencilFunc, BufferGeometry, Color, DoubleSide, Float32BufferAttribute, MeshBasicMaterial, ReplaceStencilOp, ShapeUtils, Vector2 } from "three";
 import type { Vec2 } from "../core/geometry";
 import { palette } from "./palette";
 
@@ -30,6 +30,19 @@ export const KERB_WIDTH = 1;
  * lifted by this; its kerb's face drops back down to the road (see `pavedGeometry`).
  */
 export const KERB_HEIGHT = 1;
+
+/**
+ * Marks in the stencil buffer where `material` draws: raised (footpaths, islands, plots, a kerb's
+ * height up) or not (a road's surface, which covers footpaths at junctions). The sun's shadows fall
+ * at the height each mark says (see `SunShadows`).
+ */
+export function marksRaised<M extends MeshBasicMaterial>(material: M, raised: boolean): M {
+  material.stencilWrite = true;
+  material.stencilFunc = AlwaysStencilFunc;
+  material.stencilRef = raised ? 1 : 0;
+  material.stencilZPass = ReplaceStencilOp;
+  return material;
+}
 /** The kerb's face, upright, drawn a step darker than its top. */
 const KERB_FACE_TONE = 0.6;
 

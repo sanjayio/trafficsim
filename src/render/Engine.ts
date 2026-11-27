@@ -4,6 +4,7 @@ import { Rain } from "./Rain";
 import { WORLD_SIZE } from "../core/constants";
 import type { Vec2 } from "../core/geometry";
 import { hasLaneConnector } from "../core/lanes";
+import { normalizeRoadSpec } from "../core/roadSpec";
 import { RoadGraph, type DrivingSide, type NodeId, type RoadSegment, type SavedMap } from "../core/roadGraph";
 import { CAR_LENGTH, SIM_DT, Simulation, type Car } from "../core/simulation";
 import { LaneTool } from "../tools/LaneTool";
@@ -157,7 +158,8 @@ export class Engine {
       graph: this.graph,
       overlay: this.overlay,
       snapToGrid: () => isSnapping(gameStore.getState()),
-      roadSpec: () => gameStore.getState().roadSpec,
+      // As it'll be built (a tunnel without footpaths, say).
+      roadSpec: () => normalizeRoadSpec(gameStore.getState().roadSpec),
       roadMode: () => gameStore.getState().roadMode,
       parallelOffset: () => {
         const { parallel, parallelOffset } = gameStore.getState();
@@ -174,9 +176,9 @@ export class Engine {
       trafficMode: () => gameStore.getState().trafficMode,
       zones: this.zones,
       stopLineAt: (segment: RoadSegment, node: number) => this.roads.stopLineAt(segment, node),
-      screenRect: (a: Vec2, b: Vec2) => {
-        const sa = this.camera.worldToScreen(a);
-        const sb = this.camera.worldToScreen(b);
+      screenRect: (a: Vec2, b: Vec2, height = 0) => {
+        const sa = this.camera.worldToScreen(a, height);
+        const sb = this.camera.worldToScreen(b, height);
         const corners = [
           { x: sa.x, y: sa.y },
           { x: sb.x, y: sa.y },
@@ -184,7 +186,7 @@ export class Engine {
           { x: sa.x, y: sb.y },
         ];
         // Every screen point hits the ground within the camera's pitch limits; fall back to the drag points.
-        return corners.map((c, i) => this.camera.screenToWorld(c) ?? (i < 2 ? a : b));
+        return corners.map((c, i) => this.camera.screenToWorld(c, height) ?? (i < 2 ? a : b));
       },
       setHint: (text: string | null) => {
         const pointer = this.pointer;
@@ -654,8 +656,9 @@ export class Engine {
 
   /** Where the tool points at screen point `s`: on the ground, or up on the level of the bridge (or tunnel) the Road tool's laying. */
   private toolPoint(s: Vec2): Vec2 | null {
-    const { tool, roadSpec } = gameStore.getState();
-    return this.camera.screenToWorld(s, tool === "road" ? levelHeight(roadSpec.level ?? 0) : 0);
+    // Only the tools that work at the step (not, say, the lane editor opened from the Road tool).
+    const atStep = this.tool === this.tools.road || this.tool === this.tools.bulldozeRoads;
+    return this.camera.screenToWorld(s, atStep ? levelHeight(gameStore.getState().roadSpec.level ?? 0) : 0);
   }
 
   private toolMove(s: Vec2): void {
