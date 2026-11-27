@@ -387,21 +387,13 @@ export class Simulation {
     this.counts.finished.push(this.time);
   }
 
-  /** How high a car is: up on a bridge, down in a tunnel, else 0. */
+  /** How high a car is: up on a bridge, down in a tunnel, else 0 (through a junction: the junction's height). */
   heightOf(car: Car): number {
-    const id = car.legs[car.leg].segment;
-    const segment = id === undefined ? undefined : this.graph.segments.get(id);
-    if (!segment?.spec.level) return 0;
     const leg = car.legs[car.leg];
-    // In a lane: its track runs the road's length, so how far along it the car is says where it is
-    // on the road (no search). Elsewhere (changing lane, a driveway): the nearest point on the road.
-    if (leg.key.startsWith("r:")) {
-      const along = Math.min(1, Math.max(0, this.at(car) / (leg.track.length || 1)));
-      const forward = leg.key.split(":")[2] === "1";
-      return this.graph.heightAt(segment, (forward ? along : 1 - along) * this.graph.path(segment).length);
-    }
-    const { x, y } = this.pose(car);
-    return this.graph.heightAt(segment, this.graph.path(segment).nearest({ x, y }).s);
+    if (leg.node !== undefined && this.graph.nodes.has(leg.node)) return this.graph.nodeHeight(leg.node);
+    const segment = leg.segment === undefined ? undefined : this.graph.segments.get(leg.segment);
+    // The same all along a road (for now: no ramps).
+    return segment ? this.graph.heightAt(segment, 0) : 0;
   }
 
   /** Points `step` apart along the rest of a car's trip, from where it is to where it ends, with the road's height at each (for drawing its route). */
@@ -411,10 +403,10 @@ export class Simulation {
       const leg = car.legs[i];
       const length = legLength(leg);
       const segment = leg.segment === undefined ? undefined : this.graph.segments.get(leg.segment);
-      const path = segment?.spec.level ? this.graph.path(segment) : null;
+      const h = leg.node !== undefined && this.graph.nodes.has(leg.node) ? this.graph.nodeHeight(leg.node) : segment ? this.graph.heightAt(segment, 0) : 0;
       for (let s = i === car.leg ? Math.min(car.s, length) : 0; ; s = Math.min(s + step, length)) {
         const { p } = legAt(leg, s);
-        points.push({ x: p.x, y: p.y, h: path ? this.graph.heightAt(segment!, path.nearest(p).s) : 0 });
+        points.push({ x: p.x, y: p.y, h });
         if (s >= length) break;
       }
     }

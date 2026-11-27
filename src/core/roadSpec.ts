@@ -13,8 +13,8 @@ export interface RoadSpec {
   /** Trees in planters along the footpaths. Roads with footpaths only. */
   trees?: boolean;
   /**
-   * A bridge (above 0) or tunnel (below) at that level, see `core/grade`. In the road tool, 1 or -1
-   * asks for a bridge or tunnel; building it picks the level over (or under) whatever it crosses.
+   * A bridge (above 0) or tunnel (below) at that step, see `core/grade`: the road (and its nodes) at
+   * that height all along, set by the road tool's bridge and tunnel buttons.
    */
   level?: number;
   /** Speed limit in km/h, one of `SPEED_LIMITS` (absent: `DEFAULT_SPEED`). Cars drive at it, and routes prefer faster roads. */

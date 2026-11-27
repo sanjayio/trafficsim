@@ -1,5 +1,4 @@
 import { AdditiveBlending, BoxGeometry, CanvasTexture, Color, Float32BufferAttribute, Group, InstancedMesh, Matrix4, MeshBasicMaterial, PlaneGeometry, Quaternion, Vector3 } from "three";
-import { COVERED } from "../core/grade";
 import { CAR_TYPES, type CarType, type Simulation } from "../core/simulation";
 import { carModel } from "./cars";
 
@@ -74,9 +73,8 @@ export class CarLayer extends Group {
       // Parked underground: out of sight.
       if (car.leaveAt !== null && car.legs[car.leg].underground) continue;
       const { x, y, heading } = sim.pose(car);
-      // Up on a bridge or down in a tunnel; out of sight where the tunnel's covered.
+      // Up on a bridge or down in a tunnel (the ground hides it there, but in the underground view).
       const lift = sim.heightOf(car);
-      if (lift < COVERED) continue;
       const shape = carModel(car.type);
       const cos = Math.cos(heading);
       const sin = Math.sin(heading);

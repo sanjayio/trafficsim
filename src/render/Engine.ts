@@ -10,8 +10,8 @@ import { LaneTool } from "../tools/LaneTool";
 import { TrafficTool } from "../tools/TrafficTool";
 import { ZoneMap } from "../core/zoning";
 import { levelUp } from "../core/growth";
-import { COVERED } from "../core/grade";
 import { slipRoad } from "../core/junction";
+import { levelHeight } from "../core/grade";
 import { CarLayer } from "./CarLayer";
 import { RouteLine } from "./RouteLine";
 import { ZoneLayer } from "./ZoneLayer";
@@ -509,7 +509,11 @@ export class Engine {
     this.cars.update(this.sim, look.night);
     // The car's trip ended (or the road under it went): nothing to show.
     if (this.selectedCar && !this.sim.cars.includes(this.selectedCar)) this.selectedCar = null;
-    this.routeLine.update(this.sim, this.selectedCar);
+    // Laying a tunnel: the ground turns see-through, so tunnels and the cars in them show.
+    const { tool: current, roadSpec } = gameStore.getState();
+    const underground = current === "road" && (roadSpec.level ?? 0) < 0;
+    this.ground.setUnderground(underground);
+    this.routeLine.update(this.sim, this.selectedCar, underground);
     this.roads.setLights(look.exposure, look.night);
     if (this.streetLightsDirty) {
       this.streetLights.rebuild();
@@ -586,7 +590,8 @@ export class Engine {
     for (const car of this.sim.cars) {
       if (car.leaveAt !== null && car.legs[car.leg].underground) continue;
       const lift = this.sim.heightOf(car);
-      if (lift < COVERED) continue;
+      // In a tunnel: out of reach under the ground, but in the underground view.
+      if (lift < 0 && !this.ground.underground) continue;
       const at = this.camera.worldToScreen(this.sim.pose(car), lift);
       const distance = Math.hypot(at.x - s.x, at.y - s.y);
       if (distance < bestDistance) {
@@ -647,8 +652,14 @@ export class Engine {
     if (e.altKey !== gameStore.getState().snapInverted) gameStore.getState().setSnapInverted(e.altKey);
   }
 
+  /** Where the tool points at screen point `s`: on the ground, or up on the level of the bridge (or tunnel) the Road tool's laying. */
+  private toolPoint(s: Vec2): Vec2 | null {
+    const { tool, roadSpec } = gameStore.getState();
+    return this.camera.screenToWorld(s, tool === "road" ? levelHeight(roadSpec.level ?? 0) : 0);
+  }
+
   private toolMove(s: Vec2): void {
-    const p = this.camera.screenToWorld(s);
+    const p = this.toolPoint(s);
     if (p) this.tool.onMove(p);
   }
 
@@ -659,7 +670,7 @@ export class Engine {
     if (e.button === 2) this.rightDownAt = this.toCanvas(e);
     if (e.button === 0) this.leftDownAt = this.toCanvas(e);
     if (e.button !== 0 || this.camera.isPanning) return;
-    const p = this.camera.screenToWorld(this.toCanvas(e));
+    const p = this.toolPoint(this.toCanvas(e));
     if (p) this.tool.onDown(p);
   };
 
@@ -693,7 +704,7 @@ export class Engine {
       this.rightDownAt = null;
     }
     if (e.button !== 0 || this.camera.isPanning) return;
-    const p = this.camera.screenToWorld(this.toCanvas(e));
+    const p = this.toolPoint(this.toCanvas(e));
     if (p) this.tool.onUp(p);
   };
 

@@ -3,7 +3,7 @@ import { SampledCurve, type Curve } from "../core/curve";
 import type { Vec2 } from "../core/geometry";
 import type { RoadSpec } from "../core/roadSpec";
 import type { Overlay } from "../tools/Tool";
-import { capsuleGeometry, convexGeometry, FlatLayer, flatMaterial, stripOutline } from "./flat";
+import { KERB_HEIGHT, capsuleGeometry, convexGeometry, FlatLayer, flatMaterial, stripOutline } from "./flat";
 import { palette } from "./palette";
 import { buildRoadParts, ROAD_PART_STYLE, surface, type RoadPart } from "./roadParts";
 
@@ -27,6 +27,7 @@ export class OverlayLayer extends Group implements Overlay {
 
   /** Removes all children like `Object3D.clear`, and frees their GPU resources. */
   override clear(): this {
+    this.position.y = 0;
     for (const child of [...this.children]) {
       const mesh = child as Mesh;
       this.remove(mesh);
@@ -36,11 +37,17 @@ export class OverlayLayer extends Group implements Overlay {
     return this;
   }
 
+  raise(height: number): void {
+    this.position.y = height;
+  }
+
   roadPreview(curve: Curve, spec: RoadSpec, valid: boolean): void {
     for (const { part, geometry } of buildRoadParts(new SampledCurve(curve), spec)) {
       const material = valid ? this.previewMaterials[part] : this.invalidMaterial;
       // Keep the parts' relative order (footpath < asphalt < markings) above everything else.
-      this.addMesh(geometry, material, FlatLayer.overlay + ROAD_PART_STYLE[part].layer, false);
+      const mesh = this.addMesh(geometry, material, FlatLayer.overlay + ROAD_PART_STYLE[part].layer, false);
+      // Footpaths (and medians) stand above the road, as built.
+      if (part === "footpath" || part === "median") mesh.position.y = KERB_HEIGHT;
     }
   }
 
@@ -93,10 +100,11 @@ export class OverlayLayer extends Group implements Overlay {
     this.invalidMaterial.dispose();
   }
 
-  private addMesh(geometry: BufferGeometry, material: MeshBasicMaterial, order: number, ownsMaterial: boolean): void {
+  private addMesh(geometry: BufferGeometry, material: MeshBasicMaterial, order: number, ownsMaterial: boolean): Mesh {
     const mesh = new Mesh(geometry, material);
     mesh.renderOrder = order;
     mesh.userData.ownsMaterial = ownsMaterial;
     this.add(mesh);
+    return mesh;
   }
 }

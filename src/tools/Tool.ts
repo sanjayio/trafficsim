@@ -7,7 +7,10 @@ import type { ZoneMap } from "../core/zoning";
 
 /** Transient previews and highlights drawn above the road network. Implemented by the renderer. */
 export interface Overlay {
+  /** Clears the overlay, and drops it back to the ground (see `raise`). */
   clear(): void;
+  /** Draws what follows `height` up (or down): a bridge's or tunnel's preview at its height. */
+  raise(height: number): void;
   /** A translucent version of the road that would be built along `curve`; red when it can't be built. */
   roadPreview(curve: Curve, spec: RoadSpec, valid: boolean): void;
   /** A plain round-capped band along `curve`, e.g. to highlight an existing road. */

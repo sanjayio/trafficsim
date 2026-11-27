@@ -1,3 +1,4 @@
+import { levelHeight } from "../core/grade";
 import { MIN_ROAD_LENGTH, NODE_SNAP_RADIUS } from "../core/constants";
 import {
   endTangent,
@@ -112,6 +113,7 @@ export class RoadTool implements Tool {
       tolerance: this.ctx.snapTolerance(),
       isRoadEnd,
       from,
+      level: this.ctx.roadSpec().level ?? 0,
     });
   }
 
@@ -132,7 +134,7 @@ export class RoadTool implements Tool {
       // existing nodes too, so parallel roads chain together.
       const pieces = offsetCurve(main, offset);
       const attach = (q: Vec2) => {
-        const node = this.ctx.graph.nodeNear(q, NODE_SNAP_RADIUS);
+        const node = this.ctx.graph.nodeNear(q, NODE_SNAP_RADIUS, spec.level ?? 0);
         return node ? { x: node.x, y: node.y } : q;
       };
       pieces[0] = { ...pieces[0], a: attach(pieces[0].a) };
@@ -166,6 +168,8 @@ export class RoadTool implements Tool {
   private drawPreview(cursor: Vec2, guides: Guide[]): void {
     const { overlay } = this.ctx;
     overlay.clear();
+    // A bridge or tunnel at its height, as it'll be built.
+    overlay.raise(levelHeight(this.ctx.roadSpec().level ?? 0));
     const points = [...this.points, cursor];
 
     const pixel = this.ctx.worldPerPixel();
@@ -222,7 +226,7 @@ export class RoadTool implements Tool {
   private inLane(p: Vec2, toward: Vec2 | null, leaving: boolean): Vec2 {
     if (!this.ctx.roadSpec().oneWay || !toward) return p;
     const { graph } = this.ctx;
-    const segment = graph.segmentAt(p);
+    const segment = graph.segmentAt(p, 0, this.ctx.roadSpec().level ?? 0);
     if (!segment || segment.spec.oneWay) return p;
     const { point, s } = graph.path(segment).nearest(p);
     if (distance(point, p) > 0.5) return p;

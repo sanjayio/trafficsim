@@ -146,10 +146,11 @@ export class Camera {
     this.apply();
   }
 
-  /** The ground point under screen point `s` (canvas pixels), or null if that ray misses the ground. */
-  screenToWorld(s: Vec2): Vec2 | null {
+  /** The ground point under screen point `s` (canvas pixels), or null if that ray misses the ground; or where it meets a level `height` up (a bridge's deck). */
+  screenToWorld(s: Vec2, height = 0): Vec2 | null {
     this.ndc.set((s.x / this.width) * 2 - 1, -(s.y / this.height) * 2 + 1);
     this.raycaster.setFromCamera(this.ndc, this.camera);
+    this.ground.constant = -height;
     const hit = this.raycaster.ray.intersectPlane(this.ground, this.hit);
     return hit ? { x: hit.x, y: hit.z } : null;
   }

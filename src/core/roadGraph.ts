@@ -13,7 +13,7 @@ import {
 } from "./junction";
 import type { LaneRef } from "./lanes";
 import { buildingSize, LEVEL_NEEDS, levelOf, LOT_SETBACK, MAX_LEVEL, parseTerminal, type Lot, type Terminal } from "./terminal";
-import { CLEARANCE, heightAlong, MAX_LEVEL as MAX_GRADE, minGradedLength } from "./grade";
+import { levelHeight, MAX_LEVEL as MAX_GRADE } from "./grade";
 import { carriagewayWidth, DEFAULT_ROAD_SPEC, normalizeRoadSpec, parseRoadSpec, roadWidth, type RoadSpec } from "./roadSpec";
 
 export type NodeId = number;
@@ -76,7 +76,7 @@ export interface Crossing {
 export interface RoadPlan {
   crossings: Crossing[];
   valid: boolean;
-  /** The level it would be built at: 0, or a bridge's (or tunnel's) over (or under) what it crosses. */
+  /** The level it would be built at: 0, or a bridge's (or tunnel's) step, clamped (see `core/grade`). */
   level: number;
 }
 
@@ -197,7 +197,8 @@ export class RoadGraph {
   setTerminal(nodeId: NodeId, terminal: Terminal | null): void {
     if (!terminal) return this.dropTerminal(nodeId);
     const roads = this.segmentsAt(nodeId).length;
-    if (roads < 1 || roads > 2) return;
+    // On the ground only: no buildings off a bridge or a tunnel.
+    if (roads < 1 || roads > 2 || this.nodeLevel(nodeId) !== 0) return;
     if (this.terminals.get(nodeId)?.kind === "sink" && terminal.kind !== "sink") this.dropTerminal(nodeId);
     this.terminals.set(nodeId, terminal);
     this.emit({ type: "terminal-changed", nodeId });
@@ -411,8 +412,9 @@ export class RoadGraph {
    */
   addRoad(curve: Curve, spec: RoadSpec): RoadSegment | null {
     if (distance(curve.a, curve.b) < NODE_MERGE_DIST) return null;
-    const a = this.nodeAt(curve.a);
-    const b = this.nodeAt(curve.b);
+    const level = spec.level ?? 0;
+    const a = this.nodeAt(curve.a, level);
+    const b = this.nodeAt(curve.b, level);
     if (this.findDuplicate(a.id, b.id, curve)) return null;
     const segment = this.insertSegment(a.id, b.id, curve, normalizeRoadSpec(spec));
     this.forgetConnections([a.id, b.id]);
@@ -426,9 +428,10 @@ export class RoadGraph {
   planRoad(curve: Curve, spec?: RoadSpec): RoadPlan {
     const path = new SampledCurve(curve);
     const crossings: Crossing[] = [];
-    const level = this.levelFor(path, spec?.level ?? 0);
-    const height = (s: number) => heightAlong(level, s, path.length);
-    let valid = path.length >= minGradedLength(level);
+    const level = Math.max(-MAX_GRADE, Math.min(MAX_GRADE, spec?.level ?? 0));
+    // Roads at another level pass over or under (a step apart clears): no junction with them.
+    const same = (segment: RoadSegment) => (segment.spec.level ?? 0) === level;
+    let valid = true;
     const add = (c: Crossing) => {
       // Several hits at one spot (e.g. through an existing junction) are one crossing; prefer the node.
       const same = crossings.findIndex((o) => distance(o.point, c.point) < 1);
@@ -438,12 +441,11 @@ export class RoadGraph {
 
     // Road ends that land on another road's centre line form T-junctions.
     for (const [end, t] of [[curve.a, 0], [curve.b, 1]] as const) {
-      if (this.nodeNear(end, NODE_MERGE_DIST)) continue;
+      if (this.nodeNear(end, NODE_MERGE_DIST, level)) continue;
       for (const segment of this.segments.values()) {
+        if (!same(segment)) continue;
         const nearest = this.path(segment).nearest(end);
         if (nearest.distance <= ON_ROAD_TOLERANCE) {
-          // Not onto a bridge or into a tunnel part way along: only at their ends, on the ground.
-          if (this.heightAt(segment, nearest.s) !== 0) valid = false;
           add({ point: nearest.point, t, segment, angle: 90 });
           break;
         }
@@ -452,17 +454,9 @@ export class RoadGraph {
 
     // Crossings along the way.
     for (const segment of this.segments.values()) {
+      if (!same(segment)) continue;
       for (const hit of path.intersections(this.path(segment))) {
         if (distance(hit.point, curve.a) < 1 || distance(hit.point, curve.b) < 1) continue;
-        // Over or under it (a bridge or tunnel, or a road under or over one): no junction. Too close
-        // in height to pass, and not both on the ground (on a ramp): it can't be built.
-        const mine = height(path.nearest(hit.point).s);
-        const theirs = this.heightAt(segment, this.path(segment).nearest(hit.point).s);
-        if (Math.abs(mine - theirs) >= CLEARANCE) continue;
-        if (mine !== 0 || theirs !== 0) {
-          valid = false;
-          continue;
-        }
         const angle = (Math.acos(Math.min(1, Math.abs(hit.tangentA.x * hit.tangentB.x + hit.tangentA.y * hit.tangentB.y))) * 180) / Math.PI;
         // Crossing right next to one of the segment's ends: use that junction instead of splitting.
         const end = [this.node(segment.a), this.node(segment.b)].find((n) => distance(n, hit.point) <= NODE_SNAP_RADIUS);
@@ -489,25 +483,19 @@ export class RoadGraph {
     return { crossings, valid, level };
   }
 
-  /**
-   * The level a road along `path` asked to be at `wanted` (1 a bridge, -1 a tunnel, 0 the ground)
-   * goes at: a bridge one above the highest bridge it crosses (a tunnel one below the deepest).
-   */
-  private levelFor(path: SampledCurve, wanted: number): number {
-    if (!wanted) return 0;
-    const sign = Math.sign(wanted);
-    let level = sign;
-    for (const segment of this.segments.values()) {
-      const other = segment.spec.level ?? 0;
-      if (Math.sign(other) !== sign) continue;
-      if (path.intersections(this.path(segment)).length) level = sign * Math.max(Math.abs(level), Math.abs(other) + 1);
-    }
-    return Math.max(-MAX_GRADE, Math.min(MAX_GRADE, level));
+  /** Height of `segment`'s road `s` along its centre line: 0 on the ground, up on a bridge, down in a tunnel (the same all along, for now). */
+  heightAt(segment: RoadSegment, _s: number): number {
+    return levelHeight(segment.spec.level ?? 0);
   }
 
-  /** Height of `segment`'s road `s` along its centre line: 0 on the ground, up on a bridge, down in a tunnel. */
-  heightAt(segment: RoadSegment, s: number): number {
-    return heightAlong(segment.spec.level ?? 0, s, this.path(segment).length);
+  /** The level of node `nodeId`: its roads' (they're all at one level). */
+  nodeLevel(nodeId: NodeId): number {
+    return this.segmentsAt(nodeId)[0]?.spec.level ?? 0;
+  }
+
+  /** Height of node `nodeId`: its roads' (see `heightAt`). */
+  nodeHeight(nodeId: NodeId): number {
+    return levelHeight(this.nodeLevel(nodeId));
   }
 
   /**
@@ -610,13 +598,13 @@ export class RoadGraph {
     this.emit({ type: "segment-removed", segment });
   }
 
-  /** The node closest to `p`, if any lies within `radius`. */
-  nodeNear(p: Vec2, radius: number): RoadNode | undefined {
+  /** The node closest to `p`, if any lies within `radius` (at `level`, if given). */
+  nodeNear(p: Vec2, radius: number, level?: number): RoadNode | undefined {
     let best: RoadNode | undefined;
     let bestDist = radius;
     for (const node of this.nodes.values()) {
       const d = distance(node, p);
-      if (d <= bestDist) {
+      if (d <= bestDist && (level === undefined || this.nodeLevel(node.id) === level)) {
         best = node;
         bestDist = d;
       }
@@ -624,11 +612,12 @@ export class RoadGraph {
     return best;
   }
 
-  /** The segment whose surface (its full width plus `margin`) covers `p`, nearest centre line first. */
-  segmentAt(p: Vec2, margin = 0): RoadSegment | undefined {
+  /** The segment whose surface (its full width plus `margin`) covers `p`, nearest centre line first (at `level`, if given). */
+  segmentAt(p: Vec2, margin = 0, level?: number): RoadSegment | undefined {
     let best: RoadSegment | undefined;
     let bestDist = Infinity;
     for (const segment of this.segments.values()) {
+      if (level !== undefined && (segment.spec.level ?? 0) !== level) continue;
       const reach = roadWidth(segment.spec) / 2 + margin;
       const path = this.path(segment);
       const { minX, minY, maxX, maxY } = path.bounds;
@@ -761,9 +750,10 @@ export class RoadGraph {
     this.emit({ type: "reset" });
   }
 
-  private nodeAt(p: Vec2): RoadNode {
+  /** The node at `p` at `level` (one there already, or a new one): roads join only at one level. */
+  private nodeAt(p: Vec2, level: number): RoadNode {
     for (const node of this.nodes.values()) {
-      if (distance(node, p) < NODE_MERGE_DIST) return node;
+      if (distance(node, p) < NODE_MERGE_DIST && this.nodeLevel(node.id) === level) return node;
     }
     const node: RoadNode = { id: this.nextId++, x: p.x, y: p.y };
     this.nodes.set(node.id, node);

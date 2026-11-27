@@ -1,5 +1,4 @@
 import { BufferGeometry, Float32BufferAttribute, Mesh, type MeshBasicMaterial } from "three";
-import { COVERED } from "../core/grade";
 import type { Car, Simulation } from "../core/simulation";
 import { FlatLayer, flatMaterial } from "./flat";
 
@@ -25,7 +24,7 @@ export class RouteLine extends Mesh<BufferGeometry, MeshBasicMaterial> {
   private frames = 0;
 
   /** Redraws the rest of `car`'s route (now and then, see `REDRAW_EVERY`), or hides the line when null. */
-  update(sim: Simulation, car: Car | null): void {
+  update(sim: Simulation, car: Car | null, underground = false): void {
     this.visible = car !== null;
     if (!car) return;
     const fresh = this.drawn?.car === car && this.drawn.leg === car.leg && ++this.frames % REDRAW_EVERY !== 0;
@@ -37,8 +36,8 @@ export class RouteLine extends Mesh<BufferGeometry, MeshBasicMaterial> {
     for (let i = 0; i + 1 < points.length; i++) {
       const a = points[i];
       const b = points[i + 1];
-      // Out of sight where a tunnel's covered.
-      if (a.h < COVERED && b.h < COVERED) continue;
+      // Out of sight in a tunnel, but in the underground view.
+      if (!underground && a.h < 0 && b.h < 0) continue;
       const len = Math.hypot(b.x - a.x, b.y - a.y);
       if (len < 1e-3) continue;
       const nx = (-(b.y - a.y) / len) * (WIDTH / 2);

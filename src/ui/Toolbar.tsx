@@ -28,6 +28,7 @@ import {
   type LucideProps,
 } from "lucide-react";
 import { DEFAULT_SPEED, MAX_LANES, SPEED_LIMITS } from "../core/roadSpec";
+import { MAX_LEVEL } from "../core/grade";
 import { useEffect, type ReactNode } from "react";
 import { gameStore, isSnapping, useGame, type SimSpeed, type ToolId } from "../state/store";
 import type { BulldozeMode, RoadMode } from "../tools/Tool";
@@ -251,12 +252,22 @@ function ParallelOptions() {
   );
 }
 
+/** A bridge's or tunnel's next step from `step` (0: off): 1, 2, 3, then off. */
+const nextStep = (step: number): number | undefined => (step >= MAX_LEVEL ? undefined : step + 1);
+
+/** The step a bridge or tunnel is set to, in the corner of its button. */
+function StepBadge({ step }: { step: number }) {
+  return <span className="absolute -right-0.5 -top-0.5 grid size-3.5 place-items-center rounded-full bg-white text-[9px] font-bold leading-none text-sky-600">{step}</span>;
+}
+
 /** Second-level options shown while the Road tool is active. */
 function RoadOptions() {
   // Shows the effective state, so holding Alt/Option visibly flips it. Clicking flips the setting.
   const snapping = useGame(isSnapping);
   const spec = useGame((s) => s.roadSpec);
   const update = gameStore.getState().updateRoadSpec;
+  const bridge = Math.max(0, spec.level ?? 0);
+  const tunnel = Math.max(0, -(spec.level ?? 0));
   const laneWord = (n: number) => `${n} lane${n === 1 ? "" : "s"}`;
 
   const mode = useGame((s) => s.roadMode);
@@ -324,11 +335,14 @@ function RoadOptions() {
         >
           <TreeDeciduous size={ICON_SIZE} strokeWidth={2} aria-hidden />
         </IconButton>
-        <IconButton label="Bridge" pressed={(spec.level ?? 0) > 0} onClick={() => update({ level: (spec.level ?? 0) > 0 ? undefined : 1 })}>
+        {/* Each click a step higher (or deeper), then off: the height the road is built at, all along. */}
+        <IconButton label={bridge ? `Bridge: step ${bridge}` : "Bridge"} pressed={bridge > 0} onClick={() => update({ level: nextStep(bridge) })}>
           <BridgeIcon size={ICON_SIZE} strokeWidth={2} aria-hidden />
+          {bridge > 0 && <StepBadge step={bridge} />}
         </IconButton>
-        <IconButton label="Tunnel" pressed={(spec.level ?? 0) < 0} onClick={() => update({ level: (spec.level ?? 0) < 0 ? undefined : -1 })}>
+        <IconButton label={tunnel ? `Tunnel: step ${tunnel}` : "Tunnel"} pressed={tunnel > 0} onClick={() => update({ level: -(nextStep(tunnel) ?? 0) || undefined })}>
           <TunnelIcon size={ICON_SIZE} strokeWidth={2} aria-hidden />
+          {tunnel > 0 && <StepBadge step={tunnel} />}
         </IconButton>
       </Row>
       <RowDivider />

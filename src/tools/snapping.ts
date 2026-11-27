@@ -1,4 +1,3 @@
-import { rampLength } from "../core/grade";
 import { GRID_SIZE, NODE_SNAP_RADIUS } from "../core/constants";
 import { rightNormal, SampledCurve, straightCurve } from "../core/curve";
 import { distance, snapToGrid, type Vec2 } from "../core/geometry";
@@ -28,6 +27,8 @@ export interface SnapOptions {
   isRoadEnd: boolean;
   /** The previous point of the road being drawn, for angle guidelines. */
   from?: { point: Vec2; reference: Vec2 };
+  /** The level the road's drawn at (a bridge's or tunnel's step): it joins only nodes and roads there. */
+  level?: number;
 }
 
 /** Angle guidelines from the previous point, relative to its reference direction. */
@@ -52,7 +53,7 @@ const MIN_CROSSING_SINE = 0.5;
  */
 export function snapPoint(p: Vec2, o: SnapOptions): SnapResult {
   if (o.isRoadEnd) {
-    const node = o.graph.nodeNear(p, Math.max(NODE_SNAP_RADIUS, o.tolerance));
+    const node = o.graph.nodeNear(p, Math.max(NODE_SNAP_RADIUS, o.tolerance), o.level ?? 0);
     if (node) return { point: { x: node.x, y: node.y }, guides: [] };
   }
 
@@ -60,19 +61,9 @@ export function snapPoint(p: Vec2, o: SnapOptions): SnapResult {
     const near = guidesNear(p, o).filter((g) => distanceToLine(p, g) <= o.tolerance);
 
     if (o.isRoadEnd) {
-      const segment = o.graph.segmentAt(p);
-      if (segment && !segment.spec.level) return snapOntoRoad(p, o.graph.path(segment), near, o);
-      // A bridge or tunnel can only be joined at its ends: over either ramp, to that end.
-      if (segment) {
-        const path = o.graph.path(segment);
-        const s = path.nearest(p).s;
-        const ramp = rampLength(segment.spec.level!, path.length);
-        const end = s <= ramp ? segment.a : path.length - s <= ramp ? segment.b : null;
-        if (end !== null) {
-          const node = o.graph.node(end);
-          return { point: { x: node.x, y: node.y }, guides: [] };
-        }
-      }
+      // Onto a road at this level (a bridge joins only bridges at its step).
+      const segment = o.graph.segmentAt(p, 0, o.level ?? 0);
+      if (segment) return snapOntoRoad(p, o.graph.path(segment), near, o);
     }
 
     let best: SnapResult | null = null;

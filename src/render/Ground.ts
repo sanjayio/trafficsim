@@ -5,6 +5,8 @@ import { palette } from "./palette";
 /** Size of one repeat of the grass texture, in world units, and of its canvas in pixels. */
 const TILE = 48;
 const PIXELS = 256;
+/** How much of the ground shows in the underground view. */
+const UNDERGROUND_OPACITY = 0.3;
 /** Grid squares of the ground mesh: enough for its broad colour patches to look smooth. */
 const SEGMENTS = 96;
 
@@ -53,6 +55,19 @@ export class Ground extends Mesh<PlaneGeometry, MeshBasicMaterial> {
       }),
     );
     this.renderOrder = renderOrder;
+  }
+
+  /** Whether the ground is see-through, showing tunnels under it (see `setUnderground`). */
+  underground = false;
+
+  /** Turns the ground see-through (laying tunnels) or back: tunnels show through it, the roads on it still drawn over. */
+  setUnderground(on: boolean): void {
+    if (on === this.underground) return;
+    this.underground = on;
+    this.material.transparent = on;
+    this.material.opacity = on ? UNDERGROUND_OPACITY : 1;
+    this.material.depthWrite = !on;
+    this.material.needsUpdate = true;
   }
 
   dispose(): void {

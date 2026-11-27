@@ -1,6 +1,7 @@
 import {
   Color,
   DirectionalLight,
+  DoubleSide,
   Mesh,
   MeshBasicMaterial,
   PCFSoftShadowMap,
@@ -76,6 +77,23 @@ export function installCloudShadows(): void {
   };
 }
 
+/** Shows the sun's shadows, as dark as `SunShadows` sets them: on the ground, and over raised parts (see `catchShadows`). */
+const CATCHER_LIFT = 0.3;
+// Both sides, as the road parts it lies over are drawn (their triangles face either way).
+const CATCHER = new ShadowMaterial({ opacity: 0.4, depthWrite: false, side: DoubleSide });
+
+/**
+ * Shows the sun's shadows on `mesh` (a bridge's deck, which, drawn without lighting,
+ * can't take them itself): a clear copy of it that does, over it.
+ */
+export function catchShadows(mesh: Mesh): void {
+  const catcher = new Mesh(mesh.geometry, CATCHER);
+  // A little over it, so the deck (which casts too) doesn't shade itself where the sun is low.
+  catcher.position.y = CATCHER_LIFT;
+  catcher.receiveShadow = true;
+  mesh.add(catcher);
+}
+
 /**
  * The sun's shadows: a directional light along the sun renders a shadow map from everything that
  * casts (buildings, trees, cars, signs and signals), and a clear layer over the ground, roads and
@@ -93,7 +111,7 @@ export class SunShadows {
     this.light.shadow.bias = -0.0004;
     this.catcher = new Mesh(
       new PlaneGeometry(WORLD_SIZE, WORLD_SIZE).rotateX(-Math.PI / 2).translate(WORLD_SIZE / 2, 0, WORLD_SIZE / 2),
-      new ShadowMaterial({ opacity: 0.4, depthWrite: false }),
+      CATCHER,
     );
     this.catcher.receiveShadow = true;
     this.catcher.renderOrder = renderOrder;
@@ -139,6 +157,5 @@ export class SunShadows {
   dispose(): void {
     this.light.dispose();
     this.catcher.geometry.dispose();
-    this.catcher.material.dispose();
   }
 }

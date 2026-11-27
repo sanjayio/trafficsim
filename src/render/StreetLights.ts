@@ -13,7 +13,6 @@ import {
   Vector3,
 } from "three";
 import type { RoadGraph } from "../core/roadGraph";
-import { rampLength } from "../core/grade";
 import { carriagewayWidth, FOOTPATH_WIDTH, hasTrees, roadWidth } from "../core/roadSpec";
 import { LEAVES, swayMaterial, treeGeometries, TRUNK } from "./buildings";
 import { carPark, DRIVEWAY_WIDTH, isSourceBuilding, lotPoint, SIDE_PATH } from "../core/terminal";
@@ -24,6 +23,8 @@ const END_CLEAR = 14;
 /** Pole height, how far the arm reaches out over the road, and the light pool's size on the ground. */
 const POLE = { height: 16, width: 0.7 };
 const ARM = 4;
+/** How thick poles and arms are in the shadows they cast: thicker than they are, or the shadow map (a unit or so a pixel) blurs their shadows away. */
+const SHADOW_WIDTH = 1.8;
 const POOL = 30;
 /** Street trees: roughly how far apart along each footpath, and their square planters' size. */
 const TREE_SPACING = 24;
@@ -42,6 +43,8 @@ export class StreetLights extends Group {
   private box = new BoxGeometry(1, 1, 1);
   private plane = new PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
   private poleMaterial = new MeshBasicMaterial({ color: 0x80868d });
+  /** Not drawn, only casting the poles' and arms' shadows (see `SHADOW_WIDTH`). */
+  private shadowMaterial = new MeshBasicMaterial({ colorWrite: false, depthWrite: false });
   private headMaterial = new MeshBasicMaterial({ color: HEAD_COLOR.day, toneMapped: false });
   private poolMaterial = new MeshBasicMaterial({
     color: 0xffd98a,
@@ -76,6 +79,7 @@ export class StreetLights extends Group {
     const arms: Matrix4[] = [];
     const heads: Matrix4[] = [];
     const pools: Matrix4[] = [];
+    const shadows: Matrix4[] = [];
     const planters: Matrix4[] = [];
     const soil: Matrix4[] = [];
     const trunks: Matrix4[] = [];
@@ -103,16 +107,6 @@ export class StreetLights extends Group {
         const across = d.x * out.x + d.y * out.y;
         return across < 1 && across > -FOOTPATH_WIDTH * 3 && Math.abs(d.x * along.x + d.y * along.y) < half + size / 2 + 1;
       });
-    // No light where its pool would reach onto a ramp (a flat pool can't follow the slope).
-    const ramps = [...this.graph.segments.values()].filter((g) => g.spec.level);
-    const nearRamp = (p: { x: number; y: number }) =>
-      ramps.some((g) => {
-        const path = this.graph.drawnPath(g);
-        const { distance, s } = path.nearest(p);
-        if (distance > roadWidth(g.spec) / 2 + POOL / 2) return false;
-        const ramp = rampLength(g.spec.level!, this.graph.path(g).length) / (this.graph.path(g).length / (path.length || 1));
-        return s < ramp + POOL / 2 || s > path.length - ramp - POOL / 2;
-      });
     for (const segment of this.graph.segments.values()) {
       // Along footpaths, and on bridges (at the parapet if there's no footpath); not in tunnels.
       const bridge = (segment.spec.level ?? 0) > 0;
@@ -132,6 +126,8 @@ export class StreetLights extends Group {
       if (to <= from) continue;
       const count = Math.max(1, Math.floor((to - from) / SPACING) + 1);
       const step = count > 1 ? (to - from) / (count - 1) : 0;
+      // A bridge deck's width, between its parapets.
+      const deck = segment.spec.footpath ? roadWidth(segment.spec) : carriagewayWidth(segment.spec);
       const kerb = segment.spec.footpath ? roadWidth(segment.spec) / 2 - FOOTPATH_WIDTH / 2 : carriagewayWidth(segment.spec) / 2 + 0.4;
       // Up on the deck, as high as the bridge where it stands (0 on the ground).
       const scale = this.graph.path(segment).length / (path.length || 1);
@@ -170,13 +166,20 @@ export class StreetLights extends Group {
         const angle = Math.atan2(-out.y, -out.x);
         const arm = { x: at.x - out.x * (ARM / 2), y: at.y - out.y * (ARM / 2) };
         const head = { x: at.x - out.x * ARM, y: at.y - out.y * ARM };
-        // Off the slopes: a bridge's lights stand on its level span, and none stand by a ramp.
-        if (onRoad(at) || onDriveway(at, POLE.width) || nearRamp(head)) continue;
+        // Not on another road where they meet, nor across a driveway.
+        if (onRoad(at) || onDriveway(at, POLE.width)) continue;
         poles.push(box(at.x, y + POLE.height / 2, at.y, POLE.width, POLE.height, POLE.width, angle));
         arms.push(box(arm.x, y + POLE.height - 0.3, arm.y, ARM, 0.5, 0.5, angle));
+        shadows.push(box(at.x, y + POLE.height / 2, at.y, SHADOW_WIDTH, POLE.height, SHADOW_WIDTH, angle));
+        shadows.push(box(arm.x, y + POLE.height - 0.3, arm.y, ARM, SHADOW_WIDTH, SHADOW_WIDTH, angle));
         heads.push(box(head.x, y + POLE.height - 0.6, head.y, 2.4, 0.5, 1.4, angle));
-        // On a bridge, just over its deck's markings.
-        pools.push(box(head.x, y + (bridge ? 0.3 : 0.06), head.y, POOL, 1, POOL, angle));
+        if (!bridge) pools.push(box(head.x, 0.06, head.y, POOL, 1, POOL, angle));
+        else {
+          // On a bridge, just over its deck's markings, and narrowed and moved in to stay between its parapets.
+          const across = Math.min(POOL, deck);
+          const offset = Math.max(-(deck - across) / 2, Math.min((deck - across) / 2, side * (kerb - ARM)));
+          pools.push(box(f.p.x + f.normal.x * offset, y + 0.3, f.p.y + f.normal.y * offset, across, 1, POOL, angle));
+        }
       }
     }
     const make = (geometry: BufferGeometry, material: MeshBasicMaterial, matrices: Matrix4[], order: number, shadow: boolean) => {
@@ -190,8 +193,9 @@ export class StreetLights extends Group {
       return mesh;
     };
     this.parts = [
-      make(this.box, this.poleMaterial, poles, LIGHT_ORDER, true),
-      make(this.box, this.poleMaterial, arms, LIGHT_ORDER, true),
+      make(this.box, this.poleMaterial, poles, LIGHT_ORDER, false),
+      make(this.box, this.poleMaterial, arms, LIGHT_ORDER, false),
+      make(this.box, this.shadowMaterial, shadows, LIGHT_ORDER, true),
       make(this.box, this.headMaterial, heads, LIGHT_ORDER, false),
       make(this.plane, this.poolMaterial, pools, POOL_ORDER, false),
       make(this.box, this.planterMaterial, planters, LIGHT_ORDER, true),
@@ -216,6 +220,7 @@ export class StreetLights extends Group {
     for (const shape of Object.values(this.treeShapes)) shape.dispose();
     this.plane.dispose();
     this.poleMaterial.dispose();
+    this.shadowMaterial.dispose();
     for (const m of [this.planterMaterial, this.soilMaterial, this.trunkMaterial, this.leafMaterial]) m.dispose();
     this.headMaterial.dispose();
     this.poolMaterial.map?.dispose();
