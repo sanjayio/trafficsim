@@ -135,13 +135,10 @@ export function gradeStructure(
       rise,
     );
   }
-  for (let s = 0; s < path.length; s += STEP) {
-    const e = Math.min(path.length, s + STEP);
-    // A ramp's portal: a beam across the cutting where the road goes under the ground.
-    if ((height(s) + TUNNEL_WALL) * (height(e) + TUNNEL_WALL) < 0) {
-      const f = path.at((s + e) / 2);
-      boxes.add(f.p.x, CUTTING_LIP - 1, f.p.y, 1.6, 2, width + 1.6, Math.atan2(f.tangent.y, f.tangent.x));
-    }
+  // A ramp's portal: a beam across the cutting right where the road goes under the ground.
+  for (const s of crossings(path, height, -TUNNEL_WALL)) {
+    const f = path.at(s);
+    boxes.add(f.p.x, CUTTING_LIP - 1, f.p.y, 1.6, 2, width + 1.6, Math.atan2(f.tangent.y, f.tangent.x));
   }
   // Pillars under a bridge.
   for (let s = PILLAR_SPACING / 2; s < path.length; s += PILLAR_SPACING) {
@@ -174,10 +171,12 @@ function edge(path: SampledCurve, s: number, offset: number): Vec2 {
 export function trenchMask(path: SampledCurve, width: number, height: (s: number) => number, renderOrder: number): Mesh | null {
   const quads: Vec2[][] = [];
   const half = width / 2 + 0.4;
-  for (let s = 0; s < path.length; s += STEP) {
-    const e = Math.min(path.length, s + STEP);
-    const open = (h: number) => h < 0 && h > -TUNNEL_WALL;
-    if (!open(height(s)) && !open(height(e))) continue;
+  // In steps, and exactly to where it leaves the ground and where it goes under (its portal).
+  const stations = [...new Set([...Array.from({ length: Math.ceil(path.length / STEP) }, (_, i) => i * STEP), path.length, ...crossings(path, height, -0.01), ...crossings(path, height, -TUNNEL_WALL)])].sort((a, b) => a - b);
+  for (let i = 1; i < stations.length; i++) {
+    const [s, e] = [stations[i - 1], stations[i]];
+    const middle = height((s + e) / 2);
+    if (!(middle < 0 && middle > -TUNNEL_WALL)) continue;
     const [f, g] = [path.at(s), path.at(e)];
     const side = (p: typeof f, k: number) => ({ x: p.p.x + p.normal.x * half * k, y: p.p.y + p.normal.y * half * k });
     quads.push([side(f, 1), side(g, 1), side(g, -1), side(f, -1)]);
@@ -200,6 +199,22 @@ export function trenchMask(path: SampledCurve, width: number, height: (s: number
   mesh.renderOrder = renderOrder;
   mesh.userData.own = true;
   return mesh;
+}
+
+/** Where along `path` the road's height passes `level` (found to a hair between steps). */
+function crossings(path: SampledCurve, height: (s: number) => number, level: number): number[] {
+  const out: number[] = [];
+  for (let s = 0; s < path.length; s += STEP) {
+    let [lo, hi] = [s, Math.min(path.length, s + STEP)];
+    if ((height(lo) - level) * (height(hi) - level) >= 0) continue;
+    for (let k = 0; k < 30; k++) {
+      const mid = (lo + hi) / 2;
+      if ((height(lo) - level) * (height(mid) - level) <= 0) hi = mid;
+      else lo = mid;
+    }
+    out.push((lo + hi) / 2);
+  }
+  return out;
 }
 
 /** A pillar holding a bridge's junction up, `h` high at `at`. */
