@@ -505,6 +505,7 @@ export class Engine {
     this.grid.minor.visible = this.camera.zoom >= MINOR_GRID_MIN_ZOOM;
 
     this.roads.updateSignals(this.sim.time);
+    this.roads.animate(deltaMS / 1000);
     this.cars.update(this.sim, look.night);
     // The car's trip ended (or the road under it went): nothing to show.
     if (this.selectedCar && !this.sim.cars.includes(this.selectedCar)) this.selectedCar = null;

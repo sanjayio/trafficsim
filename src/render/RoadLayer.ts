@@ -3,7 +3,8 @@ import { effectiveControl, kerbRadius, minorRoads, slipControlAt, slipRoad, sign
 import type { GraphEvent, NodeId, RoadGraph, RoadSegment, SegmentId } from "../core/roadGraph";
 import { connectionsAt, hasLaneConnector, turnAt, type Turn } from "../core/lanes";
 import { carriagewayWidth, FOOTPATH_WIDTH, hasMedian, LANE_WIDTH, MEDIAN_WIDTH, roadWidth, type RoadSpec } from "../core/roadSpec";
-import { carPark, defaultName, DRIVEWAY_WIDTH, isSourceBuilding, SIDE_PATH } from "../core/terminal";
+import { carPark, defaultName, DRIVEWAY_WIDTH, isSourceBuilding, levelOf, SIDE_PATH } from "../core/terminal";
+import { Scaffolding } from "./scaffold";
 import { bridge } from "../core/track";
 import { BuildingKit } from "./buildings";
 import { concreteMaterial, gradeStructure, liftGeometry, trenchMask } from "./grade";
@@ -72,8 +73,13 @@ export class RoadLayer extends Group {
   private buildings = new BuildingKit();
   private unsubscribe: () => void;
 
+  /** Buildings going up a level, behind scaffolding; and each building's level, to tell when it does. */
+  private scaffolding = new Scaffolding();
+  private levels = new Map<NodeId, { building: string; level: number }>();
+
   constructor(private graph: RoadGraph) {
     super();
+    this.add(this.scaffolding);
     this.unsubscribe = graph.subscribe(this.onGraphEvent);
     this.rebuild();
   }
@@ -90,9 +96,13 @@ export class RoadLayer extends Group {
       case "junction-changed":
         this.refreshNodes([e.nodeId]);
         break;
-      case "terminal-changed":
-        this.rebuildMarker(e.nodeId);
+      case "terminal-changed": {
+        // Gone up a level (the same building): rebuilt behind scaffolding.
+        const before = this.levels.get(e.nodeId);
+        const now = this.graph.terminal(e.nodeId);
+        this.rebuildMarker(e.nodeId, !!now && !!before && before.building === now.building && levelOf(now) > before.level);
         break;
+      }
       case "reset":
       case "settings":
         this.rebuild();
@@ -101,6 +111,7 @@ export class RoadLayer extends Group {
   };
 
   private rebuild(): void {
+    this.scaffolding.finish();
     for (const id of [...this.views.keys()]) this.removeSegment(id);
     for (const id of [...this.junctions.keys()]) this.rebuildJunction(id);
     // Junctions first: roads read how far each junction's corners reach to place their markings.
@@ -128,26 +139,21 @@ export class RoadLayer extends Group {
    * A source's or sink's building beside its road end (green roof for a source, red for a sink)
    * with a driveway to the road and a roof arrow showing whether cars come out or go in.
    */
-  private rebuildMarker(nodeId: NodeId): void {
+  private rebuildMarker(nodeId: NodeId, scaffold = false): void {
     const old = this.markers.get(nodeId);
     if (old) {
-      this.remove(old.driveway, old.building);
+      this.remove(old.driveway);
       old.driveway.geometry.dispose();
-      // Geometry and materials are the kit's, shared; instanced parts own their per-instance buffers.
-      old.building.traverse((o) => {
-        if ((o as InstancedMesh).isInstancedMesh) (o as InstancedMesh).dispose();
-        // Name signs: their own texture and material.
-        if (o.userData.own) {
-          const material = (o as Mesh).material as MeshBasicMaterial;
-          material.map?.dispose();
-          material.dispose();
-        }
-      });
+      if (!scaffold) this.removeBuilding(old.building);
     }
     this.markers.delete(nodeId);
+    this.levels.delete(nodeId);
     const lot = this.graph.terminalLot(nodeId);
     const [segment] = this.graph.segmentsAt(nodeId);
-    if (!lot || !segment) return;
+    if (!lot || !segment) {
+      if (scaffold && old) this.removeBuilding(old.building);
+      return;
+    }
     const { door, along, out, front } = lot;
     // At the door (where cars drive in and out, not always level with the building's middle),
     // from the building's front to the carriageway's edge, across any footpath.
@@ -179,6 +185,28 @@ export class RoadLayer extends Group {
     const building = this.buildings.model(lot, { ...terminal, name });
     this.add(driveway, building);
     this.markers.set(nodeId, { driveway, building });
+    this.levels.set(nodeId, { building: terminal.building, level: levelOf(terminal) });
+    if (scaffold && old) this.scaffolding.start(old.building, building, (g) => this.removeBuilding(g));
+  }
+
+  /** Takes a building out of the scene and frees what's its own. */
+  private removeBuilding(building: Object3D): void {
+    this.remove(building);
+    // Geometry and materials are the kit's, shared; instanced parts own their per-instance buffers.
+    building.traverse((o) => {
+      if ((o as InstancedMesh).isInstancedMesh) (o as InstancedMesh).dispose();
+      // Name signs: their own texture and material.
+      if (o.userData.own) {
+        const material = (o as Mesh).material as MeshBasicMaterial;
+        material.map?.dispose();
+        material.dispose();
+      }
+    });
+  }
+
+  /** Moves building work on by `seconds` (see `Scaffolding`). */
+  animate(seconds: number): void {
+    this.scaffolding.update(seconds);
   }
 
 
@@ -639,6 +667,7 @@ export class RoadLayer extends Group {
     this.furniture.clear();
     this.signals.clear();
     this.kit.dispose();
+    this.scaffolding.dispose();
     for (const { driveway } of this.markers.values()) driveway.geometry.dispose();
     this.buildings.dispose();
     for (const material of Object.values(this.materials)) material.dispose();

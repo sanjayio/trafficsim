@@ -258,6 +258,8 @@ export class BuildingKit {
     const bx = villa ? villa.x : at ? ((at.a0 + at.a1) / 2) * flip : Math.max(-(l - bl) / 2, Math.min((l - bl) / 2, doorX));
     const bz = at ? (at.z0 + at.z1) / 2 : 0;
     const body = new Group();
+    // The building itself (not its plot or trees): what scaffolding goes round (see `Scaffolding`).
+    body.userData.body = true;
     body.position.set(bx, 0, bz);
     // Homes: a garage door where the driveway ends (in the house's own frame).
     if (villa) body.add(villa.mesh);
