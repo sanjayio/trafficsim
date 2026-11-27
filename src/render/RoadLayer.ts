@@ -371,7 +371,7 @@ export class RoadLayer extends Group {
         if (over) this.liftOntoGraded(geometry, meeting);
         const mesh = new Mesh(geometry, over ? this.overMaterial(part) : this.materials[part]);
         mesh.renderOrder = over ? GRADED_ORDER + ROAD_PART_STYLE[part].layer + 0.5 : ROAD_PART_STYLE[part].layer;
-        if (part === "footpath" && !over) mesh.position.y = KERB_HEIGHT;
+        if ((part === "footpath" || part === "median") && !over) mesh.position.y = KERB_HEIGHT;
         return mesh;
       });
     }
@@ -567,7 +567,8 @@ export class RoadLayer extends Group {
       if (graded) liftGeometry(geometry, path, height, layer);
       const mesh = new Mesh(geometry, graded ? this.gradedMaterial(part) : this.materials[part]);
       mesh.renderOrder = graded ? GRADED_ORDER + layer : layer;
-      if (part === "footpath") mesh.position.y = KERB_HEIGHT;
+      // Footpaths and medians stand above the road.
+      if (part === "footpath" || part === "median") mesh.position.y = KERB_HEIGHT;
       // A bridge's deck shades what's under it.
       if (graded && (segment.spec.level ?? 0) > 0) mesh.castShadow = true;
       return mesh;
@@ -644,7 +645,7 @@ export class RoadLayer extends Group {
   }
 }
 
-/** Footpaths draw their kerb stones (also on copies: a clone doesn't keep it). */
+/** Footpaths and medians draw their kerb stones (also on copies: a clone doesn't keep it). */
 function textured(part: RoadPart, material: MeshBasicMaterial): MeshBasicMaterial {
-  return part === "footpath" ? kerbColouring(material) : material;
+  return part === "footpath" || part === "median" ? kerbColouring(material) : material;
 }

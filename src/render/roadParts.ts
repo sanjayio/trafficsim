@@ -177,11 +177,8 @@ export function buildRoadParts(
     if (arrows.length) parts.push({ part: "arrow", geometry: convexGeometry(arrows) });
   } else {
     if (hasMedian(spec)) {
-      // At a turnaround the median ends in a rounded tip, like an island.
-      const median = ribbon(path, 0, MEDIAN_WIDTH, s0, s1);
-      if (turnStart) median.push(halfDisc(path.at(0), MEDIAN_WIDTH / 2, -1));
-      if (turnEnd) median.push(halfDisc(path.at(length), MEDIAN_WIDTH / 2, 1));
-      parts.push({ part: "median", geometry: convexGeometry(median) });
+      // At a turnaround the median ends in a rounded tip, like an island; elsewhere square.
+      parts.push({ part: "median", geometry: raisedMedian(path, s0, s1, [turnStart ? "round" : "square", turnEnd ? "round" : "square"]) });
     } else {
       yellow.push(...dashes(0, CENTER_LINE_WIDTH));
     }
@@ -237,11 +234,12 @@ export interface BendLine {
 
 /** Markings round a bend, along the curves given (solid median, dashed centre and lane lines). */
 export function buildBendMarkings(lines: BendLine[]): { part: RoadPart; geometry: BufferGeometry }[] {
-  const shapes: Record<BendLine["kind"], Vec2[][]> = { centerLine: [], median: [], laneLine: [] };
+  const shapes: Record<Exclude<BendLine["kind"], "median">, Vec2[][]> = { centerLine: [], laneLine: [] };
+  const medians: SampledCurve[] = [];
   for (const { kind, pieces } of lines) {
     for (const piece of pieces) {
       const path = new SampledCurve(piece);
-      if (kind === "median") shapes.median.push(...ribbon(path, 0, MEDIAN_WIDTH, 0, path.length));
+      if (kind === "median") medians.push(path);
       else {
         const width = kind === "laneLine" ? LANE_LINE_WIDTH : CENTER_LINE_WIDTH;
         for (let s = 0; s < path.length; s += DASH_LENGTH + DASH_GAP) {
@@ -250,9 +248,12 @@ export function buildBendMarkings(lines: BendLine[]): { part: RoadPart; geometry
       }
     }
   }
-  return (Object.keys(shapes) as BendLine["kind"][])
+  const parts: { part: RoadPart; geometry: BufferGeometry }[] = (Object.keys(shapes) as (keyof typeof shapes)[])
     .filter((kind) => shapes[kind].length)
     .map((kind) => ({ part: kind, geometry: convexGeometry(shapes[kind]) }));
+  // Round a bend the median carries on from the roads' either side: open ends.
+  for (const path of medians) parts.push({ part: "median", geometry: raisedMedian(path, 0, path.length, ["open", "open"]) });
+  return parts;
 }
 
 /** Turn arrows stand this far before the stop line, and are this long. */
@@ -301,6 +302,33 @@ function beside(path: SampledCurve, inner: number, outer: number, caps: [boolean
     for (let i = 1; i < a.length; i++) polygons.push([a[i - 1], a[i], b[i], b[i - 1]]);
   }
   return polygons;
+}
+
+/**
+ * A median from s0 to s1 along `path`, raised like a footpath (see `pavedGeometry`): its planting,
+ * kerb stones along both edges, and their face down to the road; each end rounded (a turnaround),
+ * square, or open (it carries on into another piece).
+ */
+function raisedMedian(path: SampledCurve, s0: number, s1: number, ends: ["round" | "square" | "open", "round" | "square" | "open"]): BufferGeometry {
+  const half = MEDIAN_WIDTH / 2;
+  const inner = half - KERB_WIDTH;
+  const planting = ribbon(path, 0, inner * 2, s0, s1);
+  const kerb = [...ribbon(path, half - KERB_WIDTH / 2, KERB_WIDTH, s0, s1), ...ribbon(path, -(half - KERB_WIDTH / 2), KERB_WIDTH, s0, s1)];
+  const faces = [edgeLine(path, half, [s0, s1]), edgeLine(path, -half, [s0, s1])];
+  ends.forEach((end, i) => {
+    const [s, forward] = i === 0 ? [s0, -1 as const] : [s1, 1 as const];
+    const f = path.at(s);
+    if (end === "round") {
+      const [a, b] = [halfDisc(f, inner, forward), halfDisc(f, half, forward)];
+      planting.push(a);
+      for (let k = 1; k < a.length; k++) kerb.push([a[k - 1], a[k], b[k], b[k - 1]]);
+      faces.push(b);
+    } else if (end === "square") {
+      const across = (o: number) => ({ x: f.p.x + f.normal.x * o, y: f.p.y + f.normal.y * o });
+      faces.push([across(-half), across(half)]);
+    }
+  });
+  return pavedGeometry(planting, kerb, faces);
 }
 
 /** A full-width road surface with rounded ends, as convex polygons. */

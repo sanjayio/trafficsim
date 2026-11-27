@@ -187,14 +187,14 @@ export function buildRoundaboutParts(
     { part: "asphalt", order: FlatLayer.asphalt + 0.5, geometry: convexGeometry(asphalt) },
     // The ring island's kerb sits above the asphalt; the island draws over it.
     { part: "footpath", order: FlatLayer.markings + 0.1, geometry: pavedGeometry([circle(centre, shape.island)], [], [[...circle(centre, shape.island), circle(centre, shape.island)[0]]]) },
-    { part: "median", order: FlatLayer.markings + 0.2, geometry: convexGeometry([circle(centre, shape.island - ISLAND_KERB)]) },
+    { part: "median", order: FlatLayer.markings + 0.2, geometry: pavedGeometry([circle(centre, shape.island - ISLAND_KERB)]) },
   ];
   if (footpath.length) parts.push({ part: "footpath", order: FlatLayer.footpath, geometry: pavedGeometry(footpath, kerbStones, faces) });
   if (lines.length) parts.push({ part: "laneLine", order: FlatLayer.markings + 0.1, geometry: convexGeometry(lines) });
   if (teeth.length) parts.push({ part: "stopLine", order: FlatLayer.markings + 0.1, geometry: convexGeometry(teeth) });
   if (islands.length) {
     parts.push({ part: "footpath", order: FlatLayer.markings + 0.3, geometry: pavedGeometry(kerbs, [], islandEdges) });
-    parts.push({ part: "median", order: FlatLayer.markings + 0.4, geometry: convexGeometry(islands) });
+    parts.push({ part: "median", order: FlatLayer.markings + 0.4, geometry: pavedGeometry(islands) });
   }
   return { parts, signs, approaches };
 }
