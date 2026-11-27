@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>About TrafficSim: a road builder and traffic simulator</title>
+    <meta name="description" content="What TrafficSim is, how its traffic simulation works, and what it's built with." />
+    <link rel="canonical" href="https://www.trafficsim.app/about/" />
+    <meta property="og:url" content="https://www.trafficsim.app/about/" />
+    <meta property="og:title" content="About TrafficSim" />
+    <meta property="og:description" content="What TrafficSim is, how its traffic simulation works, and what it's built with." />
+    <!-- @head -->
+    <link rel="stylesheet" href="/src/site/site.css" />
+  </head>
+
+  <body>
+    <!-- @header -->
+
+    <main class="mx-auto max-w-5xl px-4 [&>*]:max-w-3xl">
+      <section class="pt-16 sm:pt-20">
+        <h1 class="text-5xl font-extrabold sm:text-6xl">About TrafficSim</h1>
+        <p class="mt-6 text-lg">
+          TrafficSim is a game about roads. You build a street network, put homes, shops and offices beside it, and watch
+          the traffic those buildings make. When a junction jams, you see why, and you can try another layout.
+        </p>
+      </section>
+
+      <section class="mt-14">
+        <h2 class="text-3xl font-extrabold">What it's about</h2>
+        <p class="mt-3">
+          City builders usually treat traffic as one problem among many. Here it's the main thing. There are no budgets,
+          taxes or disasters, only roads, junctions and the drivers on them. Build something pretty, or try to make a
+          busy crossroads flow.
+        </p>
+      </section>
+
+      <section class="mt-12">
+        <h2 class="text-3xl font-extrabold">How the simulation works</h2>
+        <p class="mt-3">
+          Every car is simulated on its own, 60 times a second. A car leaves a home for a shop or office and plans the
+          fastest route there, weighing speed limits and turns. Along the way it keeps a safe distance from the car ahead,
+          picks its lanes several roads in advance, looks for gaps to change lane or join a roundabout, and obeys signals
+          and signs. If it's held up too long, it looks for another way.
+        </p>
+        <p class="mt-3">
+          The rules drivers follow are settings, not fixed code: right of way, signal timings, the gaps they'll accept,
+          how pushy they get near a turn. Each map keeps its own rules, so you can see what changes when drivers are
+          patient or in a hurry.
+        </p>
+      </section>
+
+      <section class="mt-12">
+        <h2 class="text-3xl font-extrabold">How it's built</h2>
+        <p class="mt-3">
+          TrafficSim runs in the browser. The world is drawn in 3D with three.js, the menus and panels are React, and the
+          simulation is plain TypeScript with its own tests. The same code can also be packaged as a desktop app with
+          Tauri.
+        </p>
+        <p class="mt-3">
+          The code is
+          <a href="https://github.com/sanjayio/trafficsim" class="link">on GitHub</a>.
+          See <a href="/contribute/" class="link">Contribute</a> if you'd like to help.
+        </p>
+      </section>
+
+      <section class="mt-12">
+        <h2 class="text-3xl font-extrabold">Privacy</h2>
+        <p class="mt-3">
+          There are no accounts. Your maps stay in your browser unless you save them as a file. The radio, when you turn
+          it on, streams from Radio Paradise.
+        </p>
+      </section>
+
+      <section class="mt-12">
+        <h2 class="text-3xl font-extrabold">Credits</h2>
+        <p class="mt-3">
+          Buildings, cars and road colours are modelled after
+          <a href="https://github.com/kayquer/kit-cidade-lowpoly" class="link">Kit Cidade Low Poly</a>
+          (CC0). Music is from <a href="https://radioparadise.com" class="link">Radio Paradise</a>.
+        </p>
+      </section>
+
+      <section class="mt-16">
+        <a href="/play/" class="btn-go text-lg">Play now</a>
+      </section>
+    </main>
+
+    <!-- @footer -->
+  </body>
+</html>

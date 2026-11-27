@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Changelog: what's new in TrafficSim</title>
+    <meta name="description" content="What's new in TrafficSim, the free road builder and traffic simulator: new roads, junctions, buildings and driver behaviour, release by release." />
+    <link rel="canonical" href="https://www.trafficsim.app/changelog/" />
+    <meta property="og:url" content="https://www.trafficsim.app/changelog/" />
+    <meta property="og:title" content="TrafficSim changelog" />
+    <meta property="og:description" content="What's new in TrafficSim, release by release." />
+    <!-- @head -->
+    <link rel="stylesheet" href="/src/site/site.css" />
+  </head>
+
+  <body>
+    <!-- @header -->
+
+    <main class="mx-auto max-w-5xl px-4 [&>*]:max-w-3xl">
+      <section class="pt-16 sm:pt-20">
+        <h1 class="text-5xl font-extrabold sm:text-6xl">Changelog</h1>
+        <p class="mt-4 text-lg">
+          What's new in TrafficSim. For every change, see the
+          <a href="https://github.com/sanjayio/trafficsim/commits/main" class="link">commit history on GitHub</a>.
+        </p>
+      </section>
+
+      <!-- Newest first. Add an <article> at the top for each release. -->
+      <article class="mt-14 grid gap-x-8 border-t border-white/10 pt-6 sm:grid-cols-[9rem_1fr]">
+        <time datetime="2026-11-27" class="text-[0.9rem]">27 November 2026</time>
+        <div>
+          <h2 class="text-xl font-extrabold">Bridges, tunnels and a new look</h2>
+          <ul class="mt-3 road-list">
+            <li>Bridges and tunnels at set step heights, with ramps between heights and junctions in the air.</li>
+            <li>Tunnel walls around junctions, edge lines, and ramp cuttings that end at the tunnel mouth.</li>
+            <li>A Buildings tool, with new apartment, shop and office models and new cars.</li>
+            <li>Scaffolding goes up when a building levels up.</li>
+            <li>Raised medians and roundabout islands with kerbs.</li>
+            <li>Unbroken kerbs past buildings and dropped kerbs at driveways.</li>
+            <li><kbd>Esc</kbd> closes menus. Big cities run faster.</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="mt-12 grid gap-x-8 border-t border-white/10 pt-6 sm:grid-cols-[9rem_1fr]">
+        <time datetime="2026-11-26" class="text-[0.9rem]">26 November 2026</time>
+        <div>
+          <h2 class="text-xl font-extrabold">Traffic rules, smarter drivers</h2>
+          <ul class="mt-3 road-list">
+            <li>Traffic rules for each map, editable in Settings and applied live.</li>
+            <li>Speed limits on each road. Routes weigh both speed and turns.</li>
+            <li>Drivers plan their lanes ahead, change lanes where there's a gap, merge in turn and reroute when stuck.</li>
+            <li>Turn on red at signalled junctions.</li>
+            <li>Gridlock handling: drivers don't block the box, keep driveways clear, and stay home when the roads are jammed.</li>
+            <li>A traffic stats panel, opened from the fps readout. Click a car to see its route.</li>
+            <li>A new look: villa variants, trees, zebra crossings, raised footpaths and kerbs, and road textures.</li>
+            <li>Trees and bushes along roads, saved with the map.</li>
+            <li>The clock runs with the simulation. Weather, tool, speed and radio station are remembered.</li>
+            <li>Road and traffic options are laid out in titled rows. The game starts paused, with the Select tool.</li>
+            <li>A short animation on each tutorial slide.</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="mt-12 grid gap-x-8 border-t border-white/10 pt-6 sm:grid-cols-[9rem_1fr]">
+        <time datetime="2026-11-25" class="text-[0.9rem]">25 November 2026</time>
+        <div>
+          <h2 class="text-xl font-extrabold">First release</h2>
+          <ul class="mt-3 road-list">
+            <li>Road building with straight and curved roads, snapping and guides.</li>
+            <li>Traffic: homes and businesses, cars that find their route, junction rules and the lane connector.</li>
+            <li>Building types on zoning tiles that grow over time, with car parks, driveways and slip roads.</li>
+            <li>Sky, weather, time of day, shadows and night lights.</li>
+            <li>Street trees along footpaths.</li>
+            <li>Your map is kept in the browser between visits, and a New map dialog with a tutorial helps you start.</li>
+            <li>Internet radio, and a Support button.</li>
+          </ul>
+        </div>
+      </article>
+    </main>
+
+    <!-- @footer -->
+  </body>
+</html>

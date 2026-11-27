@@ -7,7 +7,7 @@ Road builder and traffic simulator. three.js renders the world with a perspectiv
 ```sh
 pnpm install
 pnpm tauri dev   # desktop app
-pnpm dev         # browser only, http://localhost:1420
+pnpm dev         # browser only: site at http://localhost:1420, game at /play/
 pnpm tauri build # release bundle
 ```
 

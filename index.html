@@ -2,13 +2,112 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>TrafficSim</title>
+    <title>TrafficSim: build roads and watch traffic flow, free in your browser</title>
+    <meta
+      name="description"
+      content="TrafficSim is a free road builder and traffic simulator that runs in your browser. Lay out roads, junctions, roundabouts and bridges, zone homes, shops and offices, then watch every car find its way."
+    />
+    <link rel="canonical" href="https://www.trafficsim.app/" />
+    <meta property="og:url" content="https://www.trafficsim.app/" />
+    <meta property="og:title" content="TrafficSim: build roads and watch traffic flow" />
+    <meta
+      property="og:description"
+      content="A free road builder and traffic simulator in your browser. Build junctions, roundabouts and bridges, then watch every car find its way."
+    />
+    <!-- @head -->
+    <link rel="stylesheet" href="/src/site/site.css" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "VideoGame",
+        "name": "TrafficSim",
+        "url": "https://www.trafficsim.app/",
+        "image": "https://www.trafficsim.app/og-image.jpg",
+        "description": "A free road builder and traffic simulator that runs in your browser.",
+        "genre": ["Simulation", "City builder"],
+        "gamePlatform": "Web browser",
+        "applicationCategory": "Game",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+      }
+    </script>
   </head>
 
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <!-- @header -->
+
+    <main>
+      <section class="mx-auto max-w-5xl px-4 pt-14 sm:pt-20">
+        <h1 class="max-w-[14ch] text-5xl font-extrabold sm:text-7xl">Build the roads. Watch the traffic.</h1>
+      </section>
+      <!-- The page's centre line: the headline in one lane, the rest in the other. -->
+      <div class="centre-line my-8 sm:my-10" aria-hidden="true"></div>
+      <section class="mx-auto max-w-5xl px-4">
+        <p class="max-w-[38rem] text-xl">
+          TrafficSim is a road builder and traffic simulator that runs in your browser. Lay out a town, zone homes and
+          shops, and every car finds its own way through what you built. It's free, with nothing to install.
+        </p>
+        <div class="mt-8 flex flex-wrap gap-3 text-lg">
+          <a href="/play/" class="btn-go"><svg aria-hidden="true" width="1.1em" height="1.1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"/></svg>Play now</a>
+          <a href="https://ko-fi.com/sssanjay" class="btn-quiet"><svg aria-hidden="true" width="1.1em" height="1.1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v2"/><path d="M14 2v2"/><path d="M16 8a1 1 0 0 1 1 1v8a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1h14a4 4 0 1 1 0 8h-1"/><path d="M6 2v2"/></svg>Buy me a coffee</a>
+        </div>
+      </section>
+
+      <div class="mx-auto mt-14 max-w-5xl px-4">
+        <img
+          src="/img/hero.jpg"
+          width="1600"
+          height="900"
+          alt="A TrafficSim town in late-afternoon light: homes, apartment towers, shops with car parks and a roundabout, with cars on the roads"
+          class="w-full rounded-md"
+        />
+      </div>
+
+      <section class="mx-auto mt-24 grid max-w-5xl gap-x-12 gap-y-10 px-4 md:grid-cols-3">
+        <div>
+          <h2 class="text-xl font-extrabold">Roads the way you'd draw them</h2>
+          <p class="mt-2">
+            Straight roads, smooth curves, one-way streets, medians, up to three lanes each way, and bridges and tunnels
+            where roads cross. Snap guides keep it tidy.
+          </p>
+        </div>
+        <div>
+          <h2 class="text-xl font-extrabold">Junctions that behave</h2>
+          <p class="mt-2">
+            Traffic signals, stop and give-way signs, and roundabouts. With the lane connector you choose exactly which
+            lane goes where.
+          </p>
+        </div>
+        <div>
+          <h2 class="text-xl font-extrabold">Drivers with somewhere to be</h2>
+          <p class="mt-2">
+            Homes send cars to shops and offices. Each driver plans the fastest route, picks a lane, merges, queues and
+            reroutes around jams.
+          </p>
+        </div>
+      </section>
+
+      <section class="mx-auto mt-24 grid max-w-5xl items-center gap-10 px-4 md:grid-cols-[3fr_2fr]">
+        <img src="/img/night.jpg" width="1200" height="800" alt="The same town at night, with street lights and lit windows" loading="lazy" class="w-full rounded-md" />
+        <div>
+          <h2 class="text-3xl font-extrabold">A town that lives through the day</h2>
+          <p class="mt-3">
+            The clock runs with the simulation. Shadows move across the day, windows and street lights come on at night,
+            and you can bring in cloud, rain or wind. Homes and businesses grow as cars come and go.
+          </p>
+        </div>
+      </section>
+
+      <section class="mx-auto mt-24 max-w-5xl px-4">
+        <h2 class="text-3xl font-extrabold">Your first junction takes a minute</h2>
+        <p class="mt-3 max-w-[38rem]">
+          A short tutorial walks you through it. Your map saves in the browser as you build, so you can pick up where you
+          left off.
+        </p>
+        <a href="/play/" class="btn-go mt-7 text-lg">Play now</a>
+      </section>
+    </main>
+
+    <!-- @footer -->
   </body>
 </html>

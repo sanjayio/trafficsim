@@ -13,6 +13,7 @@
     "windows": [
       {
         "label": "main",
+        "url": "play/index.html",
         "title": "TrafficSim",
         "width": 1280,
         "height": 800,

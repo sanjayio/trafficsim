@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Contribute to TrafficSim: report bugs, suggest features, send code</title>
+    <meta name="description" content="Help make TrafficSim better: report bugs, suggest features, run it locally and send a pull request, or support it on Ko-fi." />
+    <link rel="canonical" href="https://www.trafficsim.app/contribute/" />
+    <meta property="og:url" content="https://www.trafficsim.app/contribute/" />
+    <meta property="og:title" content="Contribute to TrafficSim" />
+    <meta property="og:description" content="Report bugs, suggest features, send code, or support TrafficSim on Ko-fi." />
+    <!-- @head -->
+    <link rel="stylesheet" href="/src/site/site.css" />
+  </head>
+
+  <body>
+    <!-- @header -->
+
+    <main class="mx-auto max-w-5xl px-4 [&>*]:max-w-3xl">
+      <section class="pt-16 sm:pt-20">
+        <h1 class="text-5xl font-extrabold sm:text-6xl">Contribute</h1>
+        <p class="mt-4 text-lg">TrafficSim is made in the open. There are a few ways to help.</p>
+      </section>
+
+      <section class="mt-12 space-y-7">
+        <div>
+          <h2 class="text-xl font-extrabold"><a href="https://github.com/sanjayio/trafficsim/issues/new" class="link">Report a bug</a></h2>
+          <p class="mt-1">Say what you did, what you expected and what happened. A saved map file (☰ → Save map) helps a lot.</p>
+        </div>
+        <div>
+          <h2 class="text-xl font-extrabold"><a href="https://github.com/sanjayio/trafficsim/issues" class="link">Suggest a feature</a></h2>
+          <p class="mt-1">Open an issue with the idea and why you'd want it. Check the existing issues first.</p>
+        </div>
+        <div>
+          <h2 class="text-xl font-extrabold"><a href="https://github.com/sanjayio/trafficsim" class="link">Star it on GitHub</a></h2>
+          <p class="mt-1">It helps other people find the project.</p>
+        </div>
+        <div>
+          <h2 class="text-xl font-extrabold"><a href="https://ko-fi.com/sssanjay" class="link">Buy me a coffee</a></h2>
+          <p class="mt-1">TrafficSim is free and has no ads. Tips on Ko-fi keep it going.</p>
+        </div>
+      </section>
+
+      <section class="mt-16">
+        <h2 class="text-3xl font-extrabold">Working on the code</h2>
+        <p class="mt-3">You need Node.js and pnpm. Then:</p>
+        <pre class="mt-4 overflow-x-auto rounded-xl bg-panel p-4 text-[0.85rem] leading-relaxed text-heading"><code>git clone https://github.com/sanjayio/trafficsim.git
+cd trafficsim
+pnpm install
+pnpm dev     # the game at http://localhost:1420/play/
+pnpm test    # simulation tests</code></pre>
+        <p class="mt-4">How the code is organised:</p>
+        <ul class="mt-3 road-list">
+          <li><code class="text-heading">src/core</code>: the simulation and data (road graph, routing, cars). Plain TypeScript, no rendering.</li>
+          <li><code class="text-heading">src/render</code>: the three.js world, camera and input.</li>
+          <li><code class="text-heading">src/tools</code>: the build tools, which turn clicks into road and building edits.</li>
+          <li><code class="text-heading">src/ui</code>: the React menus and panels over the game.</li>
+          <li><code class="text-heading">src-tauri</code>: the desktop app shell.</li>
+        </ul>
+        <p class="mt-4">
+          For anything bigger than a small fix, open an issue first so we can agree on the approach. Keep pull requests
+          focused, and add a test when you change how cars behave.
+        </p>
+      </section>
+    </main>
+
+    <!-- @footer -->
+  </body>
+</html>
