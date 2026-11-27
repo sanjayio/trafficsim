@@ -1,7 +1,7 @@
 import { effectiveControl, minorRoads, roundaboutShape, slipControlAt, slipRoad, signalApproaches, signalLights, type JunctionControl } from "./junction";
 import type { NodeId, RoadGraph, RoadSegment, SegmentId } from "./roadGraph";
 import { CRUISE_SPEED, findRoute, type Route } from "./routing";
-import { carriagewayWidth, LANE_WIDTH, speedOf } from "./roadSpec";
+import { carriagewayWidth, isRamp, LANE_WIDTH, offGround, speedOf } from "./roadSpec";
 import { connectionsAt, hasLaneConnector, laneOffsets, lanesInnerToKerb, turnAt, type Turn } from "./lanes";
 import { carPark, DRIVEWAY_BLEND, headsTo, type Terminal } from "./terminal";
 import { TURN_ORDER } from "./rules";
@@ -221,7 +221,8 @@ export class Simulation {
     this.tracks = new TrackBuilder(graph, insetAt);
     this.random = seeded(seed);
     this.unsubscribe = graph.subscribe((e) => {
-      this.routes.clear();
+      // Routes change with the roads, their junctions and the routing rules; not with buildings or trees.
+      if (e.type !== "terminal-changed" && e.type !== "scenery") this.routes.clear();
       // New rules: cars carry on, reading them from the next step.
       if (e.type === "rules" || e.type === "scenery") return;
       if (e.type === "terminal-changed") {
@@ -392,8 +393,17 @@ export class Simulation {
     const leg = car.legs[car.leg];
     if (leg.node !== undefined && this.graph.nodes.has(leg.node)) return this.graph.nodeHeight(leg.node);
     const segment = leg.segment === undefined ? undefined : this.graph.segments.get(leg.segment);
-    // The same all along a road (for now: no ramps).
-    return segment ? this.graph.heightAt(segment, 0) : 0;
+    if (!segment || !offGround(segment.spec)) return 0;
+    if (!isRamp(segment.spec)) return this.graph.heightAt(segment, 0);
+    // Up (or down) a ramp. In a lane: its track runs the road's length, so how far along it the car
+    // is says where it is on the road (no search). Elsewhere (changing lane, a driveway): the nearest point.
+    if (leg.key.startsWith("r:")) {
+      const along = Math.min(1, Math.max(0, this.at(car) / (leg.track.length || 1)));
+      const forward = leg.key.split(":")[2] === "1";
+      return this.graph.heightAt(segment, (forward ? along : 1 - along) * this.graph.path(segment).length);
+    }
+    const { x, y } = this.pose(car);
+    return this.graph.heightAt(segment, this.graph.path(segment).nearest({ x, y }).s);
   }
 
   /** Points `step` apart along the rest of a car's trip, from where it is to where it ends, with the road's height at each (for drawing its route). */
@@ -403,9 +413,11 @@ export class Simulation {
       const leg = car.legs[i];
       const length = legLength(leg);
       const segment = leg.segment === undefined ? undefined : this.graph.segments.get(leg.segment);
-      const h = leg.node !== undefined && this.graph.nodes.has(leg.node) ? this.graph.nodeHeight(leg.node) : segment ? this.graph.heightAt(segment, 0) : 0;
+      const junction = leg.node !== undefined && this.graph.nodes.has(leg.node) ? this.graph.nodeHeight(leg.node) : null;
+      const path = segment && isRamp(segment.spec) ? this.graph.path(segment) : null;
       for (let s = i === car.leg ? Math.min(car.s, length) : 0; ; s = Math.min(s + step, length)) {
         const { p } = legAt(leg, s);
+        const h = junction ?? (path ? this.graph.heightAt(segment!, path.nearest(p).s) : segment ? this.graph.heightAt(segment, 0) : 0);
         points.push({ x: p.x, y: p.y, h });
         if (s >= length) break;
       }
@@ -749,12 +761,18 @@ export class Simulation {
         this.retryAt.set(source, this.time + RETRY_SPAWN);
         continue;
       }
-      // Only to shops and offices with a free bay: when they're all full, the source waits.
-      const reachable = sinks.filter(([id, s]) => headsTo(t, id, s.building)).map(([id]) => id).filter(
-        (sink) => sink !== source && (!this.parking || this.freeBay(sink) !== null) && this.route(source, sink),
-      );
-      if (!reachable.length) continue;
-      const sink = reachable[Math.floor(this.random() * reachable.length)];
+      // Only to shops and offices with a free bay: when they're all full, the source waits. Any one it
+      // can reach, at random: tried in a random order, the first with a route (searching one or two,
+      // not a route to every shop).
+      const candidates = sinks
+        .filter(([id, s]) => id !== source && headsTo(t, id, s.building) && (!this.parking || this.freeBay(id) !== null))
+        .map(([id]) => id);
+      for (let i = candidates.length - 1; i > 0; i--) {
+        const j = Math.floor(this.random() * (i + 1));
+        [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+      }
+      const sink = candidates.find((id) => this.route(source, id));
+      if (sink === undefined) continue;
       const bay = this.parking ? this.freeBay(sink) : null;
       const route = this.route(source, sink)!;
       const lanes = this.planTrip(route);

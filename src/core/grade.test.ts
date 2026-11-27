@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { straightCurve } from "./curve";
-import { LEVEL_HEIGHT, levelHeight, TUNNEL_DEPTH } from "./grade";
+import { heightAlong, LANDING, LEVEL_HEIGHT, levelHeight, minRampLength, RAMP_GRADE, TUNNEL_DEPTH } from "./grade";
 import { RoadGraph } from "./roadGraph";
 import { DEFAULT_ROAD_SPEC, normalizeRoadSpec, parseRoadSpec } from "./roadSpec";
-import { DEFAULT_SOURCE } from "./terminal";
+import { SIM_DT, Simulation } from "./simulation";
+import { DEFAULT_SOURCE, SINK } from "./terminal";
 
 const line = (ax: number, ay: number, bx: number, by: number) => straightCurve({ x: ax, y: ay }, { x: bx, y: by });
 const at = (level: number) => ({ ...DEFAULT_ROAD_SPEC, level });
@@ -71,3 +72,75 @@ describe("bridges and tunnels", () => {
     expect(() => parseRoadSpec({ ...DEFAULT_ROAD_SPEC, level: -4 })).toThrow();
   });
 });
+
+const ramp = (from: number, to: number) => ({ ...DEFAULT_ROAD_SPEC, from, level: to });
+
+describe("ramps", () => {
+  it("run level at each end and climb at one gradient between", () => {
+    expect(heightAlong(0, 1, 0)).toBe(0);
+    expect(heightAlong(0, 1, LANDING)).toBe(0);
+    expect(heightAlong(0, 1, LANDING + 30)).toBeCloseTo(30 * RAMP_GRADE);
+    expect(heightAlong(0, 1, 500)).toBe(LEVEL_HEIGHT);
+    expect(heightAlong(2, 0, 500)).toBe(0);
+    expect(minRampLength(0, 2)).toBeCloseTo(2 * LANDING + (2 * LEVEL_HEIGHT) / RAMP_GRADE);
+    expect(minRampLength(0, -1)).toBeCloseTo(2 * LANDING + TUNNEL_DEPTH / RAMP_GRADE);
+  });
+
+  it("join a ground road to a bridge, each node keeping its height", () => {
+    const graph = new RoadGraph();
+    graph.buildRoad(line(0, 0, 200, 0), DEFAULT_ROAD_SPEC);
+    graph.buildRoad(line(500, 0, 800, 0), at(1));
+    expect(graph.buildRoad(line(200, 0, 500, 0), ramp(0, 1))).toHaveLength(1);
+    const node = (x: number) => graph.nodeNear({ x, y: 0 }, 1)!.id;
+    expect(graph.segmentsAt(node(200))).toHaveLength(2);
+    expect(graph.segmentsAt(node(500))).toHaveLength(2);
+    expect(graph.nodeHeight(node(200))).toBe(0);
+    expect(graph.nodeHeight(node(500))).toBe(LEVEL_HEIGHT);
+  });
+
+  it("are refused too short for their climb", () => {
+    const graph = new RoadGraph();
+    expect(graph.planRoad(line(0, 0, minRampLength(0, 1) - 5, 0), ramp(0, 1)).valid).toBe(false);
+    expect(graph.planRoad(line(0, 0, minRampLength(0, 1) + 5, 0), ramp(0, 1)).valid).toBe(true);
+  });
+
+  it("pass over or under roads with headroom, and are refused too close to one", () => {
+    const graph = new RoadGraph();
+    graph.buildRoad(line(0, 0, 300, 0), ramp(0, 1));
+    // At 30 along it's barely off the ground: a step-2 bridge clears it, a step-1 one doesn't.
+    expect(graph.planRoad(line(30, -100, 30, 100), at(2)).valid).toBe(true);
+    expect(graph.planRoad(line(50, -100, 50, 100), at(1)).valid).toBe(false);
+    // Nor can a road end on its slope.
+    expect(graph.planRoad(line(60, -100, 60, 0), DEFAULT_ROAD_SPEC).valid).toBe(false);
+  });
+
+  it("have no footpaths, trees or median going below ground", () => {
+    const graph = new RoadGraph();
+    const [down] = graph.buildRoad(line(0, 0, 300, 0), { ...ramp(0, -1), footpath: true, trees: true, median: true });
+    expect(down.spec).toMatchObject({ footpath: false, median: false, from: 0, level: -1 });
+  });
+
+  it("carry cars up and down at the road's height", () => {
+    const graph = new RoadGraph();
+    // Ground, up a ramp, over a bridge, down a ramp, ground.
+    graph.buildRoad(line(0, 0, 100, 0), DEFAULT_ROAD_SPEC);
+    graph.buildRoad(line(100, 0, 300, 0), ramp(0, 1));
+    graph.buildRoad(line(300, 0, 500, 0), at(1));
+    graph.buildRoad(line(500, 0, 700, 0), ramp(1, 0));
+    graph.buildRoad(line(700, 0, 800, 0), DEFAULT_ROAD_SPEC);
+    const node = (x: number) => graph.nodeNear({ x, y: 0 }, 1)!.id;
+    graph.setTerminal(node(0), { ...DEFAULT_SOURCE, rate: 20 });
+    graph.setTerminal(node(800), SINK);
+    const sim = new Simulation(graph);
+    sim.parking = false;
+    const heights: number[] = [];
+    for (let t = 0; t < 40 / SIM_DT; t++) {
+      sim.step(SIM_DT);
+      for (const car of sim.cars) heights.push(sim.heightOf(car));
+    }
+    // Some cars part way up (or down) a ramp, some on the bridge.
+    expect(heights.some((h) => h > 1 && h < LEVEL_HEIGHT - 1)).toBe(true);
+    expect(heights).toContain(LEVEL_HEIGHT);
+  });
+});
+

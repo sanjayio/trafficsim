@@ -5,14 +5,15 @@ import { WORLD_SIZE } from "../core/constants";
 import type { Vec2 } from "../core/geometry";
 import { hasLaneConnector } from "../core/lanes";
 import { normalizeRoadSpec } from "../core/roadSpec";
-import { RoadGraph, type DrivingSide, type NodeId, type RoadSegment, type SavedMap } from "../core/roadGraph";
+import { RoadGraph, type DrivingSide, type NodeId, type RoadNode, type RoadSegment, type SavedMap } from "../core/roadGraph";
 import { CAR_LENGTH, SIM_DT, Simulation, type Car } from "../core/simulation";
 import { LaneTool } from "../tools/LaneTool";
 import { TrafficTool } from "../tools/TrafficTool";
 import { ZoneMap } from "../core/zoning";
 import { levelUp } from "../core/growth";
 import { slipRoad } from "../core/junction";
-import { levelHeight } from "../core/grade";
+import { levelHeight, MAX_LEVEL } from "../core/grade";
+import { TUNNEL_WALL } from "./grade";
 import { CarLayer } from "./CarLayer";
 import { RouteLine } from "./RouteLine";
 import { ZoneLayer } from "./ZoneLayer";
@@ -89,6 +90,8 @@ export class Engine {
   private scenery = new Scenery(this.graph);
   /** Roads changed since the streetlights were placed: rebuilt once, next frame. */
   private streetLightsDirty = true;
+  /** A building changed: the lights rebuild only if a driveway moved. */
+  private drivewaysChanged = false;
   /** The view last kept (see keepView), and time since it was last checked. */
   private keptView = "";
   private viewCheck = 0;
@@ -139,7 +142,13 @@ export class Engine {
     host.appendChild(canvas);
 
     this.scene.fog = this.fog;
-    this.cleanups.push(this.graph.subscribe((e) => e.type !== "rules" && e.type !== "scenery" && (this.streetLightsDirty = true)));
+    // Lights move with the roads; a building changing only matters if its driveway moved (see `drivewaysMoved`).
+    this.cleanups.push(
+      this.graph.subscribe((e) => {
+        if (e.type === "terminal-changed") this.drivewaysChanged = true;
+        else if (e.type !== "rules" && e.type !== "scenery") this.streetLightsDirty = true;
+      }),
+    );
     this.scene.add(this.streetLights, this.scenery, ...this.shadows.objects, this.sky, this.rain, this.ground, this.grid, this.roads, this.zoneLayer, this.cars, this.routeLine, this.overlay);
 
     // Left-drag pans with the Select tool, except in the lane connector, which needs left clicks.
@@ -176,6 +185,7 @@ export class Engine {
       trafficMode: () => gameStore.getState().trafficMode,
       zones: this.zones,
       stopLineAt: (segment: RoadSegment, node: number) => this.roads.stopLineAt(segment, node),
+      pointerAt: (height: number) => (this.pointer ? this.camera.screenToWorld(this.pointer, height) : null),
       screenRect: (a: Vec2, b: Vec2, height = 0) => {
         const sa = this.camera.worldToScreen(a, height);
         const sb = this.camera.worldToScreen(b, height);
@@ -517,6 +527,10 @@ export class Engine {
     this.ground.setUnderground(underground);
     this.routeLine.update(this.sim, this.selectedCar, underground);
     this.roads.setLights(look.exposure, look.night);
+    if (this.drivewaysChanged) {
+      this.drivewaysChanged = false;
+      if (this.streetLights.drivewaysMoved()) this.streetLightsDirty = true;
+    }
     if (this.streetLightsDirty) {
       this.streetLights.rebuild();
       this.streetLightsDirty = false;
@@ -571,11 +585,16 @@ export class Engine {
 
   /** The junction under screen point `s`, or failing that the source whose building (or plot) is. */
   private anchorAt(s: Vec2): NodeAnchor | null {
-    const world = this.camera.screenToWorld(s);
-    const junction = world && this.graph.junctionAt(world);
+    // The junction under the pointer as it's seen: up on a bridge, on the ground, or (in the
+    // underground view) in a tunnel, the highest first (it's drawn over those under it).
+    let junction: RoadNode | undefined;
+    for (let level = MAX_LEVEL; level >= (this.ground.underground ? -MAX_LEVEL : 0) && !junction; level--) {
+      const world = this.camera.screenToWorld(s, levelHeight(level));
+      junction = (world && this.graph.junctionAt(world, level)) || undefined;
+    }
     // Where a slip road leaves there's nothing to set; where one joins, how it gives way.
     const split = junction && slipRoad(this.graph, junction.id)?.merge === false;
-    if (junction && !split) return { id: junction.id, kind: "junction", ...this.camera.worldToScreen(junction) };
+    if (junction && !split) return { id: junction.id, kind: "junction", ...this.camera.worldToScreen(junction, this.graph.nodeHeight(junction.id)) };
     const buildings = this.roads.buildingGroups();
     let hit = this.camera.pick(s, [...buildings.keys()]);
     while (hit && !buildings.has(hit)) hit = hit.parent;
@@ -592,8 +611,8 @@ export class Engine {
     for (const car of this.sim.cars) {
       if (car.leaveAt !== null && car.legs[car.leg].underground) continue;
       const lift = this.sim.heightOf(car);
-      // In a tunnel: out of reach under the ground, but in the underground view.
-      if (lift < 0 && !this.ground.underground) continue;
+      // In a tunnel: out of reach under the ground (but in a ramp's open cutting, or in the underground view).
+      if (lift < -TUNNEL_WALL && !this.ground.underground) continue;
       const at = this.camera.worldToScreen(this.sim.pose(car), lift);
       const distance = Math.hypot(at.x - s.x, at.y - s.y);
       if (distance < bestDistance) {
@@ -636,7 +655,7 @@ export class Engine {
       const valid =
         j.kind === "junction" ? this.graph.segmentsAt(j.id).length >= 3 : this.graph.terminal(j.id) !== undefined;
       if (!point || !valid) return null;
-      const at = this.camera.worldToScreen(point);
+      const at = this.camera.worldToScreen(point, j.kind === "junction" ? this.graph.nodeHeight(j.id) : 0);
       return Math.abs(at.x - j.x) < 0.5 && Math.abs(at.y - j.y) < 0.5 ? j : { ...j, ...at };
     };
     // The lane connector ends if its junction stops having one (bulldozed, or made a roundabout).
@@ -656,9 +675,11 @@ export class Engine {
 
   /** Where the tool points at screen point `s`: on the ground, or up on the level of the bridge (or tunnel) the Road tool's laying. */
   private toolPoint(s: Vec2): Vec2 | null {
-    // Only the tools that work at the step (not, say, the lane editor opened from the Road tool).
+    // The tools that work at the step; the lane editor at its junction's height; else the ground.
+    const { roadSpec, laneEditNode } = gameStore.getState();
     const atStep = this.tool === this.tools.road || this.tool === this.tools.bulldozeRoads;
-    return this.camera.screenToWorld(s, atStep ? levelHeight(gameStore.getState().roadSpec.level ?? 0) : 0);
+    const lanes = laneEditNode !== null && this.graph.nodes.has(laneEditNode) ? this.graph.nodeHeight(laneEditNode) : 0;
+    return this.camera.screenToWorld(s, atStep ? levelHeight(roadSpec.level ?? 0) : lanes);
   }
 
   private toolMove(s: Vec2): void {

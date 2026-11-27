@@ -17,6 +17,11 @@ export interface RoadSpec {
    * that height all along, set by the road tool's bridge and tunnel buttons.
    */
   level?: number;
+  /**
+   * A ramp: the level at its start (node `a`) when that's not `level` (at node `b`), see
+   * `core/grade`. Set when a road is drawn between nodes at different heights.
+   */
+  from?: number;
   /** Speed limit in km/h, one of `SPEED_LIMITS` (absent: `DEFAULT_SPEED`). Cars drive at it, and routes prefer faster roads. */
   speed?: number;
 }
@@ -39,6 +44,22 @@ export const DEFAULT_ROAD_SPEC: RoadSpec = { lanes: 1, oneWay: false, median: fa
 export const LANE_WIDTH = 12;
 export const MEDIAN_WIDTH = 6;
 export const FOOTPATH_WIDTH = 8;
+
+/** A road's levels at its start (node `a`) and its end (`b`): the same but on a ramp. */
+export function levelsOf(spec: RoadSpec): [number, number] {
+  return [spec.from ?? spec.level ?? 0, spec.level ?? 0];
+}
+
+/** Whether any of a road is off the ground: a bridge, a tunnel or a ramp to one. */
+export function offGround(spec: RoadSpec): boolean {
+  return levelsOf(spec).some((level) => level !== 0);
+}
+
+/** Whether a road climbs (or dips) between its ends. */
+export function isRamp(spec: RoadSpec): boolean {
+  const [from, to] = levelsOf(spec);
+  return from !== to;
+}
 
 export function hasMedian(spec: RoadSpec): boolean {
   return spec.median && !spec.oneWay;
@@ -64,15 +85,16 @@ export function hasTrees(spec: RoadSpec): boolean {
 
 /** Drops settings that don't apply (a median on a one-way road, trees without footpaths), so each road stores what it really is. */
 export function normalizeRoadSpec(spec: RoadSpec): RoadSpec {
-  const { trees: _, level, speed, ...rest } = spec;
-  // Nobody walks in a tunnel: no footpaths (so no trees or zebra crossings), and no median.
-  const tunnel = (level ?? 0) < 0;
+  const { trees: _, level, from, speed, ...rest } = spec;
+  // Nobody walks in a tunnel (or a ramp down to one): no footpaths (so no trees or zebra crossings), and no median.
+  const tunnel = Math.min(level ?? 0, from ?? 0) < 0;
   return {
     ...rest,
     ...(tunnel ? { footpath: false } : {}),
     median: hasMedian(spec) && !tunnel,
     ...(hasTrees(spec) && !tunnel ? { trees: true } : {}),
     ...(level ? { level } : {}),
+    ...(from !== undefined && from !== (level ?? 0) ? { from } : {}),
     ...(speed !== undefined && speed !== DEFAULT_SPEED ? { speed } : {}),
   };
 }
@@ -90,9 +112,10 @@ export function parseRoadSpec(raw: unknown): RoadSpec {
     typeof s.footpath !== "boolean" ||
     (s.trees !== undefined && typeof s.trees !== "boolean") ||
     (s.level !== undefined && (!Number.isInteger(s.level) || Math.abs(s.level) > MAX_LEVEL)) ||
+    (s.from !== undefined && (!Number.isInteger(s.from) || Math.abs(s.from) > MAX_LEVEL)) ||
     (s.speed !== undefined && !(SPEED_LIMITS as readonly number[]).includes(s.speed))
   ) {
     throw new Error("Invalid road settings in map file");
   }
-  return normalizeRoadSpec({ lanes: s.lanes!, oneWay: s.oneWay, median: s.median, footpath: s.footpath, trees: s.trees, level: s.level, speed: s.speed });
+  return normalizeRoadSpec({ lanes: s.lanes!, oneWay: s.oneWay, median: s.median, footpath: s.footpath, trees: s.trees, level: s.level, from: s.from, speed: s.speed });
 }

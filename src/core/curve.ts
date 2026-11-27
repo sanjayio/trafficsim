@@ -309,6 +309,8 @@ export class SampledCurve {
       const p1 = this.samples[i];
       const minX = Math.min(p0.p.x, p1.p.x), maxX = Math.max(p0.p.x, p1.p.x);
       const minY = Math.min(p0.p.y, p1.p.y), maxY = Math.max(p0.p.y, p1.p.y);
+      // This piece nowhere near the other path: none of its pieces can cross it.
+      if (maxX < b.minX || minX > b.maxX || maxY < b.minY || minY > b.maxY) continue;
       for (let j = 1; j < other.samples.length; j++) {
         const q0 = other.samples[j - 1];
         const q1 = other.samples[j];

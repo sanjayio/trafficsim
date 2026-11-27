@@ -68,6 +68,8 @@ export interface ToolContext {
   screenRect: (a: Vec2, b: Vec2, height?: number) => Vec2[];
   /** Where cars stop on `segment` before junction `node` (the painted line), as a distance from the node. */
   stopLineAt: (segment: RoadSegment, node: NodeId) => number;
+  /** Where the pointer is on the level `height` up (or down), as seen on screen (null when it misses it). */
+  pointerAt: (height: number) => Vec2 | null;
   /** Short readout shown next to the cursor (null hides it). */
   setHint: (text: string | null) => void;
 }

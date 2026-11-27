@@ -1,7 +1,9 @@
 import { GRID_SIZE, NODE_SNAP_RADIUS } from "../core/constants";
 import { rightNormal, SampledCurve, straightCurve } from "../core/curve";
 import { distance, snapToGrid, type Vec2 } from "../core/geometry";
+import { levelHeight, MAX_LEVEL } from "../core/grade";
 import type { RoadGraph } from "../core/roadGraph";
+import { isRamp } from "../core/roadSpec";
 
 /** An infinite line through `origin` along unit direction `dir`. */
 export interface Guide {
@@ -13,6 +15,8 @@ export interface SnapResult {
   point: Vec2;
   /** Guidelines the point snapped to (to draw them). */
   guides: Guide[];
+  /** The level of the node it snapped to, when that's not the road's step (a ramp's end). */
+  level?: number;
 }
 
 export interface SnapOptions {
@@ -27,8 +31,10 @@ export interface SnapOptions {
   isRoadEnd: boolean;
   /** The previous point of the road being drawn, for angle guidelines. */
   from?: { point: Vec2; reference: Vec2 };
-  /** The level the road's drawn at (a bridge's or tunnel's step): it joins only nodes and roads there. */
+  /** The level the road's drawn at (a bridge's or tunnel's step): it joins roads there, and nodes there or (as a ramp) at any level. */
   level?: number;
+  /** Where the pointer is on the level `height` up (or down): to snap to nodes at other levels where they're seen. */
+  pointerAt?: (height: number) => Vec2 | null;
 }
 
 /** Angle guidelines from the previous point, relative to its reference direction. */
@@ -53,17 +59,24 @@ const MIN_CROSSING_SINE = 0.5;
  */
 export function snapPoint(p: Vec2, o: SnapOptions): SnapResult {
   if (o.isRoadEnd) {
-    const node = o.graph.nodeNear(p, Math.max(NODE_SNAP_RADIUS, o.tolerance), o.level ?? 0);
-    if (node) return { point: { x: node.x, y: node.y }, guides: [] };
+    // The nearest node at any level, as it's seen under the pointer (one at another level makes a ramp).
+    const step = o.level ?? 0;
+    let best: { point: Vec2; level: number; d: number } | null = null;
+    for (let level = -MAX_LEVEL; level <= MAX_LEVEL; level++) {
+      const q = level === step ? p : o.pointerAt?.(levelHeight(level));
+      const node = q && o.graph.nodeNear(q, Math.max(NODE_SNAP_RADIUS, o.tolerance), level);
+      if (node && (!best || distance(node, q) < best.d)) best = { point: { x: node.x, y: node.y }, level, d: distance(node, q) };
+    }
+    if (best) return { point: best.point, guides: [], level: best.level };
   }
 
   if (o.guides) {
     const near = guidesNear(p, o).filter((g) => distanceToLine(p, g) <= o.tolerance);
 
     if (o.isRoadEnd) {
-      // Onto a road at this level (a bridge joins only bridges at its step).
+      // Onto a level road at this level (a bridge joins only bridges at its step; nothing joins a ramp's slope).
       const segment = o.graph.segmentAt(p, 0, o.level ?? 0);
-      if (segment) return snapOntoRoad(p, o.graph.path(segment), near, o);
+      if (segment && !isRamp(segment.spec)) return snapOntoRoad(p, o.graph.path(segment), near, o);
     }
 
     let best: SnapResult | null = null;

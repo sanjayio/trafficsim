@@ -1,6 +1,7 @@
 import { BufferGeometry, Float32BufferAttribute, Mesh, type MeshBasicMaterial } from "three";
 import type { Car, Simulation } from "../core/simulation";
 import { FlatLayer, flatMaterial } from "./flat";
+import { TUNNEL_WALL } from "./grade";
 
 const COLOR = 0x3b82f6;
 const WIDTH = 2.5;
@@ -36,8 +37,8 @@ export class RouteLine extends Mesh<BufferGeometry, MeshBasicMaterial> {
     for (let i = 0; i + 1 < points.length; i++) {
       const a = points[i];
       const b = points[i + 1];
-      // Out of sight in a tunnel, but in the underground view.
-      if (!underground && a.h < 0 && b.h < 0) continue;
+      // Out of sight in a tunnel (but in a ramp's open cutting, or in the underground view).
+      if (!underground && a.h < -TUNNEL_WALL && b.h < -TUNNEL_WALL) continue;
       const len = Math.hypot(b.x - a.x, b.y - a.y);
       if (len < 1e-3) continue;
       const nx = (-(b.y - a.y) / len) * (WIDTH / 2);

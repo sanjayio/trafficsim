@@ -13,7 +13,7 @@ import {
   Vector3,
 } from "three";
 import type { RoadGraph } from "../core/roadGraph";
-import { carriagewayWidth, FOOTPATH_WIDTH, hasTrees, roadWidth } from "../core/roadSpec";
+import { carriagewayWidth, FOOTPATH_WIDTH, hasTrees, levelsOf, roadWidth } from "../core/roadSpec";
 import { LEAVES, swayMaterial, treeGeometries, TRUNK } from "./buildings";
 import { KERB_HEIGHT } from "./flat";
 import { carPark, DRIVEWAY_WIDTH, isSourceBuilding, lotPoint, SIDE_PATH } from "../core/terminal";
@@ -57,6 +57,8 @@ export class StreetLights extends Group {
     toneMapped: false,
   });
   private parts: InstancedMesh[] = [];
+  /** The driveways the lights were placed clear of (see `drivewaysMoved`). */
+  private drivewaysKey = "";
   private planterMaterial = new MeshBasicMaterial({ color: 0x9a968e });
   private soilMaterial = new MeshBasicMaterial({ color: 0x4a3a2a });
   /** Planters' trees: the kit's trunk and ball of leaves (see `treeGeometries`), shaded by face. */
@@ -92,15 +94,8 @@ export class StreetLights extends Group {
     const up = new Vector3(0, 1, 0);
     const box = (x: number, y: number, z: number, sx: number, sy: number, sz: number, angle: number) =>
       new Matrix4().compose(new Vector3(x, y, z), q.setFromAxisAngle(up, -angle).clone(), new Vector3(sx, sy, sz));
-    // Where every driveway crosses the footpath: its middle, which way it runs off the road, and half its width.
-    const driveways: { at: { x: number; y: number }; out: { x: number; y: number }; along: { x: number; y: number }; half: number }[] = [];
-    for (const id of this.graph.allTerminals().keys()) {
-      const lot = this.graph.terminalLot(id);
-      if (!lot) continue;
-      const path = isSourceBuilding(lot.building) ? null : carPark(lot).path;
-      const at = path === null ? lot.door : lotPoint(lot, path, -lot.depth / 2);
-      driveways.push({ at, out: lot.out, along: lot.along, half: (path === null ? DRIVEWAY_WIDTH : SIDE_PATH) / 2 });
-    }
+    const driveways = this.driveways();
+    this.drivewaysKey = keyOf(driveways);
     /** Whether something `size` across at `p` would stand on a driveway (on its side of the road). */
     const onDriveway = (p: { x: number; y: number }, size: number) =>
       driveways.some(({ at, out, along, half }) => {
@@ -109,9 +104,10 @@ export class StreetLights extends Group {
         return across < 1 && across > -FOOTPATH_WIDTH * 3 && Math.abs(d.x * along.x + d.y * along.y) < half + size / 2 + 1;
       });
     for (const segment of this.graph.segments.values()) {
-      // Along footpaths, and on bridges (at the parapet if there's no footpath); not in tunnels.
-      const bridge = (segment.spec.level ?? 0) > 0;
-      if ((!segment.spec.footpath && !bridge) || (segment.spec.level ?? 0) < 0) continue;
+      // Along footpaths, and on bridges and ramps up to them (at the parapet if there's no footpath); not in tunnels or ramps down to one.
+      const levels = levelsOf(segment.spec);
+      const bridge = Math.max(...levels) > 0;
+      if ((!segment.spec.footpath && !bridge) || Math.min(...levels) < 0) continue;
       // As drawn (a slip road's end runs from the main road's outside lane).
       const path = this.graph.drawnPath(segment);
       // Roads joining this one at its ends: no light where it would stand on one (where a slip road overlaps).
@@ -212,6 +208,24 @@ export class StreetLights extends Group {
     this.parts.push(leafMesh);
   }
 
+  /** Where every driveway crosses the footpath: its middle, which way it runs off the road, and half its width. */
+  private driveways(): Driveway[] {
+    const out: Driveway[] = [];
+    for (const id of this.graph.allTerminals().keys()) {
+      const lot = this.graph.terminalLot(id);
+      if (!lot) continue;
+      const path = isSourceBuilding(lot.building) ? null : carPark(lot).path;
+      const at = path === null ? lot.door : lotPoint(lot, path, -lot.depth / 2);
+      out.push({ at, out: lot.out, along: lot.along, half: (path === null ? DRIVEWAY_WIDTH : SIDE_PATH) / 2 });
+    }
+    return out;
+  }
+
+  /** Whether any driveway's come, gone or moved since the lights were placed (they keep clear of them): a building changed, most often only growing. */
+  drivewaysMoved(): boolean {
+    return keyOf(this.driveways()) !== this.drivewaysKey;
+  }
+
   /** Switches the lights on as `night` goes from 0 to 1; by day the heads look as the rest of the scene does at `exposure`. */
   setLights(exposure: number, night: number): void {
     this.headMaterial.color.copy(this.dayHead).multiplyScalar(exposure).lerp(this.nightHead, night);
@@ -231,6 +245,15 @@ export class StreetLights extends Group {
     this.poolMaterial.dispose();
   }
 }
+
+interface Driveway {
+  at: { x: number; y: number };
+  out: { x: number; y: number };
+  along: { x: number; y: number };
+  half: number;
+}
+
+const keyOf = (driveways: Driveway[]) => driveways.map((d) => `${d.at.x.toFixed(2)},${d.at.y.toFixed(2)},${d.half}`).join(";");
 
 /** A round pool of light: bright in the middle, fading to nothing at the edge. Black adds no light. */
 function poolTexture(): CanvasTexture {

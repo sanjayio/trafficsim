@@ -1,9 +1,9 @@
 import { Group, Mesh, type BufferGeometry, type InstancedMesh, type MeshBasicMaterial } from "three";
 import { SampledCurve, type Curve } from "../core/curve";
 import type { Vec2 } from "../core/geometry";
-import { levelHeight } from "../core/grade";
-import { roadWidth, type RoadSpec } from "../core/roadSpec";
-import { concreteMaterial, gradeStructure } from "./grade";
+import { heightAlong } from "../core/grade";
+import { isRamp, levelsOf, offGround, roadWidth, type RoadSpec } from "../core/roadSpec";
+import { concreteMaterial, gradeStructure, liftGeometry } from "./grade";
 import type { Overlay } from "../tools/Tool";
 import { KERB_HEIGHT, capsuleGeometry, convexGeometry, FlatLayer, flatMaterial, stripOutline } from "./flat";
 import { palette } from "./palette";
@@ -52,17 +52,19 @@ export class OverlayLayer extends Group implements Overlay {
 
   roadPreview(curve: Curve, spec: RoadSpec, valid: boolean): void {
     const path = new SampledCurve(curve);
+    const [from, to] = levelsOf(spec);
+    const height = (s: number) => heightAlong(from, to, s);
     // A bridge's parapets and pillars (a tunnel's walls), as built: at their height in the world, not lifted with the rest.
-    const level = spec.level ?? 0;
-    if (level) {
-      const h = levelHeight(level);
-      const structure = gradeStructure(path, roadWidth(spec), () => h, valid ? this.concrete : this.invalidMaterial, spec.footpath ? KERB_HEIGHT : 0, () => [0, path.length]);
-      structure.position.y = -lift(h);
+    if (offGround(spec)) {
+      const structure = gradeStructure(path, roadWidth(spec), height, valid ? this.concrete : this.invalidMaterial, spec.footpath ? KERB_HEIGHT : 0, () => [0, path.length]);
+      structure.position.y = -this.position.y;
       structure.renderOrder = FlatLayer.overlay;
       structure.castShadow = false;
       this.add(structure);
     }
     for (const { part, geometry } of buildRoadParts(path, spec)) {
+      // A ramp's surface slopes with it (the overlay's raised to one level only), over its deck.
+      if (isRamp(spec)) liftGeometry(geometry, path, (s) => lift(height(s) || 0.001) - this.position.y, 0);
       const material = valid ? this.previewMaterials[part] : this.invalidMaterial;
       // Keep the parts' relative order (footpath < asphalt < markings) above everything else.
       const mesh = this.addMesh(geometry, material, FlatLayer.overlay + ROAD_PART_STYLE[part].layer, false);

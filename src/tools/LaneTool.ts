@@ -109,6 +109,8 @@ export class LaneTool implements Tool {
     const { overlay, graph } = this.ctx;
     overlay.clear();
     if (!graph.nodes.has(this.node)) return;
+    // Up on a bridge's (or down in a tunnel's) junction.
+    overlay.raise(graph.nodeHeight(this.node));
     const ends = this.ends();
     const find = (ref: LaneRef, incoming: boolean) => ends.find((e) => e.incoming === incoming && same(e.ref, ref));
     for (const c of connectionsAt(graph, this.node)) {

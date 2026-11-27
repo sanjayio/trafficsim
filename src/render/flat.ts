@@ -1,4 +1,4 @@
-import { AlwaysStencilFunc, BufferGeometry, Color, DoubleSide, Float32BufferAttribute, MeshBasicMaterial, ReplaceStencilOp, ShapeUtils, Vector2 } from "three";
+import { AlwaysStencilFunc, BufferGeometry, Color, DoubleSide, EqualStencilFunc, Float32BufferAttribute, MeshBasicMaterial, ReplaceStencilOp, ShapeUtils, Vector2, type Material } from "three";
 import type { Vec2 } from "../core/geometry";
 import { palette } from "./palette";
 
@@ -39,9 +39,25 @@ export const KERB_HEIGHT = 1;
 export function marksRaised<M extends MeshBasicMaterial>(material: M, raised: boolean): M {
   material.stencilWrite = true;
   material.stencilFunc = AlwaysStencilFunc;
-  material.stencilRef = raised ? 1 : 0;
+  material.stencilRef = raised ? STENCIL.raised : 0;
+  // Its own bit only: a ramp's cutting marks another (see `STENCIL`).
+  material.stencilWriteMask = STENCIL.raised;
   material.stencilZPass = ReplaceStencilOp;
   return material;
+}
+
+/** Stencil bits: where something raised is drawn (see `marksRaised`), and where a ramp's cutting opens the ground (see `trenchMask`). */
+export const STENCIL = { raised: 1, cutting: 2 };
+
+/** Draws `material` only where no ramp's cutting opens the ground (the ground and what lies flat on it). */
+export function outsideCuttings<M extends Material>(material: M): M {
+  return Object.assign(material, {
+    stencilWrite: true,
+    stencilWriteMask: 0,
+    stencilFuncMask: STENCIL.cutting,
+    stencilRef: 0,
+    stencilFunc: EqualStencilFunc,
+  });
 }
 /** The kerb's face, upright, drawn a step darker than its top. */
 const KERB_FACE_TONE = 0.6;

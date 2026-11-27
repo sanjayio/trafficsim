@@ -1,6 +1,6 @@
 import { convexOverlap, pointInConvexPolygon, type Vec2 } from "./geometry";
 import type { NodeId, RoadGraph, RoadSegment, SegmentId } from "./roadGraph";
-import { roadWidth } from "./roadSpec";
+import { offGround, roadWidth } from "./roadSpec";
 import { MIN_ROAD_LENGTH } from "./constants";
 import { BUILDING_TILES, newTerminal, TILE, ZONE_ROWS, type Building } from "./terminal";
 
@@ -64,8 +64,14 @@ export class ZoneMap {
   private runs = new Map<SegmentId, RunPiece[]>();
   private unsubscribe: () => void;
 
+  /** Buildings changed since the tiles' `free` was worked out (the tiles themselves follow the roads only). */
+  private buildingsChanged = false;
+
   constructor(private graph: RoadGraph) {
-    this.unsubscribe = graph.subscribe((e) => e.type !== "rules" && e.type !== "scenery" && (this.tiles = null));
+    this.unsubscribe = graph.subscribe((e) => {
+      if (e.type === "terminal-changed") this.buildingsChanged = true;
+      else if (e.type !== "rules" && e.type !== "scenery") this.tiles = null;
+    });
   }
 
   dispose(): void {
@@ -73,10 +79,11 @@ export class ZoneMap {
   }
 
   all(): Tile[] {
+    if (this.tiles && this.buildingsChanged) this.markTaken(this.tiles);
     if (!this.tiles) {
       this.runs.clear();
       for (const segment of this.graph.segments.values()) {
-        if (this.runs.has(segment.id) || segment.spec.level) continue;
+        if (this.runs.has(segment.id) || offGround(segment.spec)) continue;
         const run = this.run(segment.id);
         for (const piece of run) this.runs.set(piece.segment, run);
       }
@@ -187,7 +194,7 @@ export class ZoneMap {
       const roads = graph.segmentsAt(node);
       if (roads.length !== 2) return undefined;
       const next = roads.find((r) => r !== from && (forward ? r.a === node : r.b === node));
-      if (!next || next.spec.level || pieces.includes(next)) return undefined;
+      if (!next || offGround(next.spec) || pieces.includes(next)) return undefined;
       const back = graph.directionAway(from, node);
       const on = graph.directionAway(next, node);
       return -(back.x * on.x + back.y * on.y) >= SMOOTH ? next : undefined;
@@ -205,7 +212,6 @@ export class ZoneMap {
   private build(): Tile[] {
     const { graph } = this;
     const segments = [...graph.segments.values()];
-    const lots = [...graph.allTerminals().keys()].map((id) => graph.lotCorners(id)).filter((lot) => lot.length);
     const junctions = [...graph.nodes.values()].filter((n) => graph.segmentsAt(n.id).length >= 3);
 
     // Every tile that could be zoned beside its own road.
@@ -275,11 +281,21 @@ export class ZoneMap {
         continue;
       }
       reach.set(key, next + 1);
-      // Taken where any of it is under a building.
-      tile.free = !lots.some((lot) => convexOverlap(tile.corners, lot));
       tiles.push(tile);
     }
+    this.markTaken(tiles);
     return tiles;
+  }
+
+  /** Marks the tiles under a building taken (`free` false), the rest free: checking only buildings whose box reaches a tile. */
+  private markTaken(tiles: Tile[]): void {
+    const { graph } = this;
+    const lots = [...graph.allTerminals().keys()].map((id) => graph.lotCorners(id)).filter((lot) => lot.length).map((corners) => ({ corners, box: boxOf(corners) }));
+    for (const tile of tiles) {
+      const box = boxOf(tile.corners);
+      tile.free = !lots.some((lot) => lot.box.minX <= box.maxX && box.minX <= lot.box.maxX && lot.box.minY <= box.maxY && box.minY <= lot.box.maxY && convexOverlap(tile.corners, lot.corners));
+    }
+    this.buildingsChanged = false;
   }
 
   /** Whether a tile beside `beside` (pieces of the run `own`) may be zoned. */
@@ -313,6 +329,12 @@ function columnsOf(run: RunPiece[]): number {
 /** The piece of `run` that `s` along it falls on. */
 function pieceAt(run: RunPiece[], s: number): RunPiece {
   return run.find((piece) => s < piece.start + piece.length) ?? run[run.length - 1];
+}
+
+function boxOf(points: Vec2[]): { minX: number; maxX: number; minY: number; maxY: number } {
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
 }
 
 function centroid(points: Vec2[]): Vec2 {

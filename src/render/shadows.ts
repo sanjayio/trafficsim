@@ -4,8 +4,6 @@ import {
   DoubleSide,
   EqualStencilFunc,
   KeepStencilOp,
-  NotEqualStencilFunc,
-  type StencilFunc,
   Mesh,
   MeshBasicMaterial,
   PCFSoftShadowMap,
@@ -16,7 +14,7 @@ import {
   type WebGLRenderer,
 } from "three";
 import { WORLD_SIZE } from "../core/constants";
-import { KERB_HEIGHT } from "./flat";
+import { KERB_HEIGHT, STENCIL } from "./flat";
 
 /**
  * Shared by every basic material's shader (see `installCloudShadows`), so setting them once
@@ -90,15 +88,18 @@ const CATCHER_LIFT = KERB_HEIGHT + 0.3;
  * bridge decks (see `catchShadows`). Both sides, as the road parts they lie over are drawn (their
  * triangles face either way).
  */
-const catcher = (stencil?: { func: StencilFunc }) =>
+const catcher = (stencil?: { ref: number; mask: number }) =>
   new ShadowMaterial({
     opacity: 0.4,
     depthWrite: false,
     side: DoubleSide,
-    ...(stencil ? { stencilWrite: true, stencilRef: 1, stencilFunc: stencil.func, stencilZPass: KeepStencilOp } : {}),
+    ...(stencil
+      ? { stencilWrite: true, stencilWriteMask: 0, stencilRef: stencil.ref, stencilFuncMask: stencil.mask, stencilFunc: EqualStencilFunc, stencilZPass: KeepStencilOp }
+      : {}),
   });
-const GROUND = catcher({ func: NotEqualStencilFunc });
-const RAISED = catcher({ func: EqualStencilFunc });
+// On the ground: neither raised nor over a ramp's cutting (whose ground is open).
+const GROUND = catcher({ ref: 0, mask: STENCIL.raised | STENCIL.cutting });
+const RAISED = catcher({ ref: STENCIL.raised, mask: STENCIL.raised });
 const CATCHER = catcher();
 
 /**

@@ -2,21 +2,30 @@ import { AlwaysDepth, DoubleSide, Group, Mesh, type BufferGeometry, type Instanc
 import { effectiveControl, kerbRadius, minorRoads, slipControlAt, slipRoad, signalApproaches, MAX_CORNER_RADIUS, roundaboutShape, signalLights } from "../core/junction";
 import type { GraphEvent, NodeId, RoadGraph, RoadSegment, SegmentId } from "../core/roadGraph";
 import { connectionsAt, hasLaneConnector, turnAt, type Turn } from "../core/lanes";
-import { carriagewayWidth, FOOTPATH_WIDTH, hasMedian, LANE_WIDTH, MEDIAN_WIDTH, roadWidth, type RoadSpec } from "../core/roadSpec";
+import { carriagewayWidth, FOOTPATH_WIDTH, hasMedian, LANE_WIDTH, levelsOf, MEDIAN_WIDTH, offGround, roadWidth, type RoadSpec } from "../core/roadSpec";
 import { carPark, defaultName, DRIVEWAY_WIDTH, isSourceBuilding, levelOf, SIDE_PATH } from "../core/terminal";
 import { Scaffolding } from "./scaffold";
 import { bridge } from "../core/track";
 import { BuildingKit } from "./buildings";
-import { concreteMaterial, gradeStructure, junctionWalls, layerLift, liftGeometry, pillarAt } from "./grade";
-import { MAX_LEVEL } from "../core/grade";
+import { concreteMaterial, gradeStructure, junctionWalls, layerLift, liftGeometry, pillarAt, splitAlong, trenchMask } from "./grade";
+import { LANDING, MAX_LEVEL, rampClimb } from "../core/grade";
 import { catchShadows } from "./shadows";
 import { FlatLayer, flatMaterial, KERB_HEIGHT, kerbColouring, marksRaised, pavedGeometry } from "./flat";
 import { FurnitureKit, type FurnitureSpot } from "./furniture";
 import { buildJunctionParts, type JunctionArm } from "./junctionParts";
 import { buildRoundaboutParts } from "./roundaboutParts";
 import { buildBendMarkings, buildBendSurface, buildRoadParts, CROSSING_ROOM, EDGE_LINE_INSET, ROAD_PART_STYLE, type BendLine, type RoadEnd, type RoadPart } from "./roadParts";
-import type { Curve, SampledCurve } from "../core/curve";
+import { SampledCurve, type Curve } from "../core/curve";
 import type { Vec2 } from "../core/geometry";
+
+/** Points along `curve`, a few units apart (a wall's line round a bend). */
+function points(curve: Curve): Vec2[] {
+  const path = new SampledCurve(curve);
+  const out: Vec2[] = [];
+  for (let s = 0; s < path.length; s += 3) out.push(path.at(s).p);
+  out.push(path.at(path.length).p);
+  return out;
+}
 
 /** Roads meeting this close to straight on (radians short of 180°) just carry their markings through. */
 const STRAIGHT_ENOUGH = (10 * Math.PI) / 180;
@@ -38,6 +47,8 @@ const MIN_CLEARANCE_SINE = 0.35;
 const SLIP_CLEAR = 30;
 /** Bridges and tunnels draw after the ground's road layers (and before cars and buildings). */
 const GRADED_ORDER = 12;
+/** Ramps' slopes draw after every bridge (they're drawn by depth: see `slopedMaterial`), before cars and buildings. */
+const SLOPE_ORDER = 19;
 /** A bridge junction's deck: its underside this far below the road. */
 const DECK_DEPTH = 1.5;
 /** A give way or stop line at a slip road's end stands this far back from where it meets the main road's kerb. */
@@ -58,6 +69,7 @@ export class RoadLayer extends Group {
   ) as Record<RoadPart, MeshBasicMaterial>;
   private views = new Map<SegmentId, Mesh[]>();
   private graded = new Map<RoadPart, MeshBasicMaterial>();
+  private sloped = new Map<RoadPart, MeshBasicMaterial>();
   private concrete = concreteMaterial();
   /** The underside of a bridge's junction deck (seen from below). */
   private underside = Object.assign(concreteMaterial(), { side: DoubleSide });
@@ -404,8 +416,13 @@ export class RoadLayer extends Group {
       // A paved bend: a curved stretch of road, the same width all the way round, instead of corners.
       const paved = this.pavedBend(nodeId);
       const surface = paved ? buildBendSurface(meeting[0].spec, this.bendEdge(nodeId)!) : parts;
-      // A bridge's or tunnel's walls round the corners (round a paved bend, its roads' own carry on to meet).
-      if (!paved) {
+      // A bridge's or tunnel's walls round the corners, or round a paved bend's two edges (its roads' stopping where it starts).
+      if (paved) {
+        const curve = this.bendEdge(nodeId)!;
+        const { spec } = meeting[0];
+        corners = [1, -1].map((side) => ({ edge: curve((side * roadWidth(spec)) / 2).flatMap(points), footpath: spec.footpath }));
+        this.wallReach.set(nodeId, new Map(meeting.map((segment) => [segment.id, { right: this.bendInset(segment, nodeId), left: this.bendInset(segment, nodeId) }])));
+      } else {
         corners = edges;
         this.wallReach.set(nodeId, new Map(meeting.map((segment, i) => [segment.id, sides[i]])));
       }
@@ -510,7 +527,6 @@ export class RoadLayer extends Group {
     return Math.min(Math.max(this.cornerReach.get(nodeId)?.get(segment.id) ?? 0, margin), this.graph.path(segment).length / 2);
   }
 
-  /** Whether the bend at `nodeId` is paved as a curve joining its two roads (not on a bridge or in a tunnel). */
   /** Whether `segment` carries straight on at `node` into the one other road there, the same layout. */
   private carriesOn(segment: RoadSegment, node: NodeId): boolean {
     const meeting = this.graph.segmentsAt(node);
@@ -600,7 +616,8 @@ export class RoadLayer extends Group {
   private addSegment(segment: RoadSegment): void {
     const ends = { start: this.endAt(segment, segment.a), end: this.endAt(segment, segment.b) };
     const path = this.graph.drawnPath(segment);
-    const graded = !!segment.spec.level;
+    const graded = offGround(segment.spec);
+    const [fromLevel, toLevel] = levelsOf(segment.spec);
     // Heights by distance along the drawn road, as the graph has them along its centre line.
     const scale = this.graph.path(segment).length / (path.length || 1);
     const height = (s: number) => this.graph.heightAt(segment, s * scale);
@@ -612,21 +629,30 @@ export class RoadLayer extends Group {
     const [trimA, trimB] = [trim(segment.a), trim(segment.b)];
     const caps: [boolean, boolean] = [joined(segment.a) && !trimA, joined(segment.b) && !trimB];
     const paved: [number, number] = [trimA, path.length - trimB];
-    const meshes: Mesh[] = buildRoadParts(path, segment.spec, ends, this.graph.drivingSide, caps, paved).map(({ part, geometry }) => {
+    // A piece of the road (`part`) at `level` (null: a ramp's slope). A bridge or tunnel: drawn with
+    // depth so it hides (and is hidden by) what it passes over or under.
+    const piece = (part: RoadPart, geometry: BufferGeometry, level: number | null): Mesh => {
       const layer = ROAD_PART_STYLE[part].layer;
-      // A bridge or tunnel: lifted (or sunk) to its height, drawn with depth so it hides (and is
-      // hidden by) what it passes over or under.
-      if (graded) liftGeometry(geometry, path, height, layer);
-      const mesh = new Mesh(geometry, graded ? this.gradedMaterial(part) : this.materials[part]);
-      mesh.renderOrder = graded ? this.gradedOrder(segment.spec.level!, layer) : layer;
+      const mesh = new Mesh(geometry, level === null ? this.slopedMaterial(part) : level ? this.gradedMaterial(part) : this.materials[part]);
+      mesh.renderOrder = level === null ? SLOPE_ORDER + layer * 0.01 : level ? this.gradedOrder(level, layer) : layer;
       // Footpaths and medians stand above the road.
       if (part === "footpath" || part === "median") mesh.position.y = KERB_HEIGHT;
-      // A bridge's deck shades what's under it.
-      if (graded && (segment.spec.level ?? 0) > 0) {
+      // A bridge's deck (and a ramp up to one) shades what's under it.
+      if ((level ?? Math.max(fromLevel, toLevel)) > 0) {
         mesh.castShadow = true;
         catchShadows(mesh);
       }
       return mesh;
+    };
+    // A ramp's landings, level at each end, meet the roads there as level roads do; its slope between.
+    const landings = [LANDING / scale, (LANDING + rampClimb(fromLevel, toLevel)) / scale];
+    const meshes: Mesh[] = buildRoadParts(path, segment.spec, ends, this.graph.drivingSide, caps, paved).flatMap(({ part, geometry }) => {
+      // A bridge or tunnel (or a ramp): lifted (or sunk) to its height.
+      if (graded) liftGeometry(geometry, path, height, ROAD_PART_STYLE[part].layer);
+      if (fromLevel === toLevel) return [piece(part, geometry, toLevel)];
+      const pieces = splitAlong(geometry, path, landings);
+      geometry.dispose();
+      return pieces.flatMap((g, i) => (g.getAttribute("position").count ? [piece(part, g, [fromLevel, null, toLevel][i])] : []));
     });
     const width = carriagewayWidth(segment.spec) + (segment.spec.footpath ? 2 * FOOTPATH_WIDTH : 0);
     if (graded) {
@@ -635,6 +661,9 @@ export class RoadLayer extends Group {
       const reach = (node: NodeId, which: "right" | "left") => Math.min(this.wallReach.get(node)?.get(segment.id)?.[which] ?? 0, path.length / 2);
       const span = (side: 1 | -1): [number, number] => [reach(segment.a, side === 1 ? "right" : "left"), path.length - reach(segment.b, side === 1 ? "left" : "right")];
       meshes.push(gradeStructure(path, width, height, this.concrete, segment.spec.footpath ? KERB_HEIGHT : 0, span));
+      // A ramp down into the ground: its cutting's opening (drawn just before the ground).
+      const trench = trenchMask(path, width, height, FlatLayer.ground - 0.5);
+      if (trench) meshes.push(trench);
     }
     this.add(...meshes);
     this.views.set(segment.id, meshes);
@@ -671,6 +700,22 @@ export class RoadLayer extends Group {
       // Always drawn (in order), yet writing depth: switching the depth test off would stop that too.
       material.depthFunc = AlwaysDepth;
       this.graded.set(part, material);
+    }
+    return material;
+  }
+
+  /**
+   * A road part's material for a ramp's slope: drawn by depth (unlike level bridges, see
+   * `gradedMaterial`), since a slope can be over one bridge and under another. Each layer is nudged
+   * towards the camera over the one under it, so markings stay on the asphalt.
+   */
+  private slopedMaterial(part: RoadPart): MeshBasicMaterial {
+    let material = this.sloped.get(part);
+    if (!material) {
+      const layer = ROAD_PART_STYLE[part].layer;
+      material = textured(part, this.materials[part].clone());
+      Object.assign(material, { depthWrite: true, polygonOffset: true, polygonOffsetFactor: -layer, polygonOffsetUnits: -layer * 4 });
+      this.sloped.set(part, material);
     }
     return material;
   }

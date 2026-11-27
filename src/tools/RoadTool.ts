@@ -1,4 +1,4 @@
-import { levelHeight } from "../core/grade";
+import { levelHeight, minRampLength } from "../core/grade";
 import { MIN_ROAD_LENGTH, NODE_SNAP_RADIUS } from "../core/constants";
 import {
   endTangent,
@@ -12,7 +12,7 @@ import {
 } from "../core/curve";
 import { distance, type Vec2 } from "../core/geometry";
 import type { Crossing } from "../core/roadGraph";
-import { carriagewayWidth, LANE_WIDTH, roadWidth, type RoadSpec } from "../core/roadSpec";
+import { carriagewayWidth, LANE_WIDTH, levelsOf, normalizeRoadSpec, roadWidth, type RoadSpec } from "../core/roadSpec";
 import { palette } from "../render/palette";
 import { angleBetween, referenceDirection, snapPoint, type Guide } from "./snapping";
 import type { RoadMode, Tool, ToolContext } from "./Tool";
@@ -42,6 +42,10 @@ interface PlannedRoad {
  */
 export class RoadTool implements Tool {
   private points: Vec2[] = [];
+  /** Each point's level: the node it snapped to's, else the step. A road between two levels is a ramp. */
+  private levels: number[] = [];
+  /** The level of the point under the pointer (see `levels`). */
+  private cursorLevel = 0;
   /** Where the pointer is, before snapping (which side of a road it's on). */
   private pointer: Vec2 | null = null;
   /** Continuous mode: direction the chain left off in, once its first road is built. */
@@ -51,17 +55,19 @@ export class RoadTool implements Tool {
 
   onDown(p: Vec2): void {
     const isEnd = this.points.length === CLICKS[this.ctx.roadMode()] - 1;
-    const { point, guides } = this.snap(p, isEnd);
+    const { point, guides, level } = this.snap(p, isEnd);
+    this.cursorLevel = level;
     const last = this.points[this.points.length - 1];
     // A click on the previous point adds nothing, so the road stays in progress.
     if (last && distance(last, point) < 1) return this.drawPreview(point, guides);
 
     if (!isEnd) {
       this.points.push(point);
+      this.levels.push(level);
       return this.drawPreview(point, guides);
     }
 
-    const roads = this.plan([...this.points, point]);
+    const roads = this.plan([...this.points, point], [...this.levels, level]);
     if (!roads.every((r) => r.valid)) return this.drawPreview(point, guides);
     for (const road of roads) this.ctx.graph.buildRoad(road.curve!, road.spec);
 
@@ -69,15 +75,18 @@ export class RoadTool implements Tool {
       // Carry on from the end, in the direction the road arrived.
       this.chainTangent = endTangent(roads[0].curve!);
       this.points = [point];
+      this.levels = [level];
     } else {
       this.points = [];
+      this.levels = [];
     }
     this.drawPreview(point, guides);
   }
 
   onMove(p: Vec2): void {
     this.pointer = p;
-    const { point, guides } = this.snap(p, this.points.length === CLICKS[this.ctx.roadMode()] - 1);
+    const { point, guides, level } = this.snap(p, this.points.length === CLICKS[this.ctx.roadMode()] - 1);
+    this.cursorLevel = level;
     this.drawPreview(point, guides);
   }
 
@@ -91,30 +100,35 @@ export class RoadTool implements Tool {
     // In a continuous chain the only placed point is the chain's end, so stepping back ends it.
     if (this.chainTangent) return this.cancel();
     this.points.pop();
+    this.levels.pop();
     if (this.points.length === 0) this.cancel();
   }
 
   cancel(): void {
     this.points = [];
+    this.levels = [];
     this.chainTangent = null;
     this.ctx.overlay.clear();
     this.ctx.setHint(null);
   }
 
-  private snap(p: Vec2, isEnd: boolean): { point: Vec2; guides: Guide[] } {
+  private snap(p: Vec2, isEnd: boolean): { point: Vec2; guides: Guide[]; level: number } {
     const isRoadEnd = this.points.length === 0 || isEnd;
     const previous = this.points[this.points.length - 1];
     // A continuous chain's direction is fixed, so angle guidelines would only fight it.
     const from = previous && !this.chainTangent ? { point: previous, reference: this.reference() } : undefined;
-    return snapPoint(p, {
+    const step = this.ctx.roadSpec().level ?? 0;
+    const snapped = snapPoint(p, {
       graph: this.ctx.graph,
       grid: this.ctx.snapToGrid(),
       guides: this.ctx.guideSnapping(),
       tolerance: this.ctx.snapTolerance(),
       isRoadEnd,
       from,
-      level: this.ctx.roadSpec().level ?? 0,
+      level: step,
+      pointerAt: this.ctx.pointerAt,
     });
+    return { ...snapped, level: snapped.level ?? step };
   }
 
   /** Direction the drawn road's angle is measured from: its continuous chain, else the road it starts on. */
@@ -122,9 +136,13 @@ export class RoadTool implements Tool {
     return this.chainTangent ?? referenceDirection(this.ctx.graph, this.points[0]);
   }
 
-  /** The road(s) these clicks would build — the main road and its parallel copy — and whether they can be. */
-  private plan(points: Vec2[]): PlannedRoad[] {
-    const spec = this.ctx.roadSpec();
+  /**
+   * The road(s) these clicks (at `levels`) would build — the main road and its parallel copy — and
+   * whether they can be. From one level to another, a ramp.
+   */
+  private plan(points: Vec2[], levels: number[]): PlannedRoad[] {
+    const spec = normalizeRoadSpec({ ...this.ctx.roadSpec(), from: levels[0], level: levels[levels.length - 1] || undefined });
+    const [fromLevel, toLevel] = levelsOf(spec);
     const main = this.curveThrough(points);
     const curves: (Curve | null)[] = [main];
 
@@ -133,12 +151,12 @@ export class RoadTool implements Tool {
       // The copy may be several joined pieces (see offsetCurve). Attach its outer ends to
       // existing nodes too, so parallel roads chain together.
       const pieces = offsetCurve(main, offset);
-      const attach = (q: Vec2) => {
-        const node = this.ctx.graph.nodeNear(q, NODE_SNAP_RADIUS, spec.level ?? 0);
+      const attach = (q: Vec2, level: number) => {
+        const node = this.ctx.graph.nodeNear(q, NODE_SNAP_RADIUS, level);
         return node ? { x: node.x, y: node.y } : q;
       };
-      pieces[0] = { ...pieces[0], a: attach(pieces[0].a) };
-      pieces[pieces.length - 1] = { ...pieces[pieces.length - 1], b: attach(pieces[pieces.length - 1].b) };
+      pieces[0] = { ...pieces[0], a: attach(pieces[0].a, fromLevel) };
+      pieces[pieces.length - 1] = { ...pieces[pieces.length - 1], b: attach(pieces[pieces.length - 1].b, toLevel) };
       // A one-way copy runs the opposite way, so the pair forms a divided road.
       curves.push(...(spec.oneWay ? pieces.map(reverseCurve).reverse() : pieces));
     }
@@ -168,8 +186,8 @@ export class RoadTool implements Tool {
   private drawPreview(cursor: Vec2, guides: Guide[]): void {
     const { overlay } = this.ctx;
     overlay.clear();
-    // A bridge or tunnel at its height, as it'll be built.
-    overlay.raise(levelHeight(this.ctx.roadSpec().level ?? 0));
+    // At the pointer's level (a bridge's or tunnel's height, or a node's it snapped to); a ramp's preview slopes from there (see roadPreview).
+    overlay.raise(levelHeight(this.cursorLevel));
     const points = [...this.points, cursor];
 
     const pixel = this.ctx.worldPerPixel();
@@ -183,7 +201,7 @@ export class RoadTool implements Tool {
     // A one-way road from or to the middle of a road is shown from the lane it would peel off (or join).
     const shown = points.map((p, i) => this.inLane(p, points[i + 1] ?? points[i - 1] ?? this.pointer, i < points.length - 1 || points.length === 1));
     if (points.length >= 2 && distance(points[0], cursor) > 0) {
-      const roads = this.plan(points);
+      const roads = this.plan(points, [...this.levels, this.cursorLevel]);
       for (const [i, road] of roads.entries()) {
         if (!road.curve) continue;
         const moved = (p: Vec2, q: Vec2) => ({ x: q.x - p.x, y: q.y - p.y });
@@ -198,12 +216,15 @@ export class RoadTool implements Tool {
         for (const c of road.crossings) overlay.dot(c.point, road.valid ? palette.junction : palette.danger);
       }
       const main = roads[0].curve;
+      const length = main ? new SampledCurve(main).length : 0;
+      // A ramp too short for its climb says how long it must be.
+      const needs = minRampLength(...levelsOf(roads[0].spec));
       this.ctx.setHint(
         main
-          ? `${Math.round(new SampledCurve(main).length)} long · ${angleBetween(this.reference(), {
+          ? `${Math.round(length)} long · ${angleBetween(this.reference(), {
               x: points[1].x - points[0].x,
               y: points[1].y - points[0].y,
-            })}°`
+            })}°${length < needs ? ` · ramp needs ${Math.ceil(needs)}` : ""}`
           : "Click ahead of the road to continue",
       );
     } else {

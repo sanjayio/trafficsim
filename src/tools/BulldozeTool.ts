@@ -1,6 +1,6 @@
 import { pointInConvexPolygon, type Vec2 } from "../core/geometry";
 import type { NodeId, RoadSegment } from "../core/roadGraph";
-import { roadWidth } from "../core/roadSpec";
+import { levelsOf, roadWidth } from "../core/roadSpec";
 import { levelHeight } from "../core/grade";
 import { palette } from "../render/palette";
 import type { Tool, ToolContext } from "./Tool";
@@ -94,7 +94,7 @@ export class BulldozeTool implements Tool {
     if (this.target === "roads") {
       const level = this.level();
       const area = this.ctx.screenRect(a, b, levelHeight(level));
-      return { roads: graph.segmentsInPolygon(area).filter((s) => (s.spec.level ?? 0) === level), buildings: [] };
+      return { roads: graph.segmentsInPolygon(area).filter((s) => levelsOf(s.spec).includes(level)), buildings: [] };
     }
     const area = this.ctx.screenRect(a, b);
     const buildings = [...graph.allTerminals().keys()].filter((id) => {

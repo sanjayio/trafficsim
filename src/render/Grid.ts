@@ -1,6 +1,6 @@
 import { BufferGeometry, Float32BufferAttribute, Group, LineBasicMaterial, LineSegments } from "three";
 import { GRID_MAJOR_EVERY, GRID_SIZE, WORLD_SIZE } from "../core/constants";
-import { FlatLayer } from "./flat";
+import { FlatLayer, outsideCuttings } from "./flat";
 import { palette } from "./palette";
 
 /** Static ground grid, built once. Minor and major lines are separate so minor can hide when zoomed out. */
@@ -35,7 +35,7 @@ export class Grid extends Group {
 function gridLines(positions: number[], color: number): LineSegments {
   const geometry = new BufferGeometry();
   geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
-  const segments = new LineSegments(geometry, new LineBasicMaterial({ color, depthWrite: false }));
+  const segments = new LineSegments(geometry, outsideCuttings(new LineBasicMaterial({ color, depthWrite: false })));
   segments.renderOrder = FlatLayer.grid;
   return segments;
 }

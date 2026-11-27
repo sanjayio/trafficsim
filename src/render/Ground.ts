@@ -1,5 +1,6 @@
-import { CanvasTexture, NotEqualStencilFunc, Color, Float32BufferAttribute, Mesh, MeshBasicMaterial, PlaneGeometry, RepeatWrapping, SRGBColorSpace } from "three";
+import { CanvasTexture, Color, Float32BufferAttribute, Mesh, MeshBasicMaterial, PlaneGeometry, RepeatWrapping, SRGBColorSpace } from "three";
 import { WORLD_SIZE } from "../core/constants";
+import { outsideCuttings } from "./flat";
 import { palette } from "./palette";
 
 /** Size of one repeat of the grass texture, in world units, and of its canvas in pixels. */
@@ -40,19 +41,19 @@ export class Ground extends Mesh<PlaneGeometry, MeshBasicMaterial> {
     texture.anisotropy = 8;
     super(
       geometry,
-      new MeshBasicMaterial({
-        map: texture,
-        vertexColors: true,
-        // Solid: hides what's under the ground (a tunnel), pushed back a touch so roads and markings
-        // lying on it still draw over it. Not drawn over a tunnel's open ramps (see `trenchMask`).
-        depthWrite: true,
-        polygonOffset: true,
-        polygonOffsetFactor: 1,
-        polygonOffsetUnits: 4,
-        stencilWrite: true,
-        stencilRef: 1,
-        stencilFunc: NotEqualStencilFunc,
-      }),
+      // Not over a ramp's cutting, where the ground's open (see `trenchMask`).
+      outsideCuttings(
+        new MeshBasicMaterial({
+          map: texture,
+          vertexColors: true,
+          // Solid: hides what's under the ground (a tunnel), pushed back a touch so roads and markings
+          // lying on it still draw over it.
+          depthWrite: true,
+          polygonOffset: true,
+          polygonOffsetFactor: 1,
+          polygonOffsetUnits: 4,
+        }),
+      ),
     );
     this.renderOrder = renderOrder;
   }
